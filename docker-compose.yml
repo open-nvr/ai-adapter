@@ -1,0 +1,31 @@
+version: '3.8'
+
+# ==========================================
+# AIAdapters - Standalone Docker Compose
+# ==========================================
+# Use this file if you cloned AIAdapters separately
+# and want to run it completely isolated from the main OpenNVR stack.
+# 
+# To run: docker compose up -d --build
+# ==========================================
+
+services:
+  ai-adapters-standalone:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Changed the container name slightly so it doesn't conflict
+    # if you happen to run the root compose file at the same time.
+    container_name: opennvr_ai_standalone
+    restart: unless-stopped
+    ports:
+      # Exposes the adapter API so you can hit it directly via HTTP
+      - "9100:9100"
+    volumes:
+      # Standalone mode: we map to local folders instead of Docker named volumes
+      - ./model_weights:/app/model_weights
+      - ./frames:/app/frames
+    environment:
+      # Optional explicit env vars for standalone execution
+      - PORT=9100
+      - LOG_LEVEL=INFO

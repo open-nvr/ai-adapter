@@ -1,0 +1,67 @@
+﻿{
+  "task": "face_detection",
+  "description": "Detect faces with bounding boxes, landmarks, age, and gender",
+  "response_fields": {
+    "faces": {
+      "type": "array[object]",
+      "description": "List of detected faces",
+      "item_schema": {
+        "bbox": {
+          "type": "array[int]",
+          "description": "Bounding box [x1, y1, x2, y2]"
+        },
+        "confidence": {
+          "type": "float",
+          "description": "Detection confidence (0.0 to 1.0)"
+        },
+        "landmarks": {
+          "type": "array[array[int]]",
+          "description": "5-point facial landmarks [[x,y], ...]"
+        },
+        "age": {
+          "type": "integer",
+          "description": "Estimated age"
+        },
+        "gender": {
+          "type": "string",
+          "description": "M or F"
+        }
+      }
+    },
+    "face_count": {
+      "type": "integer",
+      "description": "Number of faces detected",
+      "example": 2
+    },
+    "annotated_image_uri": {
+      "type": "string",
+      "description": "URI to annotated image with face boxes drawn",
+      "optional": true
+    },
+    "executed_at": {
+      "type": "integer",
+      "description": "Timestamp in milliseconds when inference was executed",
+      "example": 1735546430000
+    },
+    "latency_ms": {
+      "type": "integer",
+      "description": "Inference latency in milliseconds",
+      "example": 45
+    }
+  },
+  "example_response": {
+    "faces": [
+      {
+        "bbox": [120, 80, 220, 200],
+        "confidence": 0.99,
+        "landmarks": [[150, 120], [190, 120], [170, 145], [155, 170], [185, 170]],
+        "age": 25,
+        "gender": "M"
+      }
+    ],
+    "face_count": 1,
+    "annotated_image_uri": "opennvr://frames/camera_0/face_detection_annotated.jpg",
+    "executed_at": 1735546430000,
+    "latency_ms": 45
+  }
+}
