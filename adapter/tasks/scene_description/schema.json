@@ -1,0 +1,38 @@
+{
+  "task": "scene_description",
+  "description": "Generate natural language caption describing image content",
+  "response_fields": {
+    "task": {
+      "type": "string",
+      "description": "Task name identifier",
+      "example": "scene_description"
+    },
+    "caption": {
+      "type": "string",
+      "description": "Generated text describing the image",
+      "example": "a person sitting at a desk with a computer"
+    },
+    "model_id": {
+      "type": "string",
+      "description": "Model ID used for captioning",
+      "example": "Salesforce/blip-image-captioning-base"
+    },
+    "executed_at": {
+      "type": "integer",
+      "description": "Timestamp in milliseconds when inference was executed",
+      "example": 1735546430000
+    },
+    "latency_ms": {
+      "type": "integer",
+      "description": "Inference latency in milliseconds",
+      "example": 2000
+    }
+  },
+  "example_response": {
+    "task": "scene_description",
+    "caption": "a person sitting at a desk with a computer",
+    "model_id": "Salesforce/blip-image-captioning-base",
+    "executed_at": 1735546430000,
+    "latency_ms": 2000
+  }
+}
