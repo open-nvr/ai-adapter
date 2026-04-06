@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 FastAPI Application - Main Entry Point for AI Adapter API
 
 This file defines the REST API server that:
