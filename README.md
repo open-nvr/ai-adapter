@@ -1,119 +1,72 @@
-# 🚀 AIAdapters: The Infinite Inference Engine for Open-NVR
+# OpenNVR AI Adapter 🧠🔌
 
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-FFD21E.svg)](https://huggingface.co/models)
+Welcome to the **OpenNVR Modular AI Adapter**! This repository is fundamentally designed as a dynamic, infinitely scalable engine that connects OpenNVR to cutting-edge AI models (Vision, LLMs, Audio, and Quantum).
 
-Welcome to the **AIAdapters** registry! This is a plug-and-play AI inference server built specifically for the **Open-NVR** ecosystem. 
+We rebuilt this entirely around the **Clean Architecture** patterns to strip out massive dependencies and empower community contributions. 
 
-**Our Goal:** To allow developers to drop *any* AI model into a surveillance network instantly—without modifying a single line of the core security code.
+## 🌟 Why OpenNVR AI? (Community First)
+OpenNVR is built to **democratize AI for digital sovereignty**. You aren't locked into our models. The architecture provides a universal, language-agnostic interface (`BaseAdapter`) allowing anyone to plug in essentially *any* HuggingFace, PyTorch, ONNX, or REST-based model in under **30 minutes**.
 
----
-
-## 🌟 Why Build For AIAdapters?
-Traditional NVRs (Network Video Recorders) lock you into their proprietary AI analytics. If you want to use a state-of-the-art model that dropped on Hugging Face yesterday, you can't.
-
-**With AIAdapters, you can:**
-- **Bring Your Own Model (BYOM):** Drop a new folder into `adapter/tasks/`, restart the server, and your custom analytic is live in the NVR UI.
-- **Access 100,000+ Models instantly:** The built-in `HuggingFaceHandler` allows you to route streams directly to Hugging Face Cloud Inference endpoints securely. 
-- **Mix & Match:** Run lightweight YOLOv11 person-counting locally on your edge device, while routing complex Face Recognition to a massive cloud GPU.
-
----
-
-## 🤗 The HuggingFace Superpower
-Want to use the latest BLIP-2 VQA model to ask your cameras questions? Or a specialized YOLO model for detecting PPE (hard hats)? 
-
-You **do not need to code** an API integration. 
-1. Get a token from HuggingFace.
-2. Enter the Model ID in the Open-NVR UI.
-3. The `HuggingFaceHandler` automatically ferries the isolated frames directly to the model, protecting your internal IP addresses while getting ultra-fast cloud inference.
-
----
-
-## 🛠️ Quick Start (Developer Setup)
-
-Get the inference engine running locally in 2 minutes:
+## 🏎️ Lean Docker Containers
+This primary Docker image is *incredibly lean (<100MB)*. Out of the box, it only installs `FastAPI` and its core web routing utilities.
+It **will not install heavy gigabyte-sized ML libraries (like Torch/CUDA)** unless you specifically instruct it to!
 
 ```bash
-# 1. Create virtual environment
-uv venv venv
-source venv/bin/activate       # Linux/Mac
-# venv\Scripts\activate          # Windows
+# Start lean core (API routing, Mock models, Remote LLMs)
+docker build -t opennvr-ai-adapter .
 
-# 2. Install dependencies
-uv pip install -r requirements.txt
-
-# 3. Download base model weights (YOLO, etc.)
-python download_models.py
-
-# 4. Start the inference orchestration server
-uvicorn adapter.main:app --reload --port 9100
+# Build with a thick Adapter's requirements (e.g. YOLO/Torch)
+docker build --build-arg ADAPTER_REQ="vision/requirements-yolo.txt" -t opennvr-ai-adapter-heavy .
 ```
-*The server will boot, automatically discover all loaded plugins in the `tasks/` directory, and publish them to KAI-C.*
 
----
+## ⏱️ The 30-Minute Adapter Guide (For Contributors)
 
-## 🧩 Contributing: Add Your Own AI Task!
+Want to add a new model to the ecosystem? Follow these 3 incredibly simple steps:
 
-We are building the largest open-source library of surveillance AI adapters. **We want your models!**
+### Step 1: Create your file
+Create a Python file in `app/adapters/vision/` (or `llm/`).
 
-Adding a new capability is literally 3 steps:
-
-1. **Create a Folder:** `mkdir adapter/tasks/wildlife_detection`
-2. **Create the Contract:** Add a `schema.json` defining what the model returns (e.g., bounding boxes, confidence).
-3. **Write the Handler:** Extend `BaseTask` and load your `.onnx` or `.pt` weights.
+### Step 2: Inherit from `BaseAdapter`
+Write a class that inherits from `BaseAdapter`. You only need to fulfill three simple requirements:
 
 ```python
-# Example: adapter/tasks/wildlife_detection/task.py
-from adapter.interfaces.task import BaseTask
+from app.adapters.base import BaseAdapter
+from typing import Any, Dict
 
-class Task(BaseTask):
-    def setup(self):
-        self.handler = load_my_cool_model("bear_detector.onnx")
+class SuperDetectorAdapter(BaseAdapter):
+    name: str = "super_detector"
+    type: str = "vision"
+    
+    def load_model(self):
+        # We enforce lazy loading! Do your heavy CUDA/ONNX loading here.
+        # This will ONLY run if the adapter is literally triggered, saving massive VRAM memory.
+        self.model = load_my_massive_model("weights.pt")
         
-    def run(self, input_data):
-        return self.handler.predict(input_data)
+    def infer_local(self, input_data: Any) -> Dict[str, Any]:
+        result = self.model.detect(input_data)
+        return {"objects": result}
+        
+    def health_check(self) -> Dict[str, Any]:
+        return {"status": "healthy", "type": self.type}
 ```
 
-**That's it.** The `loader.py` engine dynamically inherits your class and securely binds it to a live HTTP endpoint without risking the main server going down.
+### Step 3: Enable it in Config
+Open `app/config/config.py` and activate your adapter!
 
-See [docs/PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md) for the full tutorial.
-
----
-
-## 📂 Project Architecture
-
-```
-AIAdapters/
-├── adapter/                    # The Engine Loop
-│   ├── main.py                 # FastAPI Router
-│   ├── loader.py               # Auto-discovers plugins at boot
-│   ├── interfaces/             # The BaseTask contract
-│   │
-│   ├── tasks/                  # 🔥 PLUGIN FOLDER 🔥
-│   │   ├── person_counting/
-│   │   ├── scene_description/
-│   │   └── <YOUR_NEW_TASK>/    # Drop your folder here!
-│   │
-│   └── models/                 # Model interaction logic
-│       ├── yolov11_handler.py  # YOLOv11 + ByteTrack PyTorch
-│       └── huggingface_handler.py # Cloud orchestration
-│
-├── docs/                       # Developer Documentation
-├── model_weights/              # Downloaded .onnx files
-└── Dockerfile                  # GPU and CPU build files
+```python
+CONFIG = {
+    "adapters": {
+        "super_detector": {
+            "enabled": True
+        }
+    },
+    "routing": {
+        "detect_objects": "super_detector"
+    }
+}
 ```
 
----
+**That's it!** The `ModelRouter` and FastAPI endpoints automatically scrape your config, initialize the class, map the HTTP REST endpoints to your `infer_local` logic, and manage your memory lifecycle perfectly without crashing the host Node!
 
-## 🤝 Join the Community
-By contributing an Adapter, you help secure and democratize AI for edge environments globally. 
-Submit a Pull Request today! If your model passes validation, it will be merged into the official Open-NVR release.
-
----
-
-## ⚖️ License
-The AI Adapters framework, plugins, and handlers are licensed strictly under the **GNU Affero General Public License v3.0 (AGPL v3)**. 
-All forks, internal cloud pipelines, and customized models running atop this core engine must share their source code to the OpenNVR ecosystem under the same AGPL terms. See the `LICENSE` file for the binding legal outline.
-
-> For commercial usage exemptions, proprietary adapter development, or direct enterprise support, please contact: **[contact@cryptovoip.in](mailto:contact@cryptovoip.in)**
+## Contributing
+We welcome massive ML PRs and tiny configuration tweaks! Add your own models, expand the `PipelineEngine`, or submit entirely new LLM architectures. Be sure to include an adapter-specific `requirements-[name].txt` file so users can selectively build your module via the Docker pipeline!
