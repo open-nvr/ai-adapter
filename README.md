@@ -23,8 +23,12 @@ docker build --build-arg ADAPTER_REQ="vision/requirements-yolo.txt" -t opennvr-a
 
 Want to add a new model to the ecosystem? Follow these 3 incredibly simple steps:
 
-### Step 1: Create your file
-Create a Python file in `app/adapters/vision/` (or `llm/`).
+### Step 1: Copy the Template
+Take a look at `app/adapters/example_adapter.py`. 
+Copy this file into `app/adapters/vision/` (or `llm/`):
+```bash
+cp app/adapters/example_adapter.py app/adapters/vision/super_detector_adapter.py
+```
 
 ### Step 2: Inherit from `BaseAdapter`
 Write a class that inherits from `BaseAdapter`. You only need to fulfill three simple requirements:
@@ -70,3 +74,5 @@ CONFIG = {
 
 ## Contributing
 We welcome massive ML PRs and tiny configuration tweaks! Add your own models, expand the `PipelineEngine`, or submit entirely new LLM architectures. Be sure to include an adapter-specific `requirements-[name].txt` file so users can selectively build your module via the Docker pipeline!
+
+For more detailed step-by-step instructions on making an adapter and interacting with the independent AI-Adapter FastAPI server, view our [CONTRIBUTING.md](CONTRIBUTING.md).

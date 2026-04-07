@@ -22,6 +22,8 @@ class ModelRouter:
         adapter = self.adapters.get(adapter_name)
         if not adapter:
             raise ValueError(f"Adapter '{adapter_name}' is not registered or enabled")
+        if isinstance(input_data, dict) and "task" not in input_data:
+            input_data["task"] = task_name
             
         return adapter.infer(input_data)
         

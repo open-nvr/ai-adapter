@@ -3,26 +3,41 @@
 # Simulating a parsed YAML config file
 CONFIG = {
     "adapters": {
-        "yolo_adapter": {
+        "insightface_adapter": {
             "enabled": True,
-            "weights_path": "yolov8m.pt"
+            "weights_path": "insightface"
         },
-        "mock_llm_adapter": {
+        "yolov8_adapter": {
             "enabled": True,
-            "mode": "api", # Optional configuration (api vs local)
-            "api_endpoint": "https://api.openai.com/v1/completions"
+            "weights_path": "yolov8m.onnx"
+        },
+        "yolov11_adapter": {
+            "enabled": True,
+            "weights_path": "yolo11m.pt"
+        },
+        "blip_adapter": {
+            "enabled": True
+        },
+        "huggingface_adapter": {
+            "enabled": True
         },
         "disabled_vision": {
             "enabled": False
         }
     },
     "warmup": [
-        "yolo_adapter"  # E.g., Only YOLO is heavy, so we warm it up at startup
+        "yolov8_adapter", "yolov11_adapter"
     ],
     "routing": {
-        "detect_objects": "yolo_adapter",
-        "mock_vision": "yolo_adapter",
-        "ask_question": "mock_llm_adapter"
+        "face_detection": "insightface_adapter",
+        "face_embedding": "insightface_adapter",
+        "face_recognition": "insightface_adapter",
+        "face_verify": "insightface_adapter",
+        "watchlist_check": "insightface_adapter",
+        "person_detection": "yolov8_adapter",
+        "person_counting": "yolov11_adapter",
+        "scene_description": "blip_adapter",
+        "zero_shot_detection": "huggingface_adapter"
     }
 }
 
