@@ -2,6 +2,11 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 
+try:
+    from app.utils.hardware import validate_hardware_for_model
+except ImportError:
+    validate_hardware_for_model = lambda n, t: None
+
 logger = logging.getLogger(__name__)
 
 class BaseAdapter(ABC):
@@ -27,6 +32,7 @@ class BaseAdapter(ABC):
         """Lazy load the model if not already in memory."""
         if self.model is None:
             logger.info(f"Loading model for adapter: {self.name}...")
+            validate_hardware_for_model(self.name, self.type)
             try:
                 self.load_model()
                 logger.info(f"Model successfully loaded and cached in memory for {self.name}.")
