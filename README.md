@@ -4,6 +4,17 @@ Welcome to the **OpenNVR Modular AI Adapter**! This repository is fundamentally 
 
 We rebuilt this entirely around the **Clean Architecture** patterns to strip out massive dependencies and empower community contributions. 
 
+## 📐 Architecture Design Patterns
+
+To ensure this repository easily scales to hundreds of community adapters without becoming bloated, we have natively embraced three core Gang of Four design patterns:
+
+1. **The Strategy Pattern (Core Router)**
+   The `ModelRouter` delegates tasks based on the `task_name` routed from the config. It doesn't care *how* a person is calculated; it simply switches to whichever ML Algorithm (Strategy) matches the task.
+2. **The Adapter Pattern (Base Interface)**
+   Machine learning frameworks are chaotic (PyTorch vs ONNX vs Ultralytics). The `BaseAdapter` strictly encapsulates these frameworks into a single unified API (`load_model()` and `infer_local()`), meaning the FastAPI server is completely insulated from ML pipeline breaks.
+3. **The Abstract Factory Pattern (Lazy Loading Registry)**
+   During startup (`main.py`), the system uses `config.py` as a factory registry. Even if there are 500 adapters in the codebase, it will only instantiate the specific classes you enable—guaranteeing that unused ML models consume **zero** RAM, VRAM, or CPU.
+
 ## 🌟 Why OpenNVR AI? (Community First)
 OpenNVR is built to **democratize AI for digital sovereignty**. You aren't locked into our models. The architecture provides a universal, language-agnostic interface (`BaseAdapter`) allowing anyone to plug in essentially *any* HuggingFace, PyTorch, ONNX, or REST-based model in under **30 minutes**.
 
