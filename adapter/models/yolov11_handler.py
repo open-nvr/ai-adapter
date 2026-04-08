@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 YOLOv11 model handler with ByteTrack for person counting.
 """
 import cv2

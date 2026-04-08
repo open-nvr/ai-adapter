@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 Hugging Face Cloud Handler - Executes inference via Hugging Face Inference API.
 
 This handler supports multiple tasks by dynamically routing to HF API endpoints.

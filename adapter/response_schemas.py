@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 Response schema definitions for AI Adapter models.
 
 This module provides schema definitions that describe the structure

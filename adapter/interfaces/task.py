@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 BaseTask â€” The Developer Contract for AI Adapter Task Plugins.
 
 Every task plugin MUST inherit from this class and implement the required methods.

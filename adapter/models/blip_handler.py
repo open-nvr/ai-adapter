@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 BLIP Image Captioning Handler - Generate natural language descriptions of images.
 
 This handler uses the Salesforce BLIP (Bootstrapping Language-Image Pre-training)

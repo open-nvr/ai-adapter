@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 Base model handler interface that all model handlers must implement.
 
 This file defines an Abstract Base Class (ABC) that serves as a CONTRACT
