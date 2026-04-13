@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 OpenNVR Camera Runner with configurable task selection.
 
 Usage:
@@ -38,8 +38,8 @@ def get_available_tasks():
         r = httpx.get("http://127.0.0.1:9100/capabilities", timeout=5)
         return r.json()["tasks"]
     except Exception as e:
-        print(f"âš ï¸  Could not fetch capabilities from adapter: {e}")
-        print("âš ï¸  Make sure the adapter is running: uvicorn adapter.main:app --reload --port 9100")
+        print(f"WARNING: Could not fetch capabilities from adapter: {e}")
+        print("WARNING: Make sure the adapter is running: uv run uvicorn app.main:app --reload --port 9100")
         return []
 
 
@@ -68,9 +68,9 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
     FRAME_PATH = os.path.join(FRAME_DIR, "latest.jpg")
 
     # Try to open camera/stream
-    print(f"\nðŸ”Œ Connecting to {'RTSP stream' if rtsp_url else f'Camera {camera_id}'}...")
+    print(f"\nConnecting to {'RTSP stream' if rtsp_url else f'Camera {camera_id}'}...")
     if rtsp_url:
-        print(f"ðŸ“¡ RTSP URL: {rtsp_url}")
+        print(f"RTSP URL: {rtsp_url}")
     
     cap = cv2.VideoCapture(camera_source)
     
@@ -83,17 +83,17 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
     
     is_passive = False
     if not ret:
-        print(f"\nâš ï¸  {'RTSP stream' if rtsp_url else f'Camera {camera_id}'} is unavailable or connection failed.")
+        print(f"\nWARNING: {'RTSP stream' if rtsp_url else f'Camera {camera_id}'} is unavailable or connection failed.")
         if rtsp_url:
-            print("ðŸ’¡ Tips for RTSP:")
+            print("Tips for RTSP:")
             print("   - Check network connectivity")
             print("   - Verify credentials and IP address")
             print("   - Ensure camera supports RTSP on the specified port")
-        print(f"ðŸ”„ Switching to PASSIVE MODE: Watching {FRAME_PATH} for updates from another runner...")
+        print(f"Switching to PASSIVE MODE: Watching {FRAME_PATH} for updates from another runner...")
         is_passive = True
         cap.release()
     else:
-        print(f"\nðŸŽ¥ ACTIVE MODE: {'Streaming from RTSP' if rtsp_url else f'Capturing from Camera {camera_id}'}")
+        print(f"\nACTIVE MODE: {'Streaming from RTSP' if rtsp_url else f'Capturing from Camera {camera_id}'}")
         # Set camera properties for better performance
         if debug_gui:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer lag
@@ -104,10 +104,10 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
         window_name = f"OpenNVR Debug - {source_name} - {', '.join(tasks)}"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, 1280, 720)
-        print(f"ðŸ–¥ï¸  Debug GUI: Enabled (Live Stream Mode)")
+        print("Debug GUI: Enabled (Live Stream Mode)")
     else:
         window_name = None
-        print(f"ðŸ–¥ï¸  Debug GUI: Disabled (use --debug to enable)")
+        print("Debug GUI: Disabled (use --debug to enable)")
     
     print(f"{'='*60}")
     print(f"Tasks: {', '.join(tasks)}")
@@ -156,7 +156,7 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
                     # Check for quit key
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord('q'):
-                        print("\nðŸ›‘ GUI closed by user (pressed 'q')")
+                        print("\nGUI closed by user (pressed 'q')")
                         break
             
             # Check if it's time to run inference
@@ -169,7 +169,7 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
                 # ACTIVE MODE: Capture and Save
                 ret, frame = cap.read()
                 if not ret:
-                    print("âŒ Stream/Camera lost. Reconnecting...")
+                    print("ERROR: Stream/Camera lost. Reconnecting...")
                     if rtsp_url:
                         # Try to reconnect to RTSP stream
                         cap.release()
@@ -211,7 +211,7 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
             # Read frame for GUI display
             display_frame = cv2.imread(FRAME_PATH)
             if display_frame is None:
-                print("âš ï¸ Could not read frame for display")
+                print("WARNING: Could not read frame for display")
                 continue
             
             # Run all tasks on this frame
@@ -249,7 +249,7 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
                         if task_name == "person_detection":
                             conf = result.get("confidence", 0)
                             bbox = result.get("bbox", [0,0,0,0])
-                            print(f"  âœ… Detection | Conf: {conf:.2f} | BBox: {bbox} | Latency: {elapsed}ms")
+                            print(f"  OK  Detection | Conf: {conf:.2f} | BBox: {bbox} | Latency: {elapsed}ms")
                             
                             # Add to detections for GUI
                             if conf > 0:
@@ -259,7 +259,7 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
                             count = result.get("count", 0)
                             conf = result.get("confidence", 0)
                             total_count = count
-                            print(f"  âœ… Counting  | Count: {count} | Avg Conf: {conf:.2f} | Latency: {elapsed}ms")
+                            print(f"  OK  Counting  | Count: {count} | Avg Conf: {conf:.2f} | Latency: {elapsed}ms")
                             
                             # Add all detections for GUI
                             detections_list = result.get('detections', [])
@@ -271,20 +271,20 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
                         
                         elif task_name == "scene_description":
                             caption = result.get("caption", "")
-                            print(f"  âœ… Caption   | {caption} | Latency: {elapsed}ms")
+                            print(f"  OK  Caption   | {caption} | Latency: {elapsed}ms")
                         
                         else:
-                            print(f"  âœ… {task_name}: {result}")
+                            print(f"  OK  {task_name}: {result}")
                     
                     else:
-                        print(f"  âŒ {task_name} Error {r.status_code}: {r.json()}")
+                        print(f"  ERROR {task_name} Error {r.status_code}: {r.json()}")
                     
                 except httpx.TimeoutException:
-                    print(f"  â±ï¸  {task_name} Timeout - adapter took too long")
+                    print(f"  TIMEOUT {task_name} - adapter took too long")
                 except httpx.ConnectError:
-                    print(f"  âŒ {task_name} Connection Error - is adapter running?")
+                    print(f"  ERROR {task_name} Connection Error - is adapter running?")
                 except Exception as e:
-                    print(f"  âŒ {task_name} Error: {e}")
+                    print(f"  ERROR {task_name} Error: {e}")
             
             # Update stored detections for live overlay
             last_detections = all_detections
@@ -298,7 +298,7 @@ def run_camera(task: str, camera_id: int = 0, interval: float = 2.0, debug_gui: 
             
     except KeyboardInterrupt:
         print(f"\n\n{'='*60}")
-        print(f"ðŸ›‘ Runner stopped by user")
+        print("Runner stopped by user")
         print(f"Total frames processed: {frame_count}")
         print(f"{'='*60}\n")
     
@@ -441,7 +441,7 @@ Examples:
     
     # List tasks if requested
     if args.list_tasks:
-        print("\nðŸ” Fetching available tasks from adapter...\n")
+        print("\nFetching available tasks from adapter...\n")
         tasks = get_available_tasks()
         if tasks:
             print("Available tasks:")
@@ -455,7 +455,7 @@ Examples:
     
     # Validate task is provided
     if not args.task:
-        print("\nâŒ Error: --task is required")
+        print("\nERROR: --task is required")
         print("Use --list-tasks to see available tasks")
         print("Example: python runner.py --task person_detection\n")
         parser.print_help()
@@ -464,7 +464,7 @@ Examples:
     # Verify task is available
     available_tasks = get_available_tasks()
     if available_tasks and args.task not in available_tasks:
-        print(f"\nâš ï¸  Warning: Task '{args.task}' not found in adapter capabilities")
+        print(f"\nWARNING: Task '{args.task}' not found in adapter capabilities")
         print(f"Available tasks: {available_tasks}")
         response = input("Continue anyway? (y/n): ")
         if response.lower() != 'y':
