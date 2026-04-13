@@ -1,71 +1,153 @@
-# 🧠 Models Library: Batteries Included & Infinite Expansion
+# Models Reference
 
-The Open-NVR `AIAdapters` repository comes with a series of pre-configured, highly optimized Model Handlers. These handlers manage the heavy lifting: neural network loading, tensor preprocessing, inference, and memory cleanup.
+This document lists all built-in adapters, the tasks they serve, and what optional dependency group installs them.
 
-Task plugins use these handlers so that developers don't have to rewrite ML code.
-
----
-
-## 🔋 Batteries Included: Core Handlers
-
-We ship with 5 core handlers out of the box. They cover 90% of standard NVR use cases.
-
-| Handler Class | Framework | Weights | Included Tasks |
-|---------------|-----------|---------|----------------|
-| **`YOLOv8Handler`** | ONNX Runtime | 6MB (Local) | `person_detection` |
-| **`YOLOv11Handler`** | PyTorch | 40MB (Local) | `person_counting` (with ByteTrack) |
-| **`InsightFaceHandler`** | ONNX Runtime | 183MB (Local Download) | `face_detection`, `face_recognition`, `face_verify`, `face_embedding`, `watchlist_check` |
-| **`BLIPHandler`** | PyTorch (Transformers)| Auto-Downloaded | `scene_description` (VLM) |
-| **`HuggingFaceHandler`**| Cloud REST API | Zero | *16+ Auto-Generated tasks* |
+> **Note:** This file reflects the current **new architecture** (adapter + task separation, optional dependency groups, lazy loading). The old term "Handler" has been replaced by "Adapter" throughout.
 
 ---
 
-## 🌍 The Hugging Face Gateway: Bring Your Own Model (BYOM)
+## Built-in Adapters
 
-**This is the superpower of Open-NVR.** 
-
-The `HuggingFaceHandler` bypasses local hardware constraints entirely. By passing a task request through this handler, you instantly gain access to the **entire Hugging Face Hub**. 
-
-You do not need to download weights or configure Docker GPUs to use world-class models!
-
-**Supported Auto-Routed Tasks Include:**
-* `image-classification`
-* `object-detection`
-* `image-to-text` (VQA & Captioning)
-* `zero-shot-classification`
-* *And a dozen more!*
-
-You simply pass the `model_name` and your `api_token` in the POST request, and the Handler securely proxies the inference to Hugging Face's global edge network.
+| Adapter | Class | Framework | Weight Size | Tasks Served | Install Profile |
+|---|---|---|---|---|---|
+| **YOLOv8** | `YOLOv8Adapter` | ONNX Runtime | ~6 MB | `person_detection`, `person_counting` | `--extra yolo` |
+| **YOLOv11** | `YOLOv11Adapter` | PyTorch + Ultralytics | ~40 MB | `person_counting` (with ByteTrack tracking) | `--extra yolo11 --extra cpu` |
+| **InsightFace** | `InsightFaceAdapter` | ONNX Runtime | ~183 MB (auto-download) | `face_detection`, `face_recognition`, `face_verify`, `face_embedding`, `watchlist_check` | `--extra face` |
+| **BLIP** | `BLIPAdapter` | PyTorch + Transformers | Auto (HuggingFace Hub) | `scene_description` | `--extra blip --extra cpu` |
+| **HuggingFace** | `HuggingFaceAdapter` | Cloud REST API | Zero (no local weights) | 16+ tasks via HF Inference API | `--extra huggingface` |
 
 ---
 
-## ⚙️ Deep Dive: How the Local Edge Models Work
+## Installation by Use Case
 
-If you are running compute locally, here is exactly what our embedded edge models are doing:
+```bash
+# Minimal: person detection only (~250 MB)
+uv sync --extra yolo
 
-### 🚀 YOLOv8 (High-Speed Person Detection)
-- Runs at blistering speeds on ONNX architecture.
-- Specifically trained or filtered for Class 0 (Persons).
-- Utilizes adaptive confidence thresholds: it lowers the threshold for distant, tiny people, and raises it for people standing right in front of the camera, virtually eliminating false-positives!
+# Security camera: detection + face recognition (~750 MB)
+uv sync --extra yolo --extra face
 
-### 🎯 YOLOv11 w/ ByteTrack (Persistent Counting)
-- Loads via the Ultralytics PyTorch wrapper.
-- Uses `bytetrack.yaml` to remember who is who across multiple video frames.
-- This prevents the NVR from counting the same person 500 times if they stand still!
+# Full local: all vision tasks on CPU (~4 GB)
+uv sync --extra all --extra cpu
 
-### 👤 InsightFace (Biometric Engine)
-- A mammoth 5-in-1 handler. It takes ~180MB of memory and lazy-loads on first request to keep server boot times extremely fast.
-- Generates 512-dimensional vector embeddings for faces.
-- It interfaces directly with our local `face_db` module for instant, offline VIP or Watchlist recognition.
+# Full GPU
+uv sync --extra all --extra gpu
 
-### 🖼️ BLIP (Vision-Language)
-- A heavy PyTorch Transformer model that "looks" at a frame and describes it in plain English.
-- Example output: *"A person dropping a suspicious package near a doorway."*
-- Fully offline and privacy-respecting!
+# Cloud-only: delegate everything to HuggingFace (~60 MB)
+uv sync --extra huggingface
+```
 
 ---
 
-## 🛠️ Adding Your Own Custom Weights
+## Adapter Details
 
-Have your own `.onnx` or `.pt` file?
-Building your own Model Handler is trivial. Extend our `BaseModelHandler`, map it in `config.py`, and your custom weights will instantly supercharge the ecosystem! See the [Plugin Development Guide](PLUGIN_DEVELOPMENT.md) for a step-by-step tutorial.
+### YOLOv8 Adapter (`--extra yolo`)
+
+- **Class:** `YOLOv8Adapter`
+- **Framework:** ONNX Runtime (no PyTorch needed — CPU-friendly, fast)
+- **Weight file:** `model_weights/yolov8n.onnx` (generated by `download_models.py`)
+- **Tasks:** `person_detection`, `person_counting`
+- **What it does:** Runs YOLOv8 nano ONNX model, returns all detections with bounding boxes and confidence scores
+- **Deferred imports:** `onnxruntime` imported inside `load_model()`, `cv2` and `numpy` imported inside inference methods
+
+### YOLOv11 Adapter (`--extra yolo11 --extra cpu`)
+
+- **Class:** `YOLOv11Adapter`
+- **Framework:** PyTorch via Ultralytics
+- **Weight file:** `model_weights/yolo11m.pt` (~40 MB, downloaded by `download_models.py`)
+- **Tasks:** `person_counting`
+- **What it does:** Runs YOLOv11 medium model with ByteTrack temporal tracking — prevents counting the same person multiple times across consecutive frames
+- **Deferred imports:** `ultralytics.YOLO` imported inside `load_model()`, `cv2` imported inside `_count_persons()`
+- **Note:** Requires torch — install `--extra cpu` (CPU-only) or `--extra gpu` (CUDA)
+
+### InsightFace Adapter (`--extra face`)
+
+- **Class:** `InsightFaceAdapter`
+- **Framework:** ONNX Runtime via InsightFace
+- **Weight file:** Buffalo-L pack (~183 MB, auto-downloaded by InsightFace on first use — no manual step needed)
+- **Tasks:** `face_detection`, `face_recognition`, `face_verify`, `face_embedding`, `watchlist_check`
+- **What it does:** 5-in-1 face analysis engine. Detects faces, generates 512-dimensional ArcFace embeddings, and matches against an in-memory face database
+- **Deferred imports:** `insightface` and `FaceDatabase` imported inside `load_model()`, `cv2` and `numpy` imported inside each inference method
+
+### BLIP Adapter (`--extra blip --extra cpu`)
+
+- **Class:** `BLIPAdapter`
+- **Framework:** PyTorch + HuggingFace Transformers
+- **Weight file:** Auto-downloaded from HuggingFace Hub (`Salesforce/blip-image-captioning-base`) on first use
+- **Tasks:** `scene_description`
+- **What it does:** Vision-Language Model that generates a natural language description of a camera frame. Example: *"a person dropping a suspicious package near a doorway"*
+- **Deferred imports:** `torch`, `transformers.BlipProcessor`, `transformers.BlipForConditionalGeneration` imported inside `load_model()`, `PIL.Image` imported inside `infer_local()`
+- **Note:** Requires torch — install `--extra cpu` or `--extra gpu`
+
+### HuggingFace Cloud Adapter (`--extra huggingface`)
+
+- **Class:** `HuggingFaceAdapter`
+- **Framework:** HuggingFace Inference API (cloud)
+- **Weight file:** None — proxies to HuggingFace's cloud infrastructure
+- **Tasks:** `object-detection`, `image-classification`, `image-to-text`, `text-generation`, `summarization`, and 10+ more
+- **What it does:** Bypass local hardware entirely. Pass any HuggingFace model name and get back inference results via the Hugging Face Inference API. Handles SSRF protection for image URLs automatically.
+- **Deferred imports:** `huggingface_hub.InferenceClient` imported inside `load_model()`
+- **Requires:** `HF_TOKEN` environment variable (or `api_token` per-request)
+
+---
+
+## Memory Footprint
+
+When the server starts, **zero model memory is used**. Models load lazily on first request:
+
+| Scenario | RAM at startup | RAM after first request per adapter |
+|---|---|---|
+| Core server only | ~50 MB | — |
+| YOLOv8 (after first `/infer person_detection`) | ~50 MB startup | +~150 MB |
+| InsightFace (after first `/infer face_detection`) | ~50 MB startup | +~300 MB |
+| YOLOv11 (after first `/infer person_counting`) | ~50 MB startup | +~500 MB (torch overhead) |
+| BLIP (after first `/infer scene_description`) | ~50 MB startup | +~1.5 GB |
+
+Adapters that are never requested consume zero memory, even if their deps are installed.
+
+---
+
+## The HuggingFace Gateway — Bring Your Own Model
+
+The `HuggingFaceAdapter` gives instant access to the entire HuggingFace Hub without downloading weights locally. You pass a `model_name` and `api_token` per-request:
+
+```bash
+curl -X POST http://localhost:9100/infer \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task": "object-detection",
+    "input": {
+      "task": "object-detection",
+      "model_name": "facebook/detr-resnet-50",
+      "inputs": {"image": "opennvr://frames/camera_0/latest.jpg"}
+    }
+  }'
+```
+
+**Supported HF task types:** `object-detection`, `image-classification`, `image-segmentation`, `image-to-text`, `text-generation`, `text-classification`, `token-classification`, `question-answering`, `summarization`, `translation`, `fill-mask`, `zero-shot-classification`, `automatic-speech-recognition`, `audio-classification`, `conversational`, `feature-extraction`
+
+---
+
+## Adding Custom Weights to an Existing Adapter
+
+For YOLOv8 or YOLOv11, you can swap model weights by changing config:
+
+```python
+# app/config/config.py
+CONFIG["adapters"]["yolov8_adapter"]["weights_path"] = "my_custom_model.onnx"
+```
+
+Place your `.onnx` file in `model_weights/` and restart. No code changes needed.
+
+---
+
+## Building Your Own Adapter
+
+Have your own `.onnx`, `.pt`, or other model file? See the full step-by-step tutorial in [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md).
+
+Key requirements:
+1. Subclass `BaseAdapter` in `app/adapters/vision/` or `app/adapters/llm/`
+2. Set `name` and `type` class attributes
+3. Load your model inside `load_model()` — import heavy libraries there too
+4. Add your dependencies to a new optional group in `pyproject.toml`
+5. Register in `app/config/config.py`
