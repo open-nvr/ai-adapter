@@ -1,119 +1,278 @@
-# 🚀 AIAdapters: The Infinite Inference Engine for Open-NVR
+# OpenNVR AI Adapter — Modular Inference Engine
 
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.127.0-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-FFD21E.svg)](https://huggingface.co/models)
 
-Welcome to the **AIAdapters** registry! This is a plug-and-play AI inference server built specifically for the **Open-NVR** ecosystem. 
+A plug-and-play AI inference server for the **OpenNVR** ecosystem. Drop in any AI model — ONNX, PyTorch, or HuggingFace cloud — and it becomes available as a REST API, automatically discovered and lazily loaded.
 
-**Our Goal:** To allow developers to drop *any* AI model into a surveillance network instantly—without modifying a single line of the core security code.
-
----
-
-## 🌟 Why Build For AIAdapters?
-Traditional NVRs (Network Video Recorders) lock you into their proprietary AI analytics. If you want to use a state-of-the-art model that dropped on Hugging Face yesterday, you can't.
-
-**With AIAdapters, you can:**
-- **Bring Your Own Model (BYOM):** Drop a new folder into `adapter/tasks/`, restart the server, and your custom analytic is live in the NVR UI.
-- **Access 100,000+ Models instantly:** The built-in `HuggingFaceHandler` allows you to route streams directly to Hugging Face Cloud Inference endpoints securely. 
-- **Mix & Match:** Run lightweight YOLOv11 person-counting locally on your edge device, while routing complex Face Recognition to a massive cloud GPU.
+> **v2.0 — Anti-Bloat Architecture:** Dependencies are now split into optional groups. A minimal deployment installs ~9 packages and only grows when you explicitly ask for more adapters.
 
 ---
 
-## 🤗 The HuggingFace Superpower
-Want to use the latest BLIP-2 VQA model to ask your cameras questions? Or a specialized YOLO model for detecting PPE (hard hats)? 
+## Key Features
 
-You **do not need to code** an API integration. 
-1. Get a token from HuggingFace.
-2. Enter the Model ID in the Open-NVR UI.
-3. The `HuggingFaceHandler` automatically ferries the isolated frames directly to the model, protecting your internal IP addresses while getting ultra-fast cloud inference.
+- **Auto-Discovery** — Place an adapter file in `app/adapters/`, restart. The system finds it automatically. No imports, no registration code.
+- **Lazy Model Loading** — Models load into memory only when their first request arrives. Idle models use zero memory.
+- **Deferred Library Imports** — Heavy ML libraries (`cv2`, `numpy`, `onnxruntime`, `insightface`, `ultralytics`, `transformers`) are imported inside `load_model()`, not at module level. Discovery never touches them.
+- **Graceful Adapter Skipping** — If an adapter's optional dependencies aren't installed, `PluginManager` skips it cleanly with a helpful install hint. Other adapters continue to load normally.
+- **Optional Dependency Groups** — Install only what you need: `uv sync --extra yolo` gives you person detection without pulling in torch/transformers/insightface.
+- **Adapter + Task Separation** — Adapters handle raw model inference. Tasks apply business logic (filtering, validation) on top. Swap models by changing config.
+- **Pydantic-Validated Responses** — Response schemas catch invalid data at the boundary (confidence out of range, missing fields, count mismatches).
+- **Async Pipeline Engine** — Chain multiple tasks sequentially via `POST /pipeline/run`. Output of step N feeds into step N+1.
+- **API Key Authentication** — Opt-in `X-API-Key` header auth via environment variables.
+- **Multi-stage Docker** — Minimal runtime image with no build tools. Built-in `HEALTHCHECK`.
 
 ---
 
-## 🛠️ Quick Start (Developer Setup)
-
-Get the inference engine running locally in 2 minutes:
+## Quick Start
 
 ```bash
 # 1. Create virtual environment
-uv venv venv
-source venv/bin/activate       # Linux/Mac
-# venv\Scripts\activate          # Windows
+uv venv
 
-# 2. Install dependencies
-uv pip install -r requirements.txt
+# 2. Activate
+source .venv/bin/activate       # Linux/Mac
+# .venv\Scripts\activate        # Windows
 
-# 3. Download base model weights (YOLO, etc.)
-python download_models.py
+# 3. Install core + chosen adapters (see Installation Profiles below)
+uv sync --extra all             # everything — recommended for first-time setup
+# OR use a lean profile, e.g. detection + faces only (~750 MB):
+# uv sync --extra yolo --extra face
 
-# 4. Start the inference orchestration server
-uvicorn adapter.main:app --reload --port 9100
+# 4. Download model weights
+uv run python download_models.py
+
+# 5. Start server
+uv run uvicorn app.main:app --reload --port 9100
 ```
-*The server will boot, automatically discover all loaded plugins in the `tasks/` directory, and publish them to KAI-C.*
+
+The server auto-discovers all adapters and tasks at startup:
+```
+INFO - Server ready. Discovered tasks=5 adapters=5
+```
 
 ---
 
-## 🧩 Contributing: Add Your Own AI Task!
+## Project Structure
 
-We are building the largest open-source library of surveillance AI adapters. **We want your models!**
+```
+ai-adapter/
+├── app/                              # Application source
+│   ├── main.py                       # FastAPI entry point + startup
+│   │
+│   ├── adapters/                     # MODEL WRAPPERS (auto-discovered)
+│   │   ├── base.py                   # BaseAdapter — lazy loading contract
+│   │   ├── vision/                   # Vision model adapters
+│   │   │   ├── yolov8_adapter.py     #   YOLOv8 ONNX (person detection)
+│   │   │   ├── yolov11_adapter.py    #   YOLOv11 PyTorch (person counting)
+│   │   │   ├── insightface_adapter.py#   InsightFace (face detection/recognition)
+│   │   │   ├── blip_adapter.py       #   BLIP (scene description)
+│   │   │   └── huggingface_adapter.py#   HuggingFace cloud proxy
+│   │   └── llm/                      # LLM adapters
+│   │       ├── blip_adapter.py       #   BLIP captioning
+│   │       └── huggingface_adapter.py#   HuggingFace inference API
+│   │
+│   ├── pipelines/                    # TASK BUSINESS LOGIC (auto-discovered)
+│   │   ├── engine.py                 # PipelineEngine — chains tasks
+│   │   ├── person_detection/task.py  #   Picks best person from YOLO output
+│   │   ├── person_counting/task.py   #   Counts persons, validates consistency
+│   │   ├── face_detection/task.py    #   Parses face detections
+│   │   ├── face_recognition/task.py  #   Matches against face database
+│   │   └── scene_description/task.py #   Wraps BLIP captions
+│   │
+│   ├── api/                          # REST API
+│   │   ├── endpoints.py              # All route definitions
+│   │   └── auth.py                   # API key middleware
+│   │
+│   ├── config/config.py              # Routing, adapter settings, constants
+│   ├── router/model_router.py        # Task→Adapter routing + lazy instantiation
+│   ├── interfaces/                   # Abstract contracts (BaseAdapter, BaseTask)
+│   ├── schemas/responses.py          # Pydantic response models
+│   ├── db/face_db.py                 # In-memory face database
+│   └── utils/                        # Image loading, plugin discovery
+│
+├── docs/                             # Documentation
+│   ├── ARCHITECTURE.md               # System design deep-dive
+│   ├── PLUGIN_DEVELOPMENT.md         # How to add custom adapters/tasks
+│   ├── API_REFERENCE.md              # REST API documentation
+│   ├── MODELS.md                     # Supported models reference
+│   └── RUNNER_GUIDE.md               # OpenNVR runner integration
+│
+├── model_weights/                    # Downloaded .onnx/.pt model files
+├── tests/                            # pytest test suite
+├── Dockerfile                        # Multi-stage Docker build
+├── pyproject.toml                    # Dependencies (uv/pip)
+└── start.py                          # Programmatic uvicorn launcher
+```
 
-Adding a new capability is literally 3 steps:
+---
 
-1. **Create a Folder:** `mkdir adapter/tasks/wildlife_detection`
-2. **Create the Contract:** Add a `schema.json` defining what the model returns (e.g., bounding boxes, confidence).
-3. **Write the Handler:** Extend `BaseTask` and load your `.onnx` or `.pt` weights.
+## Installation Profiles
+
+The project uses **optional dependency groups** to keep deployments lean. You only install the libraries that your adapters actually need.
+
+| Profile | Command | What you get | Approx size |
+|---|---|---|---|
+| **Core only** | `uv sync` | FastAPI, uvicorn, pydantic, numpy, opencv | ~50 MB |
+| **YOLOv8 detection** | `uv sync --extra yolo` | + onnxruntime | ~250 MB |
+| **YOLOv11 counting** | `uv sync --extra yolo11 --extra cpu` | + ultralytics + torch (CPU) | ~2.5 GB |
+| **Face recognition** | `uv sync --extra face` | + insightface + onnxruntime + scipy | ~500 MB |
+| **Scene captioning** | `uv sync --extra blip --extra cpu` | + transformers + torch (CPU) | ~3 GB |
+| **HuggingFace cloud** | `uv sync --extra huggingface` | + huggingface_hub | ~60 MB |
+| **Full (all adapters)** | `uv sync --extra all --extra cpu` | everything | ~4 GB |
+| **Full GPU** | `uv sync --extra all --extra gpu` | everything + CUDA torch | ~6 GB |
+
+> **Tip:** Most NVR deployments only need `--extra yolo --extra face` (~750 MB) for person detection + face recognition. The full 4 GB install is only needed if you want scene captioning or cloud inference too.
+
+---
+
+## How It Works
+
+### The Two Plugin Types
+
+```
+┌─────────────────────────────────┐     ┌──────────────────────────────────┐
+│         ADAPTER                  │     │           TASK                    │
+│  Wraps a model, runs inference   │     │  Business logic on top of adapter │
+│                                  │     │                                   │
+│  Lives in: app/adapters/         │     │  Lives in: app/pipelines/         │
+│  Extends: BaseAdapter            │     │  Extends: BaseTask                │
+│  Must implement:                 │     │  Must implement:                  │
+│    load_model()                  │     │    process(image, adapter)        │
+│    infer_local(input_data)       │     │  Returns: Pydantic model          │
+│  Returns: raw dict               │     │                                   │
+└─────────────────────────────────┘     └──────────────────────────────────┘
+```
+
+### Request Flow
+
+```
+POST /infer {"task": "person_detection", "input": {"frame": {"uri": "..."}}}
+    │
+    ▼
+ModelRouter.route_task("person_detection")
+    │
+    ├── Config lookup → adapter = "yolov8_adapter"
+    ├── Lazy-create YOLOv8Adapter (first time only)
+    ├── Lazy-load ONNX model (first time only)
+    │
+    ├── Task "person_detection" exists in TASK_REGISTRY?
+    │   YES → PersonDetectionTask.process(data, adapter)
+    │          └── Calls adapter.predict() → gets raw detections
+    │          └── Picks highest confidence person
+    │          └── Returns PersonDetectionResponse (Pydantic-validated)
+    │
+    └── Response: {"label": "person", "confidence": 0.92, "bbox": [...], ...}
+```
+
+---
+
+## Contributing: Add Your Own AI Model
+
+Adding a new AI capability takes **3 files** and **zero changes to existing code**:
+
+### 1. Create an Adapter
 
 ```python
-# Example: adapter/tasks/wildlife_detection/task.py
-from adapter.interfaces.task import BaseTask
+# app/adapters/vision/fire_adapter.py
+from app.adapters.base import BaseAdapter
 
-class Task(BaseTask):
-    def setup(self):
-        self.handler = load_my_cool_model("bear_detector.onnx")
-        
-    def run(self, input_data):
-        return self.handler.predict(input_data)
+class FireAdapter(BaseAdapter):
+    name = "fire_adapter"
+    type = "vision"
+
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.model = None
+
+    def load_model(self):
+        import onnxruntime as ort
+        self.model = ort.InferenceSession("model_weights/fire.onnx")
+
+    def infer_local(self, input_data):
+        # Load image, run model, return raw results
+        return {"label": "fire", "confidence": 0.95, "bbox": [100, 80, 200, 150]}
 ```
 
-**That's it.** The `loader.py` engine dynamically inherits your class and securely binds it to a live HTTP endpoint without risking the main server going down.
+### 2. Register Routing
 
-See [docs/PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md) for the full tutorial.
+```python
+# app/config/config.py
+TASK_ADAPTER_MAP = {
+    # ... existing ...
+    "fire_detection": "fire_adapter",
+}
+CONFIG["adapters"]["fire_adapter"] = {"enabled": True, "weights_path": "fire.onnx"}
+```
+
+### 3. (Optional) Add a Task Pipeline for Validated Output
+
+```python
+# app/pipelines/fire_detection/task.py
+from app.interfaces.task import BaseTask
+
+class FireDetectionTask(BaseTask):
+    name = "fire_detection"
+
+    def process(self, image, adapter):
+        raw = adapter.predict(image)
+        # Apply business logic, return Pydantic model
+        return FireDetectionResponse(**raw)
+```
+
+**That's it.** No imports in `main.py`. No registration calls. The `PluginManager` auto-discovers your classes at startup.
+
+> **Important:** Always declare your adapter's ML libraries as a new `[project.optional-dependencies]` group in `pyproject.toml` — never add them to `[project.dependencies]`. Import them inside `load_model()`, not at the module top level. This keeps the project lean for everyone. See [Dependency Hygiene](docs/PLUGIN_DEVELOPMENT.md#dependency-hygiene--keep-the-project-lean) for full rules.
+
+→ Full tutorial with working code: **[docs/PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md)**
+→ Architecture deep-dive: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+→ API reference: **[docs/API_REFERENCE.md](docs/API_REFERENCE.md)**
 
 ---
 
-## 📂 Project Architecture
+## API Overview
 
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Server health + loaded adapter status + hardware info |
+| `/capabilities` | GET | List all available task names |
+| `/tasks` | GET | Task metadata with adapter info and descriptions |
+| `/schema` | GET | Response schema for one or all tasks |
+| `/infer` | POST | Run a single task inference |
+| `/pipeline/run` | POST | Run a chain of tasks sequentially |
+| `/adapters` | GET | List currently loaded adapters |
+| `/faces/register` | POST | Register a face for recognition |
+| `/faces/list` | GET | List registered faces |
+| `/faces/{person_id}` | GET/DELETE | Get or delete a registered face |
+
+---
+
+## Docker
+
+```bash
+# CPU build (default)
+docker build -t ai-adapter .
+
+# GPU build
+docker build --build-arg USE_GPU=true -t ai-adapter:gpu .
+
+# Run
+docker run -p 9100:9100 -v ./model_weights:/app/model_weights ai-adapter
 ```
-AIAdapters/
-├── adapter/                    # The Engine Loop
-│   ├── main.py                 # FastAPI Router
-│   ├── loader.py               # Auto-discovers plugins at boot
-│   ├── interfaces/             # The BaseTask contract
-│   │
-│   ├── tasks/                  # 🔥 PLUGIN FOLDER 🔥
-│   │   ├── person_counting/
-│   │   ├── scene_description/
-│   │   └── <YOUR_NEW_TASK>/    # Drop your folder here!
-│   │
-│   └── models/                 # Model interaction logic
-│       ├── yolov11_handler.py  # YOLOv11 + ByteTrack PyTorch
-│       └── huggingface_handler.py # Cloud orchestration
-│
-├── docs/                       # Developer Documentation
-├── model_weights/              # Downloaded .onnx files
-└── Dockerfile                  # GPU and CPU build files
+
+Built-in health check:
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:9100/health || exit 1
 ```
 
 ---
 
-## 🤝 Join the Community
-By contributing an Adapter, you help secure and democratize AI for edge environments globally. 
-Submit a Pull Request today! If your model passes validation, it will be merged into the official Open-NVR release.
+## License
 
----
+Licensed under the **GNU Affero General Public License v3.0 (AGPL v3)**.
+All forks and derivative works must share source code under the same terms.
+See the `LICENSE` file for details.
 
-## ⚖️ License
-The AI Adapters framework, plugins, and handlers are licensed strictly under the **GNU Affero General Public License v3.0 (AGPL v3)**. 
-All forks, internal cloud pipelines, and customized models running atop this core engine must share their source code to the OpenNVR ecosystem under the same AGPL terms. See the `LICENSE` file for the binding legal outline.
-
-> For commercial usage exemptions, proprietary adapter development, or direct enterprise support, please contact: **[contact@cryptovoip.in](mailto:contact@cryptovoip.in)**
+> For commercial licensing or enterprise support: **[contact@cryptovoip.in](mailto:contact@cryptovoip.in)**

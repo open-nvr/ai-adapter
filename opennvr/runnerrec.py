@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with OpenNVR.  If not, see <https://www.gnu.org/licenses/>.
 
-﻿"""
+"""
 OpenNVR Video File Runner with configurable task selection.
 
 Reads frames from rec.mp4 video file instead of camera.
@@ -41,8 +41,8 @@ def get_available_tasks():
         r = httpx.get("http://127.0.0.1:9100/capabilities", timeout=5)
         return r.json()["tasks"]
     except Exception as e:
-        print(f"âš ï¸  Could not fetch capabilities from adapter: {e}")
-        print("âš ï¸  Make sure the adapter is running: uvicorn adapter.main:app --reload --port 9100")
+        print(f"WARNING: Could not fetch capabilities from adapter: {e}")
+        print("WARNING: Make sure the adapter is running: uv run uvicorn app.main:app --reload --port 9100")
         return []
 
 
@@ -67,7 +67,7 @@ def run_video(task: str, video_path: str, camera_id: int = 0, interval: float = 
 
     # Check if video file exists
     if not os.path.exists(video_path):
-        print(f"\nâŒ Error: Video file not found: {video_path}")
+        print(f"\nERROR: Video file not found: {video_path}")
         print(f"Please make sure 'rec.mp4' exists in the current directory or provide the full path.")
         sys.exit(1)
 
@@ -75,7 +75,7 @@ def run_video(task: str, video_path: str, camera_id: int = 0, interval: float = 
     cap = cv2.VideoCapture(video_path)
     
     if not cap.isOpened():
-        print(f"\nâŒ Error: Could not open video file: {video_path}")
+        print(f"\nERROR: Could not open video file: {video_path}")
         sys.exit(1)
     
     # Get video properties
@@ -87,7 +87,7 @@ def run_video(task: str, video_path: str, camera_id: int = 0, interval: float = 
     frames_to_skip = int(fps * interval) if fps > 0 else 1
     estimated_frames_to_process = max(1, total_frames // frames_to_skip)
     
-    print(f"\nðŸŽ¬ VIDEO MODE: Processing frames from {video_path}")
+    print(f"\nVIDEO MODE: Processing frames from {video_path}")
     print(f"{'='*60}")
     print(f"Video Duration: {duration:.2f}s")
     print(f"Total Frames: {total_frames}")
@@ -114,7 +114,7 @@ def run_video(task: str, video_path: str, camera_id: int = 0, interval: float = 
             
             if not ret:
                 # End of video reached - exit gracefully
-                print(f"\nâœ… End of video reached. Processed {processed_count} frames successfully.")
+                print(f"\nOK: End of video reached. Processed {processed_count} frames successfully.")
                 break
             
             frame_count += 1
@@ -128,9 +128,9 @@ def run_video(task: str, video_path: str, camera_id: int = 0, interval: float = 
             if write_success:
                 file_size = os.path.getsize(FRAME_PATH)
                 video_timestamp = frame_count / fps if fps > 0 else 0
-                print(f"\nâœ… Frame {frame_count}/{total_frames} saved at {video_timestamp:.1f}s ({file_size} bytes)")
+                print(f"\nOK: Frame {frame_count}/{total_frames} saved at {video_timestamp:.1f}s ({file_size} bytes)")
             else:
-                print(f"\nâŒ Warning: Failed to save frame to {FRAME_PATH}")
+                print(f"\nWARNING: Failed to save frame to {FRAME_PATH}")
                 continue  # Skip inference if frame save failed
             
             processed_count += 1
@@ -166,7 +166,7 @@ def run_video(task: str, video_path: str, camera_id: int = 0, interval: float = 
                         if task_name == "person_detection":
                             conf = result.get("confidence", 0)
                             bbox = result.get("bbox", [0,0,0,0])
-                            print(f"  âœ… Detection | Conf: {conf:.2f} | BBox: {bbox} | Latency: {elapsed}ms")
+                            print(f"  OK  Detection | Conf: {conf:.2f} | BBox: {bbox} | Latency: {elapsed}ms")
                         
                         elif task_name == "person_counting":
                             count = result.get("count", 0)
@@ -184,9 +184,9 @@ def run_video(task: str, video_path: str, camera_id: int = 0, interval: float = 
                             
                             # Display both raw and smoothed counts
                             if len(count_history) >= 3:  # Show smoothed after 3 frames
-                                print(f"  âœ… Counting  | Count: {smoothed_count} (smoothed) | Raw: {count} | Avg Conf: {conf:.2f} | Latency: {elapsed}ms")
+                                print(f"  OK  Counting  | Count: {smoothed_count} (smoothed) | Raw: {count} | Avg Conf: {conf:.2f} | Latency: {elapsed}ms")
                             else:
-                                print(f"  âœ… Counting  | Count: {count} | Avg Conf: {conf:.2f} | Latency: {elapsed}ms")
+                                print(f"  OK  Counting  | Count: {count} | Avg Conf: {conf:.2f} | Latency: {elapsed}ms")
                             
                             if count > 0 and count <= 3:  # Only show details for small counts
                                 for i, det in enumerate(result.get('detections', [])[:3]):
@@ -195,34 +195,34 @@ def run_video(task: str, video_path: str, camera_id: int = 0, interval: float = 
                             # Show annotated image path if available
                             annotated_uri = result.get('annotated_image_uri')
                             if annotated_uri:
-                                print(f"  ðŸŽ¨ Annotated image available at: {annotated_uri}")
+                                print(f"  INFO Annotated image available at: {annotated_uri}")
                         
                         elif task_name == "scene_description":
                             caption = result.get("caption", "")
-                            print(f"  âœ… Caption   | {caption} | Latency: {elapsed}ms")
+                            print(f"  OK  Caption   | {caption} | Latency: {elapsed}ms")
                         
                         else:
-                            print(f"  âœ… {task_name}: {result}")
+                            print(f"  OK  {task_name}: {result}")
                     
                     else:
-                        print(f"  âŒ {task_name} Error {r.status_code}: {r.json()}")
+                        print(f"  ERROR {task_name} Error {r.status_code}: {r.json()}")
                     
                 except httpx.TimeoutException:
-                    print(f"  â±ï¸  {task_name} Timeout - adapter took too long")
+                    print(f"  TIMEOUT {task_name} - adapter took too long")
                 except httpx.ConnectError:
-                    print(f"  âŒ {task_name} Connection Error - is adapter running?")
+                    print(f"  ERROR {task_name} Connection Error - is adapter running?")
                 except Exception as e:
-                    print(f"  âŒ {task_name} Error: {e}")
+                    print(f"  ERROR {task_name} Error: {e}")
             
     except KeyboardInterrupt:
         print(f"\n\n{'='*60}")
-        print(f"ðŸ›‘ Video processing stopped by user")
+        print("Video processing stopped by user")
         print(f"Processed frames: {processed_count}/{total_frames}")
         print(f"{'='*60}\n")
     
     finally:
         cap.release()
-        print(f"\nâœ… Video processing complete. Total frames processed: {processed_count}")
+        print(f"\nOK: Video processing complete. Total frames processed: {processed_count}")
 
 
 def main():
@@ -275,7 +275,7 @@ Examples:
     
     # List tasks if requested
     if args.list_tasks:
-        print("\nðŸ” Fetching available tasks from adapter...\n")
+        print("\nFetching available tasks from adapter...\n")
         tasks = get_available_tasks()
         if tasks:
             print("Available tasks:")
@@ -289,7 +289,7 @@ Examples:
     
     # Validate task is provided
     if not args.task:
-        print("\nâŒ Error: --task is required")
+        print("\nERROR: --task is required")
         print("Use --list-tasks to see available tasks")
         print("Example: python runnerrec.py --task person_detection --video rec.mp4\n")
         parser.print_help()
@@ -303,7 +303,7 @@ Examples:
         invalid_tasks = [t for t in requested_tasks if t not in available_tasks]
         
         if invalid_tasks:
-            print(f"\nâš ï¸  Warning: Task(s) '{', '.join(invalid_tasks)}' not found in adapter capabilities")
+            print(f"\nWARNING: Task(s) '{', '.join(invalid_tasks)}' not found in adapter capabilities")
             print(f"Available tasks: {available_tasks}")
             response = input("Continue anyway? (y/n): ")
             if response.lower() != 'y':

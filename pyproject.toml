@@ -1,0 +1,110 @@
+[project]
+name = "opennvr-ai-adapter"
+version = "2.0.0"
+description = "Clean Architecture AI Adapter for OpenNVR"
+requires-python = ">=3.11, <3.13"
+
+# ── Core dependencies ──────────────────────────────────────────────────────────
+# These are installed in EVERY deployment regardless of which adapters are used.
+# Keep this list lean: only what the FastAPI server, routing, and base adapter
+# infrastructure needs.
+dependencies = [
+    "fastapi==0.127.0",
+    "uvicorn==0.40.0",
+    "pydantic==2.12.5",
+    "PyYAML==6.0.3",
+    "httpx==0.28.1",
+    "requests==2.32.5",
+    "pillow==12.0.0",
+    "numpy==1.26.4",
+    "opencv-python==4.10.0.84",
+]
+
+# ── Optional adapter dependency groups ────────────────────────────────────────
+# Install only what your deployment actually uses:
+#
+#   uv sync --extra yolo          → YOLOv8 person detection (ONNX, CPU-friendly)
+#   uv sync --extra yolo11        → YOLOv11 person counting with ByteTrack
+#   uv sync --extra face          → InsightFace recognition (ArcFace, Buffalo-L)
+#   uv sync --extra blip          → BLIP scene captioning (local, needs torch)
+#   uv sync --extra huggingface   → HuggingFace cloud inference proxy
+#   uv sync --extra cpu           → PyTorch CPU-only build (needed by yolo11+blip)
+#   uv sync --extra gpu           → PyTorch CUDA build (needed by yolo11+blip on GPU)
+#   uv sync --extra all           → Everything (backward-compatible default)
+#
+# Multi-profile example:
+#   uv sync --extra yolo --extra face          → detection + recognition, no torch
+#   uv sync --extra yolo11 --extra blip --extra cpu → counting + captions on CPU
+[project.optional-dependencies]
+
+# YOLOv8 ONNX adapter (yolov8_adapter) — lightweight, no torch needed
+yolo = [
+    "onnxruntime==1.23.2",
+    "onnx==1.20.0",
+    "onnxslim==0.1.80",
+]
+
+# YOLOv11 PyTorch adapter with ByteTrack (yolov11_adapter)
+# Requires torch — add --extra cpu or --extra gpu as well
+yolo11 = [
+    "ultralytics==8.3.240",
+    "matplotlib==3.10.8",
+    "networkx==3.6.1",
+    "protobuf>=6.33.2",
+]
+
+# InsightFace face recognition adapter (insightface_adapter)
+face = [
+    "insightface>=0.7.3",
+    "onnx==1.20.0",
+    "onnxruntime==1.23.2",
+    "scipy==1.16.3",
+    "polars==1.36.1",
+]
+
+# BLIP image captioning adapter (blip_adapter)
+# Requires torch — add --extra cpu or --extra gpu as well
+blip = [
+    "transformers==5.0.0",
+]
+
+# HuggingFace cloud inference proxy (huggingface_adapter)
+huggingface = [
+    "huggingface_hub==1.3.4",
+]
+
+# PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
+cpu = [
+    "torch==2.9.1+cpu",
+    "torchvision==0.24.1+cpu",
+]
+
+# PyTorch CUDA — required by yolo11 and blip on GPU machines
+gpu = [
+    "torch==2.9.1",
+    "torchvision==0.24.1",
+]
+
+# Development tools
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.5",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.28.1",
+]
+
+# Backward-compatible "install everything" profile
+# Equivalent to the old plain `uv sync` that had all deps in [project.dependencies]
+all = [
+    "opennvr-ai-adapter[yolo,yolo11,face,blip,huggingface]",
+]
+
+# ── PyTorch index source ───────────────────────────────────────────────────────
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

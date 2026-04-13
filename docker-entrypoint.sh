@@ -1,14 +1,13 @@
 #!/bin/sh
 # Entrypoint script for AI Adapters container
-# Downloads models on startup, then starts the application
 
 set -e
 
 echo "🚀 Starting AI Adapters container..."
 
-# Download models if they don't exist
-python3 /app/download_models.py
+# Download models using uv
+uv run python3 /app/download_models.py
 
-# Start the application
+# Start the application exclusively via uv
 echo "🔧 Starting uvicorn server..."
-exec uvicorn adapter.main:app --host 0.0.0.0 --port 9100
+exec uv run uvicorn app.main:app --host 0.0.0.0 --port 9100
