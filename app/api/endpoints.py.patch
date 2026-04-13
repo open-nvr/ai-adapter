@@ -1,0 +1,10 @@
+import sys
+
+with open('D:/testing repos/forked-repo/ai-adapter/app/api/endpoints.py', 'r') as f:
+    content = f.read()
+
+content = content.replace('data = req.get("data")', 'data = req.get("input")')
+content = content.replace('Missing \'task\' or \'data\'', 'Missing \\'task\\' or \\'input\\'')
+
+with open('D:/testing repos/forked-repo/ai-adapter/app/api/endpoints.py', 'w') as f:
+    f.write(content)
