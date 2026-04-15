@@ -29,10 +29,10 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN if [ "$USE_GPU" = "false" ]; then \
-        echo "Installing CPU-only PyTorch to save space..." && \
-        uv sync --no-dev --extra cpu; \
+        echo "Installing all adapters with CPU-only PyTorch..." && \
+        uv sync --no-dev --extra all --extra cpu; \
     else \
-        uv sync --no-dev --extra gpu; \
+        uv sync --no-dev --extra all --extra gpu; \
     fi
 
 # Copy application source code into builder stage
@@ -68,7 +68,8 @@ RUN useradd -m -u 1000 aiuser
 COPY --from=builder --chown=aiuser:aiuser /opt/venv /opt/venv
 COPY --from=builder --chown=aiuser:aiuser /app /app
 
-RUN chmod +x /app/docker-entrypoint.sh && \
+RUN chown aiuser:aiuser /app && \
+    chmod +x /app/docker-entrypoint.sh && \
     find /app -name ".env" -type f -delete && \
     find /app -name ".env.*" -type f -delete && \
     find /app -name "*.env" -type f -delete && \
