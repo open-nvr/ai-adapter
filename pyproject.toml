@@ -28,9 +28,14 @@ dependencies = [
 #   uv sync --extra face          → InsightFace recognition (ArcFace, Buffalo-L)
 #   uv sync --extra blip          → BLIP scene captioning (local, needs torch)
 #   uv sync --extra huggingface   → HuggingFace cloud inference proxy
+#   uv sync --extra stt           → Whisper speech-to-text (faster-whisper, CPU or GPU)
+#   uv sync --extra tts           → Piper text-to-speech (ONNX, CPU-friendly)
 #   uv sync --extra cpu           → PyTorch CPU-only build (needed by yolo11+blip)
 #   uv sync --extra gpu           → PyTorch CUDA build (needed by yolo11+blip on GPU)
 #   uv sync --extra all           → Everything (backward-compatible default)
+#
+# Note: the Ollama LLM adapter (ollama_adapter) needs NO extras — it only speaks
+# HTTP to a local Ollama daemon (https://ollama.ai) via httpx, already in core.
 #
 # Multi-profile example:
 #   uv sync --extra yolo --extra face          → detection + recognition, no torch
@@ -73,6 +78,22 @@ huggingface = [
     "huggingface_hub==1.3.4",
 ]
 
+# Whisper speech-to-text adapter (whisper_adapter)
+# faster-whisper ships its own CTranslate2 runtime — no torch required on CPU.
+# For CUDA inference, also install --extra gpu so torch.cuda.is_available() gates
+# the "auto" device picker. av is pulled transitively by faster-whisper for audio
+# decoding (WAV/MP3/FLAC/OGG/M4A).
+stt = [
+    "faster-whisper>=1.1.0",
+]
+
+# Piper text-to-speech adapter (piper_adapter)
+# piper-tts reuses the onnxruntime we already depend on transitively via yolo,
+# so adding TTS costs only the Python wrapper + the voice file (~25 MB/voice).
+tts = [
+    "piper-tts>=1.2.0",
+]
+
 # PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
 cpu = [
     "torch==2.9.1+cpu",
@@ -96,7 +117,7 @@ dev = [
 # Backward-compatible "install everything" profile
 # Equivalent to the old plain `uv sync` that had all deps in [project.dependencies]
 all = [
-    "opennvr-ai-adapter[yolo,yolo11,face,blip,huggingface]",
+    "opennvr-ai-adapter[yolo,yolo11,face,blip,huggingface,stt,tts]",
 ]
 
 # ── PyTorch index source ───────────────────────────────────────────────────────

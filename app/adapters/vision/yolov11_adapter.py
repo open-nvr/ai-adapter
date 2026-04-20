@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 
 # Optimized parameters from testing (90-95% accuracy)
 COUNTING_CONFIDENCE_THRESHOLD = 0.42
-COUNTING_IOU_THRESHOLD = 0.35
+# IOU threshold for NMS: 0.50 is the standard value for person detection.
+# Lower values (e.g. 0.35) are too permissive — a single person can generate
+# 3-5 overlapping boxes that all survive NMS and get counted separately.
+COUNTING_IOU_THRESHOLD = 0.50
 DEFAULT_MODEL_NAME = "yolo11m.pt"
 
 # Colorful palette for bounding boxes
@@ -128,17 +131,23 @@ class YOLOv11Adapter(BaseAdapter):
         img = load_image_from_uri(uri)
         h_img, w_img = img.shape[:2]
         
+        # persist=False is intentional for snapshot/on-demand inference.
+        # persist=True is designed for continuous video streams where the tracker
+        # carries state between consecutive frames. With on-demand snapshots the
+        # tracker has no prior state, so every call assigns a brand-new track ID
+        # to the same person. After N requests you end up with IDs 1..N all
+        # representing the same individual — causing counts of 10, 20, etc.
         results = self._yolo_model.track(
             img,
             conf=COUNTING_CONFIDENCE_THRESHOLD,
             iou=COUNTING_IOU_THRESHOLD,
             tracker="bytetrack.yaml",
-            persist=True,
+            persist=False,
             verbose=False
         )
         
         person_count = 0
-        tracked_ids = set()
+        tracked_ids = set()  # used only for logging unique IDs; count is box-based
         annotated_frame = img.copy()
         detections = []
         
@@ -148,10 +157,12 @@ class YOLOv11Adapter(BaseAdapter):
                 cls = int(box.cls[0])
                 if cls == 0:  # Person class
                     track_id = int(box.id[0]) if box.id is not None else -1
-                    
-                    if track_id not in tracked_ids:
-                        tracked_ids.add(track_id)
-                        person_count += 1
+                    tracked_ids.add(track_id)
+                    # Each surviving box after NMS = one detected person in this frame.
+                    # We do NOT deduplicate by track_id here: with persist=False each
+                    # track_id is unique per box already, and deduplicating would
+                    # incorrectly merge legitimate detections of different people.
+                    person_count += 1
                     
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     conf = float(box.conf[0])

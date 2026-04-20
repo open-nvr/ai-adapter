@@ -28,11 +28,12 @@ RUN uv venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-RUN if [ "$USE_GPU" = "false" ]; then \
+RUN if [ "$USE_GPU" = "true" ]; then \
+        echo "Installing all adapters with GPU PyTorch..." && \
+        uv sync --no-dev --extra all --extra gpu; \
+    else \
         echo "Installing all adapters with CPU-only PyTorch..." && \
         uv sync --no-dev --extra all --extra cpu; \
-    else \
-        uv sync --no-dev --extra all --extra gpu; \
     fi
 
 # Copy application source code into builder stage

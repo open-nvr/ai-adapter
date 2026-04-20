@@ -1,7 +1,12 @@
+import asyncio
+import logging
 from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Dict, Any, List, Optional
 from app.api.auth import get_api_key
 
+logger = logging.getLogger("OpenNVR_Adapter")
+
+public_router = APIRouter()
 router = APIRouter(dependencies=[Depends(get_api_key)])
 
 # We will inject the global router instance here upon app startup
@@ -18,7 +23,7 @@ try:
 except ImportError:
     get_system_specs = lambda: {"error": "hardware utility missing"}
 
-@router.get("/health")
+@public_router.get("/health")
 def health_check():
     """System health check and adapter status."""
     if not _global_router:
@@ -42,7 +47,7 @@ def health_check():
         "adapter_details": adapter_health
     }
 
-@router.get("/capabilities")
+@public_router.get("/capabilities")
 def capabilities():
     """List of all valid tasks this NVR node can process based on router mapping."""
     if not _global_router:
@@ -86,38 +91,38 @@ def list_tasks():
     return {"tasks": tasks_list, "count": len(tasks_list)}
 
 @router.get("/schema")
-def get_schema(task: Optional[str] = Query(None, description="Task name to get schema for")):
+async def get_schema(task: Optional[str] = Query(None, description="Task name to get schema for")):
     """
     Returns the schema for a specific task or all schemas if no task specified.
     The schema describes the expected input/output format for OpenNVR UI.
     """
     if not _global_router:
         return {"schema": {}}
-    
+
     if task:
         # Get schema for a specific task
         adapter_name = _global_router.config_module.get_adapter_for_task(task)
         if not adapter_name:
             raise HTTPException(status_code=404, detail=f"No routing rule found for task '{task}'")
-        
+
         try:
-            adapter = _global_router.get_or_create_adapter(adapter_name)
+            adapter = await _global_router.get_or_create_adapter(adapter_name)
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
-        
+
         schema = adapter.schema
         # If schema is nested by task name, return the specific task schema
         if isinstance(schema, dict) and task in schema:
             return {"task": task, "adapter": adapter_name, "schema": schema[task]}
         return {"task": task, "adapter": adapter_name, "schema": schema}
-    
+
     # Return all schemas
     all_schemas = {}
     routing = _global_router.config_module.CONFIG.get("routing", {})
-    
+
     for task_name, adapter_name in routing.items():
         try:
-            adapter = _global_router.get_or_create_adapter(adapter_name)
+            adapter = await _global_router.get_or_create_adapter(adapter_name)
             schema = adapter.schema
             if isinstance(schema, dict) and task_name in schema:
                 all_schemas[task_name] = schema[task_name]
@@ -125,7 +130,7 @@ def get_schema(task: Optional[str] = Query(None, description="Task name to get s
                 all_schemas[task_name] = schema
         except Exception:
             continue
-    
+
     return {"schemas": all_schemas}
 
 @router.post("/infer")
@@ -142,8 +147,7 @@ async def infer(req: dict):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Inference failed for task %r", task)
         raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
 
 @router.get("/adapters")
@@ -171,14 +175,14 @@ async def run_pipeline(req: dict):
 # FACE MANAGEMENT API ENDPOINTS
 # =============================================================================
 
-def _get_insightface_adapter():
+async def _get_insightface_adapter():
     """Helper to get InsightFace adapter with proper error handling."""
     if not _global_router:
         raise HTTPException(status_code=503, detail="Router not initialized")
-    
+
     try:
-        adapter = _global_router.get_or_create_adapter("insightface_adapter")
-        _global_router.ensure_adapter_loaded(adapter)
+        adapter = await _global_router.get_or_create_adapter("insightface_adapter")
+        await asyncio.to_thread(_global_router.ensure_adapter_loaded, adapter)
         return adapter
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -197,15 +201,14 @@ async def register_face(req: dict):
         "metadata": {}  // optional additional data
     }
     """
-    adapter = _get_insightface_adapter()
-    
+    adapter = await _get_insightface_adapter()
+
     required_fields = ["person_id", "name", "frame"]
     for field in required_fields:
         if field not in req:
             raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
-    
+
     try:
-        import asyncio
         result = await asyncio.to_thread(adapter.register_face, req)
         return result
     except Exception as e:
@@ -216,10 +219,9 @@ async def list_faces(category: Optional[str] = Query(None, description="Filter b
     """
     List all registered faces, optionally filtered by category.
     """
-    adapter = _get_insightface_adapter()
-    
+    adapter = await _get_insightface_adapter()
+
     try:
-        import asyncio
         result = await asyncio.to_thread(adapter.list_faces, category=category)
         return result
     except Exception as e:
@@ -230,10 +232,9 @@ async def get_face(person_id: str):
     """
     Get details of a specific registered face.
     """
-    adapter = _get_insightface_adapter()
-    
+    adapter = await _get_insightface_adapter()
+
     try:
-        import asyncio
         result = await asyncio.to_thread(adapter.get_face, person_id)
         if result.get("face") is None and "not found" in result.get("message", "").lower():
             raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
@@ -248,10 +249,9 @@ async def delete_face(person_id: str):
     """
     Delete a registered face by person_id.
     """
-    adapter = _get_insightface_adapter()
-    
+    adapter = await _get_insightface_adapter()
+
     try:
-        import asyncio
         result = await asyncio.to_thread(adapter.delete_face, person_id)
         if not result.get("success"):
             raise HTTPException(status_code=404, detail=result.get("message", "Delete failed"))
