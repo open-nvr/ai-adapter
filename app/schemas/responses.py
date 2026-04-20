@@ -191,3 +191,98 @@ class SceneDescriptionResponse(BaseModel):
     model_id: str = Field(min_length=1)
     executed_at: int = Field(ge=0)
     latency_ms: int = Field(ge=0)
+
+
+class TranscriptSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    start: float = Field(ge=0.0)
+    end: float = Field(ge=0.0)
+    text: str
+    avg_logprob: float | None = None
+    no_speech_prob: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_span(self) -> "TranscriptSegment":
+        if self.end < self.start:
+            raise ValueError(f"segment end ({self.end}) must be >= start ({self.start})")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_without_nulls(self, handler):
+        data = handler(self)
+        for key in ("avg_logprob", "no_speech_prob"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
+
+
+class AudioTranscriptionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    task: Literal["audio_transcription", "audio_translation"]
+    text: str
+    segments: list[TranscriptSegment] = Field(default_factory=list)
+    language: str = Field(min_length=1)
+    language_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    duration_seconds: float = Field(ge=0.0)
+    model: str = Field(min_length=1)
+    translated_to_english: bool = False
+    executed_at: int = Field(ge=0)
+    latency_ms: int = Field(ge=0)
+
+    @model_serializer(mode="wrap")
+    def serialize_without_nulls(self, handler):
+        data = handler(self)
+        if data.get("language_confidence") is None:
+            data.pop("language_confidence", None)
+        return data
+
+
+class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str
+
+
+class ChatCompletionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    task: Literal["chat_completion"] = "chat_completion"
+    message: ChatMessage
+    model: str = Field(min_length=1)
+    finish_reason: Literal["stop", "length", "tool_calls", "content_filter", "unknown"] = "stop"
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    executed_at: int = Field(ge=0)
+    latency_ms: int = Field(ge=0)
+
+    @model_serializer(mode="wrap")
+    def serialize_without_nulls(self, handler):
+        data = handler(self)
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
+
+
+class SpeechSynthesisResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    task: Literal["speech_synthesis"] = "speech_synthesis"
+    audio_uri: str = Field(min_length=1)
+    duration_seconds: float = Field(ge=0.0)
+    sample_rate: int = Field(gt=0)
+    voice: str = Field(min_length=1)
+    text_length: int = Field(ge=0)
+    executed_at: int = Field(ge=0)
+    latency_ms: int = Field(ge=0)
+
+    @field_validator("audio_uri")
+    @classmethod
+    def validate_audio_uri(cls, value: str) -> str:
+        if not value.startswith("opennvr://audio/"):
+            raise ValueError("audio_uri must start with opennvr://audio/")
+        return value

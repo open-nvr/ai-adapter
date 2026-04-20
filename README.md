@@ -4,9 +4,35 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.127.0-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-FFD21E.svg)](https://huggingface.co/models)
 
-A plug-and-play AI inference server for the **OpenNVR** ecosystem. Drop in any AI model — ONNX, PyTorch, or HuggingFace cloud — and it becomes available as a REST API, automatically discovered and lazily loaded.
+A plug-and-play AI inference server for the **[OpenNVR](https://github.com/open-nvr/open-nvr)** ecosystem. Drop in any AI model — ONNX, PyTorch, or HuggingFace cloud — and it becomes available as a REST API, automatically discovered and lazily loaded.
 
 > **v2.0 — Anti-Bloat Architecture:** Dependencies are now split into optional groups. A minimal deployment installs ~9 packages and only grows when you explicitly ask for more adapters.
+
+---
+
+## Why build adapters here?
+
+- **Real users, real cameras.** OpenNVR is a self-hosted NVR — every adapter you ship runs against live RTSP/ONVIF streams on real hardware, not a toy benchmark.
+- **Three files, zero plumbing.** Auto-discovery, lazy loading, config routing, Pydantic validation, Docker packaging, and REST surface are all handled. You focus on the model.
+- **Ship without forking.** Add your adapter as its own file in `app/adapters/<vision|llm>/`. No edits to `main.py`, no central registry, no breaking other adapters.
+- **Lean by design.** Your adapter declares its own `[project.optional-dependencies]` group. Users who don't need your model don't pay for it at install time.
+- **AGPLv3-licensed.** Good-faith contributions stay open. Commercial licensing is available if you need to ship adapters under closed terms — see [License](#license) below.
+
+### Adapters we'd love to see
+
+Contributions in any of these areas are on the roadmap and explicitly welcome:
+
+| Category | Ideas |
+|---|---|
+| **Safety / security** | Weapons detection, fire/smoke detection, fall detection, PPE compliance (hard hat / vest / mask) |
+| **Access & identity** | License-plate recognition (ANPR), uniform / ID-badge detection, gait recognition |
+| **Analytics** | Crowd density estimation, queue length, dwell-time heatmaps, vehicle classification |
+| **Audio** | Glass-break detection, gunshot detection, aggression detection, diarisation (Whisper STT ships as `whisper_adapter`; Piper TTS ships as `piper_adapter`) |
+| **Conversational agents** | Function-calling LLM adapters, RAG-over-events, voicemail bots, on-call escalation flows (Ollama LLM ships as `ollama_adapter`; real-time streaming is the next frontier) |
+| **Animals & wildlife** | Pet / livestock detection, wildlife classification, bird-species ID |
+| **Edge optimisation** | TensorRT / OpenVINO / CoreML variants of existing adapters for Jetson, Intel NUC, Apple Silicon |
+
+Have another idea? Open a [discussion](https://github.com/open-nvr/ai-adapter/discussions) before you start coding — we'll help scope it.
 
 ---
 
@@ -120,6 +146,9 @@ The project uses **optional dependency groups** to keep deployments lean. You on
 | **Face recognition** | `uv sync --extra face` | + insightface + onnxruntime + scipy | ~500 MB |
 | **Scene captioning** | `uv sync --extra blip --extra cpu` | + transformers + torch (CPU) | ~3 GB |
 | **HuggingFace cloud** | `uv sync --extra huggingface` | + huggingface_hub | ~60 MB |
+| **Whisper STT** | `uv sync --extra stt` | + faster-whisper (CTranslate2, CPU-ok) | ~300 MB |
+| **Piper TTS** | `uv sync --extra tts` | + piper-tts (ONNX voices, CPU-ok) | ~100 MB + 25 MB/voice |
+| **Ollama LLM** | (no extras needed — uses core `httpx`) | requires an Ollama daemon running locally | ~0 MB (model lives in Ollama) |
 | **Full (all adapters)** | `uv sync --extra all --extra cpu` | everything | ~4 GB |
 | **Full GPU** | `uv sync --extra all --extra gpu` | everything + CUDA torch | ~6 GB |
 
@@ -269,10 +298,24 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 
 ---
 
+## Community & Support
+
+- 💬 **Discussions:** [github.com/open-nvr/ai-adapter/discussions](https://github.com/open-nvr/ai-adapter/discussions) — questions, adapter proposals, RFCs.
+- 🐛 **Issues:** [github.com/open-nvr/ai-adapter/issues](https://github.com/open-nvr/ai-adapter/issues) — bug reports, feature requests. Look for the `good first issue` label to pick up something bite-sized.
+- 📘 **Parent project:** [github.com/open-nvr/open-nvr](https://github.com/open-nvr/open-nvr) — the NVR that consumes these adapters.
+
+---
+
 ## License
 
 Licensed under the **GNU Affero General Public License v3.0 (AGPL v3)**.
-All forks and derivative works must share source code under the same terms.
-See the `LICENSE` file for details.
 
-> For commercial licensing or enterprise support: **[contact@cryptovoip.in](mailto:contact@cryptovoip.in)**
+**What this means for adapter authors:**
+- ✅ You can publish your adapter under AGPLv3 (or any AGPLv3-compatible license).
+- ✅ Your model *weights* are not AGPL-bound — only the adapter source is. You may ship weights under any license the model permits (including proprietary).
+- ⚠️ If you integrate a **GPL-incompatible library** (e.g. a commercial SDK that forbids copyleft linking), you cannot distribute that adapter in-tree. Keep it as a third-party repo and we'll link to it.
+- ⚠️ Running OpenNVR + your adapter as a **network service** triggers AGPL source-disclosure: any modified source must be made available to users of the service.
+
+See the `LICENSE` file for the full terms.
+
+> For commercial licensing (closed-source adapters, proprietary redistribution, or enterprise support): **[contact@cryptovoip.in](mailto:contact@cryptovoip.in)**
