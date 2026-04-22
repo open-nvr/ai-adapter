@@ -8,7 +8,7 @@ This server provides:
 """
 import logging
 from fastapi import FastAPI
-from app.api.endpoints import router as api_router, set_global_router
+from app.api.endpoints import router as api_router, public_router, set_global_router
 from app.router.model_router import ModelRouter
 from app.pipelines.engine import PipelineEngine
 import app.config.config as config_module
@@ -36,4 +36,5 @@ async def startup_event():
         len(PluginManager.ADAPTER_REGISTRY),
     )
 
+app.include_router(public_router)
 app.include_router(api_router)

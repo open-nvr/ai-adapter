@@ -11,6 +11,7 @@ from typing import Optional
 # Base directories
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE_FRAMES_DIR = os.path.join(BASE_DIR, "..", "frames")
+BASE_AUDIO_DIR = os.path.join(BASE_DIR, "..", "audio")
 MODEL_WEIGHTS_DIR = os.path.join(BASE_DIR, "..", "model_weights")
 
 # Model inference settings
@@ -24,13 +25,17 @@ TASK_ADAPTER_MAP = {
     "face_verify": "insightface_adapter",
     "watchlist_check": "insightface_adapter",
     "person_detection": "yolov8_adapter",
-    "person_counting": "yolov8_adapter",
+    "person_counting": "yolov11_adapter",
     "scene_description": "blip_adapter",
     "hf_vision": "huggingface_adapter",
     "object-detection": "huggingface_adapter",
     "image-classification": "huggingface_adapter",
     "image-to-text": "huggingface_adapter",
     "zero_shot_detection": "huggingface_adapter",
+    "audio_transcription": "whisper_adapter",
+    "audio_translation": "whisper_adapter",
+    "chat_completion": "ollama_adapter",
+    "speech_synthesis": "piper_adapter",
 }
 
 ENABLED_TASKS = {
@@ -39,6 +44,10 @@ ENABLED_TASKS = {
     "face_detection": True,
     "face_recognition": True,
     "scene_description": True,
+    "audio_transcription": True,
+    "audio_translation": True,
+    "chat_completion": True,
+    "speech_synthesis": True,
 }
 
 # Simulating a parsed YAML config file
@@ -62,6 +71,22 @@ CONFIG = {
         },
         "huggingface_adapter": {
             "enabled": True
+        },
+        "whisper_adapter": {
+            "enabled": True,
+            "model_size": "base",
+            "device": "auto",
+            "compute_type": "auto",
+        },
+        "ollama_adapter": {
+            "enabled": True,
+            "base_url": "http://localhost:11434",
+            "model": "llama3.2:3b",
+            "timeout_s": 60.0,
+        },
+        "piper_adapter": {
+            "enabled": True,
+            "voice": "en_US-libritts-high",
         },
         "disabled_vision": {
             "enabled": False

@@ -23,6 +23,9 @@ _INSTALL_HINTS: dict[str, str] = {
     "torchvision":        "uv sync --extra cpu  (or --extra gpu)",
     "huggingface_hub":    "uv sync --extra huggingface",
     "scipy":              "uv sync --extra face",
+    "faster_whisper":     "uv sync --extra stt",
+    "ctranslate2":        "uv sync --extra stt",
+    "piper":              "uv sync --extra tts",
 }
 
 
