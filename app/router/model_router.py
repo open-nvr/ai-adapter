@@ -29,7 +29,6 @@ class ModelRouter:
             raise ValueError(f"Adapter '{adapter_name}' was not discovered")
 
         adapter_config = self.config_module.get_adapter_config(adapter_name)
-        import asyncio
         adapter = await asyncio.to_thread(adapter_cls, config=adapter_config)
         self.adapters[adapter_name] = adapter
         return adapter
@@ -53,7 +52,6 @@ class ModelRouter:
         if task_cls is None:
             return None
 
-        import asyncio
         task_instance = await asyncio.to_thread(task_cls)
         self.tasks[task_name] = task_instance
         return task_instance
@@ -85,7 +83,6 @@ class ModelRouter:
         )
 
     async def route_task(self, task_name: str, input_data: Any) -> ResponsePayload:
-        import asyncio
         adapter_name = self.config_module.get_adapter_for_task(task_name)
         if not adapter_name:
             raise ValueError(f"No routing rule found for task '{task_name}'")
