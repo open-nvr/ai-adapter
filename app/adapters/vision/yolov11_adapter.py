@@ -183,6 +183,8 @@ class YOLOv11Adapter(BaseAdapter):
                     bbox = [x1, y1, x2 - x1, y2 - y1]
                     detections.append({
                         "bbox": bbox,
+                        "class_id": 0,
+                        "class_name": "person",
                         "confidence": round(conf, 2),
                         "track_id": track_id if track_id != -1 else None
                     })
@@ -203,7 +205,8 @@ class YOLOv11Adapter(BaseAdapter):
             "task": "person_counting",
             "count": person_count,
             "confidence": round(avg_confidence, 2),
-            "detections": detections,
+            "predictions": detections,
+            "raw_prediction_count": len(detections),
             "executed_at": int(time.time() * 1000),
             "latency_ms": int((time.time() - start_time) * 1000)
         }
