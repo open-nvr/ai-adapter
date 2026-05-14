@@ -70,12 +70,13 @@ class HuggingFaceAdapter(BaseAdapter):
         from huggingface_hub import InferenceClient
 
         api_token = os.environ.get("HF_TOKEN")
+        provider = self.config.get("provider", "hf-inference")
         if api_token:
-            self._client = InferenceClient(token=api_token)
-            logger.info("HuggingFace InferenceClient initialized with API token")
+            self._client = InferenceClient(provider=provider, token=api_token)
+            logger.info("HuggingFace InferenceClient initialized with API token (provider=%s)", provider)
         else:
-            self._client = InferenceClient()
-            logger.warning("HuggingFace client initialized without token; rate limits apply")
+            self._client = InferenceClient(provider=provider)
+            logger.warning("HuggingFace client initialized without token; rate limits apply (provider=%s)", provider)
 
         self.model = self._client
 
@@ -142,7 +143,8 @@ class HuggingFaceAdapter(BaseAdapter):
     ) -> Any:
         from huggingface_hub import InferenceClient
 
-        client = InferenceClient(token=api_token)
+        provider = self.config.get("provider", "hf-inference")
+        client = InferenceClient(provider=provider, token=api_token)
         image_data = None
 
         if isinstance(inputs, dict) and "image" in inputs:
