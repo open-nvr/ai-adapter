@@ -2,16 +2,30 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-WhisperService — contract-semantics layer around the legacy
-``WhisperAdapter``.
+WhisperService — Whisper-specific implementation of ``AdapterService``.
 
-Translates between the AI Adapter Contract v1 wire shapes and
-WhisperAdapter's infer interface. The interesting translations:
+Migrated to ``opennvr-adapter-sdk`` in A2.3c. All cross-adapter
+boilerplate (auth, metrics, FastAPI routes, request body parsing,
+error-envelope translation, lifespan) is now in the SDK; this module
+holds only the Whisper-specific pieces:
 
-* Audio bytes come in via multipart or JSON-base64; we write them to
-  a tmp file and pass that path to the legacy adapter (which calls
-  ``faster-whisper`` with a filesystem path because the underlying
-  CTranslate2 runtime decodes audio via libav internally).
+* Load lifecycle around the legacy ``WhisperAdapter``
+* Live ``model.fingerprint`` from the model's ``config.json``
+* §3.3 ``HardwareEvaluationResponse`` (CUDA vs CPU verdict)
+* §3.5 ``infer(payload)`` — driven by the SDK's AUDIO-shape body
+  parser
+
+The legacy ``WhisperAdapter`` (in ``app/adapters/audio/whisper_adapter.py``)
+stays untouched — it's the underlying model wrapper, not the contract
+shim.
+
+Interesting translations:
+
+* Audio bytes come in via the SDK at ``payload[BODY_BYTES_KEY]`` (set
+  by the SDK's AUDIO body parser, which accepts both multipart
+  ``audio`` and JSON ``audio_b64``). We write them to a tmp file and
+  pass that path to the legacy adapter — ``faster-whisper`` takes a
+  path because CTranslate2 decodes audio via libav internally.
 * Whisper returns segments with ``start`` / ``end`` in float seconds;
   §5.3 ASR convention uses ``start_ms`` / ``end_ms`` integers in
   milliseconds. The service rounds and translates.
@@ -36,36 +50,24 @@ from typing import Any
 from app.adapters.audio.whisper_adapter import WhisperAdapter
 from app.config import MODEL_WEIGHTS_DIR
 from app.interfaces.contract import (
-    AdapterInfo,
     AsrResult,
     AsrSegment,
-    CapabilitiesResponse,
-    Cost,
-    EndpointsInfo,
     ErrorCategory,
-    ErrorDetail,
-    FailureEnvelope,
-    FairQueuing,
     HardwareEvaluationResponse,
     HardwareVerdict,
-    HealthResponse,
     HealthStatus,
-    InferEndpointInfo,
     InferResponse,
     ModelInfo,
-    Permissions,
-    Scheduling,
-    StreamEndpointInfo,
+)
+from opennvr_adapter_sdk import (
+    AdapterService,
+    BODY_BYTES_KEY,
+    ServiceError,
 )
 
 logger = logging.getLogger(__name__)
 
-ADAPTER_NAME: str = "whisper-asr"
-ADAPTER_VERSION: str = "1.0.0"
-ADAPTER_VENDOR: str = "open-nvr"
-ADAPTER_LICENSE: str = "AGPL-3.0"
 MODEL_FRAMEWORK: str = "faster-whisper"
-TASKS_ADVERTISED: tuple[str, ...] = ("audio_transcription", "audio_translation")
 
 # Default audio body cap. 25 MiB comfortably holds 25 minutes of
 # 16-bit 16 kHz mono WAV. Longer clips should be split client-side.
@@ -74,17 +76,17 @@ MAX_AUDIO_BYTES: int = 25 * 1024 * 1024
 DEFAULT_MODEL_SIZE: str = "base"
 DEFAULT_BEAM_SIZE: int = 5
 
-# Mapping from contract task name → faster-whisper "task" param.
-# WhisperAdapter has the same map internally; we duplicate here so
-# our validation message lists the contract-shaped names.
+# Contract task name → faster-whisper "task" param. WhisperAdapter
+# has the same map internally; duplicated here so the validation
+# error message lists the contract-shaped names.
 _TASK_TO_WHISPER_MODE: dict[str, str] = {
     "audio_transcription": "transcribe",
     "audio_translation": "translate",
 }
 
 
-class WhisperService:
-    """Stateful façade around WhisperAdapter implementing contract semantics."""
+class WhisperService(AdapterService):
+    """Stateful façade around WhisperAdapter."""
 
     def __init__(
         self,
@@ -98,8 +100,6 @@ class WhisperService:
         self._download_root = download_root or os.path.join(MODEL_WEIGHTS_DIR, "whisper")
         self._device_setting = device
         self._compute_setting = compute_type
-        self._started_at_dt: datetime = datetime.now(timezone.utc)
-        self._started_at_mono: float = time.monotonic()
 
         self._adapter: WhisperAdapter = WhisperAdapter(
             config={
@@ -112,9 +112,9 @@ class WhisperService:
 
         self._load_state: HealthStatus = HealthStatus.LOADING
         self._load_error: str | None = None
-        self._fingerprint: str | None = None
+        self._fingerprint_cache: str | None = None
 
-    # ── Lifecycle ──────────────────────────────────────────────────
+    # ── AdapterService impl ────────────────────────────────────────
 
     def load(self) -> None:
         """Eagerly load the Whisper model. Idempotent."""
@@ -122,7 +122,7 @@ class WhisperService:
             return
         try:
             self._adapter.ensure_model_loaded()
-            self._fingerprint = self._compute_fingerprint()
+            self._fingerprint_cache = self._compute_fingerprint()
             self._load_state = HealthStatus.OK
             self._load_error = None
             logger.info(
@@ -130,130 +130,33 @@ class WhisperService:
                 self._model_size,
                 self._adapter._device,
                 self._adapter._compute_type,
-                self._fingerprint,
+                self._fingerprint_cache,
             )
         except Exception as exc:
             self._load_state = HealthStatus.ERROR
             self._load_error = str(exc)
             logger.exception("WhisperService failed to load model %s", self._model_size)
 
-    def _compute_fingerprint(self) -> str:
-        """sha256 of the model's ``config.json`` (small, stable file
-        that uniquely identifies the model variant). Falls back to a
-        hash of ``model_size::compute_type`` when the config file isn't
-        on disk yet (e.g., before the first download completes).
-
-        faster-whisper uses the HuggingFace cache layout
-        (``models--<org>--<repo>/snapshots/<hash>/``) which is awkward
-        to pin a path for — the snapshot hash changes per upload. We
-        walk ``download_root`` for the first ``config.json`` we find;
-        good enough since each model_size lives under a separate
-        subtree and only one model is loaded per service.
-        """
-        for root, _dirs, files in os.walk(self._download_root):
-            if "config.json" in files:
-                candidate = os.path.join(root, "config.json")
-                try:
-                    digest = hashlib.sha256()
-                    with open(candidate, "rb") as fh:
-                        digest.update(fh.read())
-                    return f"sha256:{digest.hexdigest()}"
-                except OSError:
-                    continue
-        # Fallback when the model isn't on disk (mock / loading state).
-        material = f"{self._model_size}::{self._device_setting}::{self._compute_setting}"
-        return f"sha256:{hashlib.sha256(material.encode()).hexdigest()}"
-
-    def _compute_fingerprint_or_cached(self) -> str | None:
-        try:
-            return self._compute_fingerprint()
-        except OSError:
-            return self._fingerprint
-
     def is_ready(self) -> bool:
         return self._load_state == HealthStatus.OK
 
-    # ── Contract endpoints ─────────────────────────────────────────
+    def fingerprint(self) -> str | None:
+        """Recompute live on each call so §11.3 drift detection sees
+        weight rotation. Cached value used as fallback if the on-disk
+        config.json becomes unreadable mid-flight."""
+        try:
+            return self._compute_fingerprint()
+        except OSError:
+            return self._fingerprint_cache
 
-    def health(self) -> HealthResponse:
-        return HealthResponse(
-            status=self._load_state,
-            adapter_name=ADAPTER_NAME,
-            adapter_version=ADAPTER_VERSION,
-            model_name=f"whisper-{self._model_size}",
-            model_version=self._adapter_model_version(),
-            started_at=self._started_at_dt,
-            uptime_seconds=int(time.monotonic() - self._started_at_mono),
-        )
-
-    def capabilities(self) -> CapabilitiesResponse:
-        return CapabilitiesResponse(
-            adapter=AdapterInfo(
-                name=ADAPTER_NAME,
-                version=ADAPTER_VERSION,
-                vendor=ADAPTER_VENDOR,
-                license=ADAPTER_LICENSE,
-                model_card_url="https://github.com/SYSTRAN/faster-whisper",
-                supported_contract_versions=["1"],
-            ),
-            model=ModelInfo(
-                name=f"whisper-{self._model_size}",
-                version=self._adapter_model_version(),
-                framework=MODEL_FRAMEWORK,
-                modalities_in=["audio"],
-                modalities_out=["text"],
-                fingerprint=self._compute_fingerprint_or_cached(),
-            ),
-            endpoints=EndpointsInfo(
-                infer=InferEndpointInfo(
-                    supported=True,
-                    input_content_types=["multipart/form-data", "application/json"],
-                ),
-                # §3.6 — streaming ASR is its own design problem
-                # (partial-result emission, overlap windows, VAD
-                # gating). v1 refuses with HTTP 501; a follow-up
-                # commit lands streaming.
-                infer_stream=StreamEndpointInfo(
-                    supported=False,
-                    max_concurrent_streams=0,
-                ),
-            ),
-            tasks_advertised=list(TASKS_ADVERTISED),
-            permissions=Permissions(
-                # GPU optional — faster-whisper uses CUDA when
-                # available; falls back to CPU. We declare GPU to
-                # capture the operator-approval gate per §8 since
-                # most production deployments DO use CUDA.
-                gpu=True,
-                network_egress=[],
-                # faster-whisper downloads weights from HuggingFace
-                # on first load; once cached, no further egress.
-                # Under sovereignty=local_only deployments operators
-                # pre-populate the weights dir and KAI-C refuses if
-                # this list isn't empty — so we leave it empty and
-                # rely on the operator having pre-downloaded models.
-                host_filesystem=[self._download_root],
-                shared_memory_paths=[],
-                host_metadata=False,
-            ),
-            scheduling=Scheduling(
-                # Whisper sessions are NOT thread-safe under
-                # concurrent transcribe() calls — same singleton
-                # caveat as YOLOv8. Honest value is 1.
-                max_inflight=1,
-                preferred_batch_size=1,
-                # ASR doesn't typically have per-camera fan-out
-                # (one mic per stream typically), but expose
-                # per_camera fair-queuing so KAI-C handles a
-                # multi-audio-stream deployment correctly.
-                fair_queuing=FairQueuing.PER_CAMERA,
-            ),
-            cost=Cost(
-                currency="USD",
-                estimated_per_call=0.0,
-                estimated_per_hour=0.0,
-                is_metered=False,
-            ),
+    def model_info(self) -> ModelInfo:
+        return ModelInfo(
+            name=f"whisper-{self._model_size}",
+            version=self._adapter_model_version(),
+            framework=MODEL_FRAMEWORK,
+            modalities_in=["audio"],
+            modalities_out=["text"],
+            fingerprint=self.fingerprint(),
         )
 
     def hardware_evaluation(self) -> HardwareEvaluationResponse:
@@ -292,9 +195,26 @@ class WhisperService:
             },
         )
 
-    # ── Inference path ─────────────────────────────────────────────
+    def infer(self, payload: dict[str, Any]) -> InferResponse:
+        """SDK /infer entry point. The audio bytes live at
+        ``payload[BODY_BYTES_KEY]`` (set by the SDK's AUDIO-shape body
+        parser); the rest of the dict is request params
+        (task, language, beam_size, vad_filter)."""
+        audio_bytes = payload.get(BODY_BYTES_KEY)
+        if not isinstance(audio_bytes, (bytes, bytearray)) or not audio_bytes:
+            raise ServiceError(
+                ErrorCategory.TRANSPORT_ERROR,
+                code="malformed_input",
+                message="Audio bytes are required.",
+                transient=False,
+                http_status=400,
+            )
+        params = {k: v for k, v in payload.items() if k != BODY_BYTES_KEY}
+        return self._infer_audio_bytes(bytes(audio_bytes), params)
 
-    def infer_bytes(
+    # ── Inference core ─────────────────────────────────────────────
+
+    def _infer_audio_bytes(
         self,
         audio_bytes: bytes,
         params: dict[str, Any],
@@ -305,26 +225,28 @@ class WhisperService:
         if self._load_state != HealthStatus.OK:
             raise ServiceError(
                 ErrorCategory.MODEL_ERROR,
-                code="weights_missing" if self._load_state == HealthStatus.ERROR else "whisper.model_loading",
+                code=(
+                    "weights_missing"
+                    if self._load_state == HealthStatus.ERROR
+                    else "whisper.model_loading"
+                ),
                 message=self._load_error or "Model still loading.",
                 transient=(self._load_state == HealthStatus.LOADING),
                 http_status=503,
                 retry_after_ms=2000 if self._load_state == HealthStatus.LOADING else None,
             )
 
-        if not audio_bytes:
-            raise ServiceError(
-                ErrorCategory.TRANSPORT_ERROR,
-                code="malformed_input",
-                message="Audio bytes are required.",
-                transient=False,
-                http_status=400,
-            )
+        # The SDK enforces ``max_body_bytes`` before calling us, but
+        # we keep a defense-in-depth check that mirrors the original
+        # adapter behavior.
         if len(audio_bytes) > MAX_AUDIO_BYTES:
             raise ServiceError(
                 ErrorCategory.TRANSPORT_ERROR,
                 code="malformed_input",
-                message=f"Audio exceeds {MAX_AUDIO_BYTES}-byte limit ({len(audio_bytes)} received).",
+                message=(
+                    f"Audio exceeds {MAX_AUDIO_BYTES}-byte limit "
+                    f"({len(audio_bytes)} received)."
+                ),
                 transient=False,
                 http_status=413,
             )
@@ -363,8 +285,8 @@ class WhisperService:
             )
         vad_filter = bool(params.get("vad_filter", False))
 
-        # Write bytes to a temp file — faster-whisper takes a path.
-        # cleanup unconditional so a model crash doesn't leak the file.
+        # Write bytes to a tmp file — faster-whisper takes a path.
+        # Cleanup is unconditional so a model crash doesn't leak.
         tmp_dir = tempfile.mkdtemp(prefix="whisper-svc-")
         tmp_path = os.path.join(tmp_dir, f"audio-{uuid.uuid4().hex}.bin")
         try:
@@ -411,12 +333,12 @@ class WhisperService:
         beam_size: int,
         vad_filter: bool,
     ) -> dict[str, Any]:
-        """Invoke the legacy WhisperAdapter via its public ``infer`` method.
+        """Invoke the legacy WhisperAdapter via its loaded model.
 
-        We bypass ``infer_local`` directly because that path expects
-        an ``opennvr://audio/...`` URI; we already have an absolute
-        filesystem path. Reach down to the model's ``transcribe()``
-        directly — same pattern as YoloV8Service does for its
+        We bypass ``infer_local`` because that expects an
+        ``opennvr://audio/...`` URI; we already have an absolute
+        filesystem path. Reach down to ``model.transcribe()``
+        directly — same pattern YoloV8Service uses for its
         in-memory bytes path.
         """
         whisper_mode = _TASK_TO_WHISPER_MODE[task]
@@ -433,8 +355,12 @@ class WhisperService:
                 "start": float(seg.start),
                 "end": float(seg.end),
                 "text": (seg.text or "").strip(),
-                "avg_logprob": float(seg.avg_logprob) if seg.avg_logprob is not None else None,
-                "no_speech_prob": float(seg.no_speech_prob) if seg.no_speech_prob is not None else None,
+                "avg_logprob": (
+                    float(seg.avg_logprob) if seg.avg_logprob is not None else None
+                ),
+                "no_speech_prob": (
+                    float(seg.no_speech_prob) if seg.no_speech_prob is not None else None
+                ),
             })
         return {
             "task": task,
@@ -442,7 +368,11 @@ class WhisperService:
             "segments": segments,
             "info": {
                 "language": info.language,
-                "language_probability": float(info.language_probability) if info.language_probability is not None else None,
+                "language_probability": (
+                    float(info.language_probability)
+                    if info.language_probability is not None
+                    else None
+                ),
                 "duration": float(info.duration),
             },
         }
@@ -453,16 +383,17 @@ class WhisperService:
         ``start_ms`` / ``end_ms`` integers).
 
         Adapter-specific extras (``language_confidence``,
-        ``duration_seconds``, ``translated_to_english``) ride alongside
-        the canonical keys — §5 allows extras in the ``result`` body.
+        ``duration_seconds``, ``translated_to_english``, ``model``)
+        ride alongside the canonical keys — §5 allows extras in the
+        ``result`` body.
 
         Note: segments with empty text (after stripping) are dropped.
         §5.3 says segments are transcribed *speech*; whitespace-only
         segments are silence markers and not part of the transcript.
-        This is a deliberate behaviour divergence from the legacy
+        This is a deliberate divergence from the legacy
         ``WhisperAdapter`` (which kept all segments) — the legacy
-        format wasn't a contract-compliant ASR result, so the
-        translation layer can tighten the semantics.
+        shape wasn't contract-compliant, so the translation layer
+        tightens the semantics.
         """
         contract_segments: list[AsrSegment] = []
         for seg in raw["segments"]:
@@ -485,7 +416,10 @@ class WhisperService:
         whisper_mode = raw["whisper_mode"]
         # When task=translate, language is always English regardless
         # of source — mirror the legacy adapter's behaviour.
-        language = "en" if whisper_mode == "translate" else (info["language"] or "unknown")
+        language = (
+            "en" if whisper_mode == "translate"
+            else (info["language"] or "unknown")
+        )
 
         asr = AsrResult(
             transcript=transcript,
@@ -493,7 +427,6 @@ class WhisperService:
             segments=contract_segments,
         )
         body = asr.model_dump(mode="json")
-        # Extras
         body["language_confidence"] = info["language_probability"]
         body["duration_seconds"] = info["duration"]
         body["translated_to_english"] = (whisper_mode == "translate")
@@ -505,41 +438,31 @@ class WhisperService:
     def _adapter_model_version(self) -> str:
         return f"{MODEL_FRAMEWORK}/{self._model_size}"
 
+    def _compute_fingerprint(self) -> str:
+        """sha256 of the model's ``config.json`` (small, stable file
+        that uniquely identifies the model variant). Falls back to a
+        hash of ``model_size::compute_type`` when the config file
+        isn't on disk yet (e.g., before the first download
+        completes).
 
-# ── Typed error envelope ───────────────────────────────────────────
-
-
-class ServiceError(Exception):
-    """See ``adapters/piper/service.py:ServiceError`` for design
-    notes. The class is duplicated across adapters until A2.3 lands
-    ``opennvr-adapter-sdk``."""
-
-    def __init__(
-        self,
-        category: ErrorCategory,
-        *,
-        code: str,
-        message: str,
-        transient: bool,
-        http_status: int,
-        retry_after_ms: int | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.category = category
-        self.code = code
-        self.message = message
-        self.transient = transient
-        self.http_status = http_status
-        self.retry_after_ms = retry_after_ms
-
-    def envelope(self) -> FailureEnvelope:
-        return FailureEnvelope(
-            error=ErrorDetail(
-                category=self.category,
-                code=self.code,
-                message=self.message,
-                transient=self.transient,
-                retry_after_ms=self.retry_after_ms,
-                details={},
-            )
+        faster-whisper uses the HuggingFace cache layout
+        (``models--<org>--<repo>/snapshots/<hash>/``) which is awkward
+        to pin a path for — the snapshot hash changes per upload. We
+        walk ``download_root`` for the first ``config.json`` we find;
+        good enough since each model_size lives under a separate
+        subtree and only one model is loaded per service.
+        """
+        for root, _dirs, files in os.walk(self._download_root):
+            if "config.json" in files:
+                candidate = os.path.join(root, "config.json")
+                try:
+                    digest = hashlib.sha256()
+                    with open(candidate, "rb") as fh:
+                        digest.update(fh.read())
+                    return f"sha256:{digest.hexdigest()}"
+                except OSError:
+                    continue
+        material = (
+            f"{self._model_size}::{self._device_setting}::{self._compute_setting}"
         )
+        return f"sha256:{hashlib.sha256(material.encode()).hexdigest()}"

@@ -78,6 +78,23 @@ def test_capabilities_exposes_model_fingerprint(whisper_app):
     assert caps.model.fingerprint.startswith("sha256:")
 
 
+def test_capabilities_advertises_whisper_subdir_in_host_filesystem(whisper_app):
+    """Regression for A2.3c peer-review M1: capabilities.permissions
+    .host_filesystem must advertise the Whisper-specific subdir, NOT
+    the parent ``MODEL_WEIGHTS_DIR``. KAI-C's §8 operator-policy
+    comparator does string-equality, so widening to the parent silently
+    breaks any prior approval of the narrower path."""
+    caps = CapabilitiesResponse.model_validate(whisper_app.get("/capabilities").json())
+    assert len(caps.permissions.host_filesystem) == 1
+    declared = caps.permissions.host_filesystem[0]
+    # Must end in 'whisper' — i.e., be the Whisper-specific subdir,
+    # not the parent weights root.
+    assert declared.endswith("whisper"), (
+        f"host_filesystem widened to weights parent: {declared!r}; "
+        "should be the Whisper-specific subdir."
+    )
+
+
 # ── /hardware/evaluation ───────────────────────────────────────────
 
 

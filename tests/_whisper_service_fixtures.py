@@ -100,7 +100,11 @@ def whisper_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _boot_app(env, monkeypatch: pytest.MonkeyPatch):
-    for mod_name in ("adapters.whisper.service", "adapters.whisper.auth", "adapters.whisper.main"):
+    # Post-A2.3c the Whisper adapter is just ``service`` + ``main``;
+    # auth + metrics moved to ``opennvr_adapter_sdk``. Reload only the
+    # adapter-local modules so the patched MODEL_WEIGHTS_DIR and the
+    # stubbed faster_whisper take effect on import.
+    for mod_name in ("adapters.whisper.service", "adapters.whisper.main"):
         if mod_name in sys.modules:
             importlib.reload(sys.modules[mod_name])
 
