@@ -105,6 +105,30 @@ class ConformanceRunner:
         "echo": {"hello": "world"},
     }
 
+    # Sample frames for the WS streaming check, keyed by task. A
+    # detection adapter gets a small valid JPEG; tasks without a
+    # registered sample are reported as WARN. The embedded JPEG below
+    # is a 1x1 black image (~630 bytes) — small enough to ship inline
+    # and still decode through OpenCV/PIL on the adapter side, so we
+    # avoid pulling cv2 into the conformance kit's own deps.
+    _SAMPLE_1x1_BLACK_JPEG_B64: str = (
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAIBAQEBAQIBAQECAgICAgQDAgICAgUEBAMEBgU"
+        "GBgYFBgYGBwkIBgcJBwYGCAsICQoKCgoKBggLDAsKDAkKCgr/2wBDAQICAgICAgUDAwUKBw"
+        "YHCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgr/w"
+        "AARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QA"
+        "tRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2J"
+        "yggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eX"
+        "qDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2"
+        "uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL"
+        "/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvA"
+        "VYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dX"
+        "Z3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1"
+        "dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD+f+iiigD/2Q=="
+    )
+    SAMPLE_STREAM_FRAMES: dict[str, bytes] = {
+        "object_detection": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
+    }
+
     def __init__(
         self,
         base_url: str,
@@ -281,19 +305,29 @@ class ConformanceRunner:
         if not self._capabilities.endpoints.infer.supported:
             return self._record("infer", CheckOutcome.SKIP, detail="adapter declares infer.supported = false")
 
-        payload = self._sample_payload_for(self._capabilities)
-        if payload is None:
-            return self._record(
-                "infer",
-                CheckOutcome.WARN,
-                detail=(
-                    "no sample payload registered for any of "
-                    f"tasks_advertised={list(self._capabilities.tasks_advertised)}. "
-                    "Add one to ConformanceRunner.SAMPLE_INFER_PAYLOADS to exercise this adapter."
-                ),
-            )
+        # §3.5 — adapters that take image input prefer multipart (real
+        # binary bytes); text-only adapters get the JSON path. Pick
+        # based on declared modalities so the conformance kit exercises
+        # whichever transport the adapter actually expects.
+        image_in = "image" in (self._capabilities.model.modalities_in or [])
+        sample_frame = self._sample_stream_frame_for(self._capabilities) if image_in else None
 
-        ok, response, latency_ms, err = self._post_json("/infer", payload)
+        if image_in and sample_frame is not None:
+            ok, response, latency_ms, err = self._post_multipart_frame("/infer", sample_frame)
+        else:
+            payload = self._sample_payload_for(self._capabilities)
+            if payload is None:
+                return self._record(
+                    "infer",
+                    CheckOutcome.WARN,
+                    detail=(
+                        "no sample payload registered for any of "
+                        f"tasks_advertised={list(self._capabilities.tasks_advertised)}. "
+                        "Add one to ConformanceRunner.SAMPLE_INFER_PAYLOADS to exercise this adapter."
+                    ),
+                )
+            ok, response, latency_ms, err = self._post_json("/infer", payload)
+
         if not ok:
             return self._record("infer", CheckOutcome.FAIL, detail=err, latency_ms=latency_ms)
         try:
@@ -375,23 +409,193 @@ class ConformanceRunner:
                 latency_ms=latency_ms,
             )
 
-        # Adapter advertises streaming. Full WS-protocol exercise is
-        # an A2.2/YOLO concern — for v1 we just confirm the upgrade
-        # endpoint exists and returns SOMETHING other than 501.
-        ok, response, latency_ms, err = self._get(
-            "/infer/stream", expect_status={400, 405, 426}  # Upgrade Required / similar
-        )
-        if not ok and response is None:
+        # Adapter advertises streaming — exercise the §6 protocol
+        # end-to-end: open WS, handshake, send one frame, receive one
+        # result message, close cleanly.
+        return self._check_stream_handshake()
+
+    def _check_stream_handshake(self) -> CheckResult:
+        """Open a real WebSocket, handshake, send a frame, expect a result.
+
+        Probe payloads come from ``SAMPLE_STREAM_FRAMES`` keyed by task.
+        Adapters whose first task has no sample frame are reported as
+        WARN (we know they advertise streaming but we have nothing to
+        send them).
+        """
+        sample_frame = self._sample_stream_frame_for(self._capabilities)
+        if sample_frame is None:
+            return self._record(
+                "infer_stream",
+                CheckOutcome.WARN,
+                detail=(
+                    "Adapter advertises streaming but no sample frame is "
+                    f"registered for tasks_advertised={list(self._capabilities.tasks_advertised)}. "
+                    "Add one to ConformanceRunner.SAMPLE_STREAM_FRAMES to exercise it."
+                ),
+            )
+
+        # TestClient (in-process) has ``websocket_connect``; httpx.Client
+        # does not — for httpx we use the ``websockets`` library if
+        # available; otherwise skip the full handshake with a WARN.
+        if _looks_like_test_client(self._client):
+            return self._exercise_stream_via_testclient(sample_frame)
+        return self._exercise_stream_via_websockets(sample_frame)
+
+    def _exercise_stream_via_testclient(self, sample_frame: bytes) -> CheckResult:
+        started = time.monotonic()
+        try:
+            headers = {}
+            if self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
+            with self._client.websocket_connect("/infer/stream", headers=headers) as ws:
+                ws.send_text(json.dumps({
+                    "type": "handshake",
+                    "client_id": "conformance",
+                    "camera_id": "conformance-cam",
+                    "frame_transport": "websocket",
+                }))
+                ack = json.loads(ws.receive_text())
+                if ack.get("type") != "handshake_ack":
+                    return self._record(
+                        "infer_stream",
+                        CheckOutcome.FAIL,
+                        detail=f"first WS message was not handshake_ack: {ack}",
+                        latency_ms=int((time.monotonic() - started) * 1000),
+                    )
+                ws.send_text(json.dumps({
+                    "type": "frame", "seq": 1, "ts_ms": 0,
+                    "content_type": "image/jpeg",
+                }))
+                ws.send_bytes(sample_frame)
+                result = json.loads(ws.receive_text())
+                ws.send_text(json.dumps({"type": "close", "reason": "conformance done"}))
+            return self._validate_stream_result(result, int((time.monotonic() - started) * 1000))
+        except Exception as exc:
             return self._record(
                 "infer_stream",
                 CheckOutcome.FAIL,
-                detail=f"upgrade endpoint unreachable: {err}",
+                detail=f"WS exercise failed: {type(exc).__name__}: {exc}",
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
+
+    def _validate_stream_result(self, result: Any, latency_ms: int) -> CheckResult:
+        """Validate the shape of a streaming ``result`` message.
+
+        The §6.3 envelope is: ``type=="result"``, echoed ``seq``, integer
+        ``inference_ms``, and a ``result`` body. The body is either a
+        §5-shaped success payload OR a §7 FailureEnvelope. Both must
+        validate or we don't really know the adapter conforms — only
+        that it sent us something JSON-shaped.
+        """
+        if not isinstance(result, dict):
+            return self._record(
+                "infer_stream", CheckOutcome.FAIL,
+                detail=f"WS result was not a JSON object: {type(result).__name__}",
+                latency_ms=latency_ms,
+            )
+        if result.get("type") != "result":
+            return self._record(
+                "infer_stream", CheckOutcome.FAIL,
+                detail=f"expected type='result', got {result.get('type')!r}",
+                latency_ms=latency_ms,
+            )
+        if result.get("seq") != 1:
+            return self._record(
+                "infer_stream", CheckOutcome.FAIL,
+                detail=f"expected seq=1, got {result.get('seq')!r}",
+                latency_ms=latency_ms,
+            )
+        body = result.get("result")
+        if not isinstance(body, dict):
+            return self._record(
+                "infer_stream", CheckOutcome.FAIL,
+                detail=f"result.result must be a JSON object, got {type(body).__name__}",
+                latency_ms=latency_ms,
+            )
+        # Body must be either a success payload (any dict) or a typed
+        # FailureEnvelope. Plain success bodies are guidance-only per
+        # §5 — we accept anything dict-shaped. Error bodies must match
+        # §7 exactly so audit pipelines parsing them work uniformly.
+        if body.get("status") == "error":
+            try:
+                FailureEnvelope.model_validate(body)
+            except ValidationError as exc:
+                return self._record(
+                    "infer_stream", CheckOutcome.FAIL,
+                    detail=f"error result body is not a valid FailureEnvelope: {exc}",
+                    latency_ms=latency_ms,
+                )
+            return self._record(
+                "infer_stream", CheckOutcome.WARN,
+                detail=(
+                    f"Stream returned typed error envelope "
+                    f"(code={body['error'].get('code')}); roundtrip protocol OK."
+                ),
                 latency_ms=latency_ms,
             )
         return self._record(
+            "infer_stream", CheckOutcome.PASS,
+            detail="Full §6 roundtrip OK (handshake → frame → result → close).",
+            latency_ms=latency_ms,
+        )
+
+    def _exercise_stream_via_websockets(self, sample_frame: bytes) -> CheckResult:
+        """Real-network WebSocket roundtrip using the ``websockets`` lib.
+
+        Optional dep — if not installed, we WARN instead of FAIL so the
+        rest of the conformance run still gives signal. A2.3 will land
+        ``websockets`` as a hard dep on the conformance kit.
+        """
+        try:
+            import asyncio
+            import websockets  # type: ignore[import-not-found]
+        except ImportError:
+            return self._record(
+                "infer_stream",
+                CheckOutcome.WARN,
+                detail=(
+                    "Adapter advertises streaming. Install 'websockets' "
+                    "(pip install websockets) for full conformance."
+                ),
+            )
+
+        ws_url = self.base_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1) + "/infer/stream"
+        extra_headers = {}
+        if self._token:
+            extra_headers["Authorization"] = f"Bearer {self._token}"
+
+        async def _exercise() -> tuple[bool, str]:
+            try:
+                async with websockets.connect(ws_url, extra_headers=extra_headers) as ws:
+                    await ws.send(json.dumps({
+                        "type": "handshake",
+                        "client_id": "conformance",
+                        "camera_id": "conformance-cam",
+                        "frame_transport": "websocket",
+                    }))
+                    ack = json.loads(await ws.recv())
+                    if ack.get("type") != "handshake_ack":
+                        return False, f"first WS message was not handshake_ack: {ack}"
+                    await ws.send(json.dumps({
+                        "type": "frame", "seq": 1, "ts_ms": 0,
+                        "content_type": "image/jpeg",
+                    }))
+                    await ws.send(sample_frame)
+                    result = json.loads(await ws.recv())
+                    if result.get("type") != "result" or result.get("seq") != 1:
+                        return False, f"expected result(seq=1), got {result}"
+                    await ws.send(json.dumps({"type": "close", "reason": "conformance done"}))
+                return True, "Full §6 roundtrip OK."
+            except Exception as exc:
+                return False, f"{type(exc).__name__}: {exc}"
+
+        started = time.monotonic()
+        ok, detail = asyncio.run(_exercise())
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return self._record(
             "infer_stream",
-            CheckOutcome.PASS,
-            detail=f"upgrade endpoint reachable (status={response.status_code}); full handshake not yet exercised",
+            CheckOutcome.PASS if ok else CheckOutcome.FAIL,
+            detail=detail,
             latency_ms=latency_ms,
         )
 
@@ -401,6 +605,12 @@ class ConformanceRunner:
         for task in caps.tasks_advertised:
             if task in self.SAMPLE_INFER_PAYLOADS:
                 return self.SAMPLE_INFER_PAYLOADS[task]
+        return None
+
+    def _sample_stream_frame_for(self, caps: CapabilitiesResponse) -> bytes | None:
+        for task in caps.tasks_advertised:
+            if task in self.SAMPLE_STREAM_FRAMES:
+                return self.SAMPLE_STREAM_FRAMES[task]
         return None
 
     def _headers(self, *, with_auth: bool) -> dict[str, str]:
@@ -447,6 +657,35 @@ class ConformanceRunner:
                 response,
                 latency_ms,
                 f"GET {path}: expected status in {sorted(allowed)} got {response.status_code}",
+            )
+        return True, response, latency_ms, ""
+
+    def _post_multipart_frame(
+        self,
+        path: str,
+        frame_bytes: bytes,
+    ) -> tuple[bool, Any, int, str]:
+        """POST a frame as multipart/form-data. Works for both httpx.Client
+        and Starlette's TestClient (both accept the same ``files=`` kwarg)."""
+        url = self.base_url + path
+        headers = self._headers(with_auth=True)
+        start = time.monotonic()
+        try:
+            response = self._client.post(
+                url,
+                files={"frame": ("frame.jpg", frame_bytes, "image/jpeg")},
+                headers=headers,
+            )
+        except Exception as exc:
+            latency_ms = int((time.monotonic() - start) * 1000)
+            return False, None, latency_ms, f"POST {path}: {type(exc).__name__}: {exc}"
+        latency_ms = int((time.monotonic() - start) * 1000)
+        if response.status_code != 200:
+            return (
+                False,
+                response,
+                latency_ms,
+                f"POST {path}: expected 200 got {response.status_code}: {response.text[:200]}",
             )
         return True, response, latency_ms, ""
 
