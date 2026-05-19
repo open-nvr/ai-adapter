@@ -99,7 +99,11 @@ def yolov8_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _boot_app(yolov8_env, monkeypatch: pytest.MonkeyPatch):
-    for mod_name in ("adapters.yolov8.service", "adapters.yolov8.auth", "adapters.yolov8.main"):
+    # Post-A2.3b the YOLOv8 adapter is just ``service`` + ``main``;
+    # auth + metrics moved to ``opennvr_adapter_sdk``. We reload only
+    # the two adapter-local modules so the patched MODEL_WEIGHTS_DIR /
+    # stubbed onnxruntime take effect on this test's module-import.
+    for mod_name in ("adapters.yolov8.service", "adapters.yolov8.main"):
         if mod_name in sys.modules:
             importlib.reload(sys.modules[mod_name])
 

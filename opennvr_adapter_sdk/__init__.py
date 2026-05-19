@@ -40,7 +40,7 @@ contract. SDK v1.x targets contract v1; a future contract v2 would
 ship SDK v2.x. ``AdapterApp.supported_contract_versions`` defaults
 to ``["1"]``; bump when you support both.
 """
-from opennvr_adapter_sdk.adapter_app import AdapterApp, BodyShape
+from opennvr_adapter_sdk.adapter_app import AdapterApp, BodyShape, BODY_BYTES_KEY
 from opennvr_adapter_sdk.service import AdapterService, ServiceError
 
 # Re-export contract types from the central source-of-truth so adapter
@@ -72,6 +72,7 @@ __all__ = [
     "AdapterApp",
     "AdapterService",
     "BodyShape",
+    "BODY_BYTES_KEY",
     "ServiceError",
     "__version__",
     # contract types
