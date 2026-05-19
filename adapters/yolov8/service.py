@@ -2,99 +2,88 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-YoloV8Service — contract-semantics layer around ``YOLOv8Adapter``.
+YoloV8Service — Yolo-specific implementation of ``AdapterService``.
 
-Translates between the AI Adapter Contract v1 wire shapes and the
-legacy ``YOLOv8Adapter`` infer interface. Two paths:
+Migrated to ``opennvr-adapter-sdk`` in A2.3b. All cross-adapter
+boilerplate (auth, metrics, FastAPI routes, request body parsing,
+error-envelope translation, lifespan) is now in the SDK; this module
+holds only the YOLOv8-specific pieces:
 
-* ``infer_bytes(image_bytes, params)`` — runs inference on raw image
-  bytes (the multipart /infer path). Returns a typed ``InferResponse``.
-* ``infer_frame_for_stream(image_bytes, seq, ts_ms)`` — same inference
-  but shaped as a §6.3 ``result`` message for the /infer/stream
-  WebSocket loop. Error paths embed a §7 ``FailureEnvelope`` in the
-  ``result`` body so HTTP and WS consumers parse failures uniformly.
+* Load lifecycle around the legacy ``YOLOv8Adapter``
+* Live ``model.fingerprint`` from the ONNX weights
+* §3.3 ``HardwareEvaluationResponse`` (CPU vs CUDA verdict)
+* §3.5 ``infer(payload)`` — driven by the SDK body parser
+* §6 ``handle_stream(websocket)`` — the full WS protocol loop
 
-Both translate the legacy pixel-bbox output to §5.1's normalized
-``DetectionResult`` so downstream consumers don't need adapter-aware
-parsers.
+The legacy ``YOLOv8Adapter`` (in ``app/adapters/vision/yolov8_adapter.py``)
+stays untouched — it's the underlying model wrapper, not the contract
+shim.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import platform
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import WebSocket, WebSocketDisconnect
+
+from adapters.yolov8.coco_classes import class_id_to_label
 from app.adapters.vision.yolov8_adapter import YOLOv8Adapter
 from app.config import INPUT_SIZE, MODEL_WEIGHTS_DIR
 from app.interfaces.contract import (
-    AdapterInfo,
-    CapabilitiesResponse,
-    Cost,
     DetectionItem,
     DetectionResult,
-    EndpointsInfo,
     ErrorCategory,
-    ErrorDetail,
-    FailureEnvelope,
-    FairQueuing,
     FrameDimensions,
+    FrameMessage,
+    FrameTransport,
+    HandshakeAckMessage,
+    HandshakeMessage,
     HardwareEvaluationResponse,
     HardwareVerdict,
-    HealthResponse,
     HealthStatus,
-    InferEndpointInfo,
     InferResponse,
     ModelInfo,
     NormalizedBBox,
-    Permissions,
     ResultMessage,
-    Scheduling,
-    StreamEndpointInfo,
+    StreamCloseCode,
 )
-from adapters.yolov8.coco_classes import class_id_to_label
+from opennvr_adapter_sdk import AdapterService, BODY_BYTES_KEY, ServiceError
 
 logger = logging.getLogger(__name__)
 
-ADAPTER_NAME: str = "yolov8-object-detection"
-ADAPTER_VERSION: str = "1.0.0"
-ADAPTER_VENDOR: str = "open-nvr"
-ADAPTER_LICENSE: str = "AGPL-3.0"
 MODEL_FRAMEWORK: str = "onnxruntime"
-TASKS_ADVERTISED: tuple[str, ...] = ("object_detection",)
 
 # Default request body cap for /infer (per §3.8 — adapters MAY
 # advertise lower limits via capabilities). 8 MiB comfortably holds
-# a 4K JPEG; oversize bodies are rejected with malformed_input.
+# a 4K JPEG; oversize bodies are rejected with malformed_input by the
+# SDK before reaching ``infer()``.
 MAX_IMAGE_BYTES: int = 8 * 1024 * 1024
 
 # Confidence threshold default if the caller doesn't supply one.
-# Mirrors app.config.CONFIDENCE_THRESHOLD but kept local so this
-# service has a single source of truth.
 DEFAULT_CONFIDENCE_THRESHOLD: float = 0.25
 
 
-class YoloV8Service:
-    """Stateful façade around YOLOv8Adapter implementing contract semantics."""
+class YoloV8Service(AdapterService):
+    """Stateful façade around YOLOv8Adapter."""
 
     def __init__(self, weights_path: str | None = None) -> None:
         self._weights_path = weights_path or os.path.join(MODEL_WEIGHTS_DIR, "yolov8n.onnx")
-        self._started_at_dt: datetime = datetime.now(timezone.utc)
-        self._started_at_mono: float = time.monotonic()
-
         self._adapter: YOLOv8Adapter = YOLOv8Adapter(
             config={"enabled": True, "weights_path": self._weights_path}
         )
-
         self._load_state: HealthStatus = HealthStatus.LOADING
         self._load_error: str | None = None
-        self._fingerprint: str | None = None
+        self._fingerprint_cache: str | None = None
         self._gpu_in_use: bool = False
 
-    # ── Lifecycle ──────────────────────────────────────────────────
+    # ── AdapterService impl ────────────────────────────────────────
 
     def load(self) -> None:
         """Eagerly load the ONNX weights. Idempotent."""
@@ -102,14 +91,14 @@ class YoloV8Service:
             return
         try:
             self._adapter.ensure_model_loaded()
-            self._fingerprint = self._compute_fingerprint()
+            self._fingerprint_cache = self._compute_fingerprint()
             self._gpu_in_use = self._detect_gpu_in_use()
             self._load_state = HealthStatus.OK
             self._load_error = None
             logger.info(
                 "YoloV8Service ready: weights=%s fingerprint=%s gpu=%s",
                 self._weights_path,
-                self._fingerprint,
+                self._fingerprint_cache,
                 self._gpu_in_use,
             )
         except Exception as exc:
@@ -117,123 +106,26 @@ class YoloV8Service:
             self._load_error = str(exc)
             logger.exception("YoloV8Service failed to load weights %s", self._weights_path)
 
-    def _compute_fingerprint(self) -> str:
-        if not os.path.exists(self._weights_path):
-            return "sha256:unavailable"
-        digest = hashlib.sha256()
-        with open(self._weights_path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(65536), b""):
-                digest.update(chunk)
-        return f"sha256:{digest.hexdigest()}"
-
-    def _compute_fingerprint_or_cached(self) -> str | None:
-        """Recompute the fingerprint live on each /capabilities call so
-        weight-rotation and tampering surface as KAI-C drift events.
-        Falls back to the cached value if the file became unreadable
-        between calls — never crashes /capabilities."""
-        try:
-            return self._compute_fingerprint()
-        except OSError:
-            return self._fingerprint
-
-    def _detect_gpu_in_use(self) -> bool:
-        """True if onnxruntime picked CUDAExecutionProvider over CPU."""
-        try:
-            providers = self._adapter.session.get_providers()
-            return "CUDAExecutionProvider" in providers
-        except Exception:
-            return False
-
     def is_ready(self) -> bool:
         return self._load_state == HealthStatus.OK
 
-    # ── Contract endpoints ─────────────────────────────────────────
+    def fingerprint(self) -> str | None:
+        """Recompute live on each call so §11.3 drift detection sees
+        weight rotation. ~10ms for a 6 MB ONNX — cheap."""
+        try:
+            return self._compute_fingerprint()
+        except OSError:
+            return self._fingerprint_cache
 
-    def health(self) -> HealthResponse:
-        return HealthResponse(
-            status=self._load_state,
-            adapter_name=ADAPTER_NAME,
-            adapter_version=ADAPTER_VERSION,
-            model_name="yolov8n",
-            model_version=self._adapter_model_version(),
-            started_at=self._started_at_dt,
-            uptime_seconds=int(time.monotonic() - self._started_at_mono),
-        )
-
-    def capabilities(self) -> CapabilitiesResponse:
-        return CapabilitiesResponse(
-            adapter=AdapterInfo(
-                name=ADAPTER_NAME,
-                version=ADAPTER_VERSION,
-                vendor=ADAPTER_VENDOR,
-                license=ADAPTER_LICENSE,
-                model_card_url="https://github.com/ultralytics/ultralytics",
-                supported_contract_versions=["1"],
-            ),
-            model=ModelInfo(
-                name="yolov8n",
-                version=self._adapter_model_version(),
-                framework=MODEL_FRAMEWORK,
-                size_mb=self._weights_size_mb(),
-                modalities_in=["image"],
-                modalities_out=["bbox_classes"],
-                # Recompute on every call so KAI-C's §11.3 drift
-                # detection catches operator weight rotations and
-                # tamper attempts. ~10ms for a 6 MB ONNX — cheap.
-                # Falls back to the cached value on read errors
-                # so /capabilities never crashes mid-flight.
-                fingerprint=self._compute_fingerprint_or_cached(),
-            ),
-            endpoints=EndpointsInfo(
-                infer=InferEndpointInfo(
-                    supported=True,
-                    # §3.5 — both content types accepted. Real image
-                    # bytes via multipart is the preferred path; JSON
-                    # with base64 is the fallback for clients that
-                    # can't easily build multipart.
-                    input_content_types=["multipart/form-data", "application/json"],
-                ),
-                infer_stream=StreamEndpointInfo(
-                    supported=True,
-                    max_concurrent_streams=16,
-                    # Shared-memory fast path is documented in §6.2 but
-                    # not yet implemented in this adapter. Advertise
-                    # false so KAI-C never sends frame_ref. A2.2b will
-                    # land shm support; bump shared_memory_protocol_version
-                    # to 1 then.
-                    supports_shared_memory=False,
-                ),
-            ),
-            tasks_advertised=list(TASKS_ADVERTISED),
-            permissions=Permissions(
-                # §8 — GPU permission requires operator approval at
-                # KAI-C registration time.
-                gpu=True,
-                network_egress=[],
-                host_filesystem=[os.path.dirname(self._weights_path)],
-                shared_memory_paths=[],
-                host_metadata=False,
-            ),
-            scheduling=Scheduling(
-                # max_inflight=1 is the honest value for v1: the
-                # underlying onnxruntime session is a shared singleton
-                # and we do not serialize inference calls across
-                # WebSocket streams. KAI-C uses this as its global cap
-                # per §9. Concurrent inference within a single
-                # adapter (multiple ONNX sessions, or a thread-safe
-                # batch path) lands in a follow-up; bump this then.
-                max_inflight=1,
-                preferred_batch_size=1,
-                # §9 — opt in to KAI-C's per-camera fair queuing so
-                # one chatty camera can't starve the rest.
-                fair_queuing=FairQueuing.PER_CAMERA,
-            ),
-            cost=Cost(
-                currency="USD",
-                estimated_per_call=0.0,
-                estimated_per_hour=0.0,
-                is_metered=False,
-            ),
+    def model_info(self) -> ModelInfo:
+        return ModelInfo(
+            name="yolov8n",
+            version=self._adapter_model_version(),
+            framework=MODEL_FRAMEWORK,
+            size_mb=self._weights_size_mb(),
+            modalities_in=["image"],
+            modalities_out=["bbox_classes"],
+            fingerprint=self.fingerprint(),
         )
 
     def hardware_evaluation(self) -> HardwareEvaluationResponse:
@@ -254,7 +146,6 @@ class YoloV8Service:
             verdict = HardwareVerdict.BLOCKED
             reasoning = f"Weights failed to load: {self._load_error}"
 
-        # Probe available providers without forcing a session re-creation.
         providers: list[str] = []
         try:
             import onnxruntime as ort
@@ -277,28 +168,13 @@ class YoloV8Service:
             },
         )
 
-    # ── Inference path ─────────────────────────────────────────────
-
-    def infer_bytes(
-        self,
-        image_bytes: bytes,
-        params: dict[str, Any],
-    ) -> InferResponse:
-        """Run YOLOv8 against a frame's raw bytes. Returns an
-        InferResponse whose ``result`` is a §5.1 DetectionResult.
-
-        Raises ``ServiceError`` on every failure path."""
-        if self._load_state != HealthStatus.OK:
-            raise ServiceError(
-                ErrorCategory.MODEL_ERROR,
-                code="weights_missing" if self._load_state == HealthStatus.ERROR else "yolov8.model_loading",
-                message=self._load_error or "Model still loading.",
-                transient=(self._load_state == HealthStatus.LOADING),
-                http_status=503,
-                retry_after_ms=2000 if self._load_state == HealthStatus.LOADING else None,
-            )
-
-        if not image_bytes:
+    def infer(self, payload: dict[str, Any]) -> InferResponse:
+        """SDK /infer entry point. The image bytes live at
+        ``payload[BODY_BYTES_KEY]`` (set by the SDK's IMAGE-shape body
+        parser); the rest of the dict is request params
+        (confidence_threshold, classes, etc.)."""
+        image_bytes = payload.get(BODY_BYTES_KEY)
+        if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
             raise ServiceError(
                 ErrorCategory.TRANSPORT_ERROR,
                 code="malformed_input",
@@ -306,11 +182,215 @@ class YoloV8Service:
                 transient=False,
                 http_status=400,
             )
+        params = {k: v for k, v in payload.items() if k != BODY_BYTES_KEY}
+        return self._infer_image_bytes(bytes(image_bytes), params)
+
+    # ── §6 WebSocket streaming protocol ────────────────────────────
+
+    async def handle_stream(self, websocket: WebSocket) -> None:
+        """Implements the full §6 WS protocol. The SDK has already
+        verified the bearer token and wrapped this call with
+        ``inc/dec_stream_connection``.
+
+        Flow:
+          1. Accept the upgrade.
+          2. Receive the first message; must be a ``handshake``. Reply
+             with ``handshake_ack`` echoing the negotiated transport
+             (downgrades shared_memory → websocket since A2.2b hasn't
+             landed yet).
+          3. Loop: receive either a control message (pause/resume/
+             close/stats) or a ``frame`` JSON message followed by a
+             binary message carrying the frame bytes. Send back a
+             ``result`` message after inference.
+          4. On protocol violation, close with the §6.5 code.
+        """
+        await websocket.accept()
+        session_id = uuid.uuid4().hex
+
+        # ── Handshake ──────────────────────────────────────────────
+        try:
+            first_raw = await websocket.receive_text()
+            handshake = HandshakeMessage.model_validate(json.loads(first_raw))
+        except (WebSocketDisconnect, json.JSONDecodeError):
+            await websocket.close(
+                code=StreamCloseCode.POLICY_REFUSED.value,
+                reason="bad handshake",
+            )
+            return
+        except Exception as exc:
+            logger.info("handshake validation failed: %s", exc)
+            await websocket.close(
+                code=StreamCloseCode.POLICY_REFUSED.value,
+                reason="bad handshake",
+            )
+            return
+
+        # Reject shared-memory offers with a websocket fallback —
+        # §6.1 allows the adapter to downgrade the transport in the
+        # ack. A2.2b will land shm support; bump
+        # shared_memory_protocol_version to 1 then.
+        ack = HandshakeAckMessage(
+            frame_transport=FrameTransport.WEBSOCKET,
+            result_sink="websocket",  # NATS sink lands with B1
+            max_inflight=1,            # serial inference for v1
+            session_id=session_id,
+        )
+        await websocket.send_text(json.dumps(ack.model_dump(mode="json")))
+
+        # Service-readiness check after the handshake — clients should
+        # see a typed close rather than hangs if weights never loaded.
+        if not self.is_ready():
+            await websocket.close(
+                code=StreamCloseCode.MODEL_ERROR.value,
+                reason="model not loaded",
+            )
+            return
+
+        logger.info(
+            "stream open session_id=%s client_id=%s camera_id=%s",
+            session_id,
+            handshake.client_id,
+            handshake.camera_id or "-",
+        )
+
+        # ── Message loop ───────────────────────────────────────────
+        paused = False
+        while True:
+            try:
+                msg = await websocket.receive()
+            except WebSocketDisconnect:
+                logger.info("stream closed (client disconnect) session_id=%s", session_id)
+                return
+
+            if msg.get("type") == "websocket.disconnect":
+                return
+
+            text = msg.get("text")
+            if text is not None:
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    await websocket.close(
+                        code=StreamCloseCode.POLICY_REFUSED.value,
+                        reason="non-JSON control message",
+                    )
+                    return
+                msg_type = payload.get("type")
+
+                if msg_type == "close":
+                    return
+                if msg_type == "pause":
+                    paused = True
+                    continue
+                if msg_type == "resume":
+                    paused = False
+                    continue
+                if msg_type == "stats":
+                    await websocket.send_text(json.dumps({
+                        "type": "stats",
+                        "inflight": 0,
+                        "queue_depth": 0,
+                        "fps": 0.0,
+                    }))
+                    continue
+                if msg_type == "frame":
+                    try:
+                        frame_meta = FrameMessage.model_validate(payload)
+                    except Exception:
+                        await websocket.close(
+                            code=StreamCloseCode.POLICY_REFUSED.value,
+                            reason="bad frame metadata",
+                        )
+                        return
+                    try:
+                        binary_msg = await websocket.receive()
+                    except WebSocketDisconnect:
+                        return
+                    frame_bytes = binary_msg.get("bytes")
+                    if not isinstance(frame_bytes, (bytes, bytearray)) or not frame_bytes:
+                        await websocket.close(
+                            code=StreamCloseCode.POLICY_REFUSED.value,
+                            reason="frame must be followed by binary message",
+                        )
+                        return
+
+                    if paused:
+                        # Per §6.4 — once paused, drop frames until resume.
+                        continue
+
+                    metrics = self.metrics
+                    metrics.inc_inflight()
+                    try:
+                        result_dict = self._infer_frame_for_stream(
+                            bytes(frame_bytes),
+                            seq=frame_meta.seq,
+                            ts_ms=frame_meta.ts_ms,
+                        )
+                        await websocket.send_text(json.dumps(result_dict))
+                        latency_seconds = result_dict.get("inference_ms", 0) / 1000.0
+                        result_payload = result_dict.get("result") or {}
+                        if (
+                            isinstance(result_payload, dict)
+                            and result_payload.get("status") == "error"
+                        ):
+                            category_value = (result_payload.get("error") or {}).get(
+                                "category", ""
+                            )
+                            outcome = _outcome_for_category_value(category_value)
+                        else:
+                            outcome = "ok"
+                        metrics.record_infer(outcome, latency_seconds)
+                    finally:
+                        metrics.dec_inflight()
+                    continue
+
+                await websocket.close(
+                    code=StreamCloseCode.POLICY_REFUSED.value,
+                    reason=f"unknown message type: {msg_type}",
+                )
+                return
+
+            if msg.get("bytes") is not None:
+                await websocket.close(
+                    code=StreamCloseCode.POLICY_REFUSED.value,
+                    reason="binary frame without preceding frame metadata",
+                )
+                return
+
+    # ── Inference core ─────────────────────────────────────────────
+
+    def _infer_image_bytes(
+        self,
+        image_bytes: bytes,
+        params: dict[str, Any],
+    ) -> InferResponse:
+        """Run YOLOv8 against raw image bytes. Shared by the HTTP and
+        WS paths so they produce identical InferResponse shapes."""
+        if self._load_state != HealthStatus.OK:
+            raise ServiceError(
+                ErrorCategory.MODEL_ERROR,
+                code=(
+                    "weights_missing"
+                    if self._load_state == HealthStatus.ERROR
+                    else "yolov8.model_loading"
+                ),
+                message=self._load_error or "Model still loading.",
+                transient=(self._load_state == HealthStatus.LOADING),
+                http_status=503,
+                retry_after_ms=2000 if self._load_state == HealthStatus.LOADING else None,
+            )
+
+        # The SDK already enforces ``max_body_bytes`` before calling
+        # us, but we keep a defense-in-depth check for the WS path
+        # (the SDK doesn't see those bytes).
         if len(image_bytes) > MAX_IMAGE_BYTES:
             raise ServiceError(
                 ErrorCategory.TRANSPORT_ERROR,
                 code="malformed_input",
-                message=f"Frame exceeds {MAX_IMAGE_BYTES}-byte limit ({len(image_bytes)} received).",
+                message=(
+                    f"Frame exceeds {MAX_IMAGE_BYTES}-byte limit "
+                    f"({len(image_bytes)} received)."
+                ),
                 transient=False,
                 http_status=413,
             )
@@ -371,17 +451,45 @@ class YoloV8Service:
             },
         )
 
+    def _infer_frame_for_stream(
+        self,
+        image_bytes: bytes,
+        seq: int,
+        ts_ms: int,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run inference and shape the result as a §6.3 ``result``
+        message. Error paths embed a §7 FailureEnvelope in the result
+        body — same wire shape as the HTTP /infer error response so
+        downstream parsers handle both identically."""
+        params = params or {}
+        try:
+            infer = self._infer_image_bytes(image_bytes, params)
+        except ServiceError as exc:
+            envelope = exc.envelope().model_dump(mode="json")
+            return ResultMessage(
+                seq=seq,
+                ts_ms=ts_ms,
+                inference_ms=0,
+                result=envelope,
+            ).model_dump(mode="json")
+
+        return ResultMessage(
+            seq=seq,
+            ts_ms=ts_ms,
+            inference_ms=infer.inference_ms,
+            result=infer.result,
+        ).model_dump(mode="json")
+
     def _run_inference(
         self,
         img: Any,
         confidence_threshold: float,
     ) -> tuple[list[dict[str, Any]], int]:
-        """
-        Bridge to the legacy adapter. We can't reuse ``infer_local``
+        """Bridge to the legacy adapter. We can't reuse ``infer_local``
         directly because it loads from a URI; instead we drive the
         underlying ``_preprocess`` / ``_run_inference`` directly so the
-        bytes path stays in-memory (no temp-file dance).
-        """
+        bytes path stays in-memory (no temp-file dance)."""
         import numpy as np
 
         blob = self._adapter._preprocess(img)
@@ -432,20 +540,13 @@ class YoloV8Service:
             label = class_id_to_label(det["class_id"])
             if allowed_labels is not None and label.lower() not in allowed_labels:
                 continue
-            # YOLOv8 raw output coordinates are in the model's input
-            # resolution (640x640 by default). The legacy adapter
-            # handles two cases: outputs already in [0,1] (small w<1)
-            # or pixel coordinates relative to INPUT_SIZE. We mirror
-            # the same logic but normalize to [0,1] for the contract.
             cx, cy, w, h = det["cx"], det["cy"], det["w"], det["h"]
             if w < 1.0:
-                # Already in [0,1] — clamp + center-to-corner conversion.
                 x = max(0.0, min(1.0, cx - w / 2.0))
                 y = max(0.0, min(1.0, cy - h / 2.0))
                 nw = max(0.0, min(1.0 - x, w))
                 nh = max(0.0, min(1.0 - y, h))
             else:
-                # Pixel coords relative to INPUT_SIZE (640). Normalize.
                 x = max(0.0, min(1.0, (cx - w / 2.0) / INPUT_SIZE))
                 y = max(0.0, min(1.0, (cy - h / 2.0) / INPUT_SIZE))
                 nw = max(0.0, min(1.0 - x, w / INPUT_SIZE))
@@ -466,46 +567,6 @@ class YoloV8Service:
             frame_dimensions=FrameDimensions(w=width, h=height),
         )
 
-    # ── Streaming-specific inference ────────────────────────────────
-
-    def infer_frame_for_stream(
-        self,
-        image_bytes: bytes,
-        seq: int,
-        ts_ms: int,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """
-        Run inference and shape the result for the WS ``result``
-        message. Returns the full JSON dict that the route will pass
-        to ``ResultMessage`` — kept here so the route stays thin.
-
-        Error paths produce a §6.3 ``result`` message whose ``result``
-        body is a §7 ``FailureEnvelope`` — same wire shape as the HTTP
-        /infer error response so downstream parsers handle both
-        identically. (The §6.3 contract allows the adapter to embed
-        error-shaped results without closing the socket; the caller
-        decides whether to keep going.)
-        """
-        params = params or {}
-        try:
-            infer = self.infer_bytes(image_bytes, params)
-        except ServiceError as exc:
-            envelope = exc.envelope().model_dump(mode="json")
-            return ResultMessage(
-                seq=seq,
-                ts_ms=ts_ms,
-                inference_ms=0,
-                result=envelope,
-            ).model_dump(mode="json")
-
-        return ResultMessage(
-            seq=seq,
-            ts_ms=ts_ms,
-            inference_ms=infer.inference_ms,
-            result=infer.result,
-        ).model_dump(mode="json")
-
     # ── Helpers ────────────────────────────────────────────────────
 
     def _adapter_model_version(self) -> str:
@@ -516,6 +577,23 @@ class YoloV8Service:
             return round(os.path.getsize(self._weights_path) / (1024 * 1024), 2)
         except OSError:
             return None
+
+    def _compute_fingerprint(self) -> str:
+        if not os.path.exists(self._weights_path):
+            return "sha256:unavailable"
+        digest = hashlib.sha256()
+        with open(self._weights_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+
+    def _detect_gpu_in_use(self) -> bool:
+        """True if onnxruntime picked CUDAExecutionProvider over CPU."""
+        try:
+            providers = self._adapter.session.get_providers()
+            return "CUDAExecutionProvider" in providers
+        except Exception:
+            return False
 
 
 # ── Image decode helper ─────────────────────────────────────────────
@@ -542,41 +620,19 @@ def _decode_image(image_bytes: bytes) -> tuple[Any, int, int]:
     return img, width, height
 
 
-# ── Typed error envelope ───────────────────────────────────────────
+# ── Outcome category mapping (shared with the SDK route layer) ─────
 
 
-class ServiceError(Exception):
-    """
-    Carries enough information to construct a FailureEnvelope without
-    re-parsing exception strings in the FastAPI route.
-    """
+_CATEGORY_TO_OUTCOME: dict[str, str] = {
+    "model_error": "model_error",
+    "transport_error": "transport_error",
+    "provider_error": "provider_error",
+    "permission_denied": "refused",
+    "overloaded": "refused",
+    "not_supported": "refused",
+}
 
-    def __init__(
-        self,
-        category: ErrorCategory,
-        *,
-        code: str,
-        message: str,
-        transient: bool,
-        http_status: int,
-        retry_after_ms: int | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.category = category
-        self.code = code
-        self.message = message
-        self.transient = transient
-        self.http_status = http_status
-        self.retry_after_ms = retry_after_ms
 
-    def envelope(self) -> FailureEnvelope:
-        return FailureEnvelope(
-            error=ErrorDetail(
-                category=self.category,
-                code=self.code,
-                message=self.message,
-                transient=self.transient,
-                retry_after_ms=self.retry_after_ms,
-                details={},
-            )
-        )
+def _outcome_for_category_value(value: str) -> str:
+    """Map the §7 category wire-string to the Prometheus outcome label."""
+    return _CATEGORY_TO_OUTCOME.get(value, "model_error")

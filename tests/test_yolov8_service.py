@@ -227,6 +227,41 @@ def test_capabilities_advertises_honest_max_inflight(yolov8_app):
     assert caps.scheduling.max_inflight == 1
 
 
+def test_infer_rejects_reserved_body_key_in_params(yolov8_app, sample_jpeg):
+    """Regression for A2.3b peer-review H2: a caller-supplied params
+    key shadowing the SDK's reserved binary-body key must be rejected
+    with malformed_input, not silently overwritten. Without this guard,
+    ``params={"__file__": "x"}`` got its value clobbered by the raw
+    image bytes and then stripped — invisible from the client side.
+
+    The check applies to both the multipart (``params`` JSON field)
+    and JSON (top-level) paths. Test both.
+    """
+    # Multipart path.
+    response = yolov8_app.post(
+        "/infer",
+        files={"frame": ("frame.jpg", sample_jpeg, "image/jpeg")},
+        data={"params": json.dumps({"__file__": "user-value"})},
+    )
+    assert response.status_code == 400
+    envelope = FailureEnvelope.model_validate(response.json())
+    assert envelope.error.code == "malformed_input"
+    assert "reserved" in envelope.error.message.lower()
+
+    # JSON path.
+    response = yolov8_app.post(
+        "/infer",
+        json={
+            "frame_b64": base64.b64encode(sample_jpeg).decode("ascii"),
+            "__file__": "user-value",
+        },
+    )
+    assert response.status_code == 400
+    envelope = FailureEnvelope.model_validate(response.json())
+    assert envelope.error.code == "malformed_input"
+    assert "reserved" in envelope.error.message.lower()
+
+
 def test_capabilities_recomputes_fingerprint_on_each_call(yolov8_app, yolov8_environment):
     """Regression for peer-review PR-22: rotating the weights file
     under a running adapter must cause the fingerprint reported by

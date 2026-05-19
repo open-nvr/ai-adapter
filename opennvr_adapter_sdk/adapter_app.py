@@ -103,6 +103,33 @@ _BODY_SHAPE_B64_FIELD: dict[BodyShape, str] = {
 }
 
 
+class _BodyTooLarge(ValueError):
+    """Distinct exception so the SDK can map oversize bodies to HTTP 413
+    rather than the generic 400 used for other ``ValueError``s."""
+
+
+# Reserved payload key for the binary body content. Adapter authors
+# read ``payload[BODY_BYTES_KEY]`` (re-exported from the SDK root as
+# ``opennvr_adapter_sdk.BODY_BYTES_KEY``). Using a sentinel-shaped name
+# rather than something like "file" or "frame" minimizes collision risk
+# with adapter-defined ``params`` keys.
+BODY_BYTES_KEY: str = "__file__"
+
+
+def _reject_reserved_payload_key(params: dict[str, Any]) -> None:
+    """Raise if a caller-supplied param shadows the SDK's reserved
+    body-bytes key. Without this guard, a request like
+    ``params={"__file__": "x"}`` would have its value silently
+    overwritten by the SDK-injected raw bytes — and then stripped by
+    the adapter — which is hard to debug from the client side.
+    """
+    if BODY_BYTES_KEY in params:
+        raise ValueError(
+            f"{BODY_BYTES_KEY!r} is reserved for the SDK's binary body "
+            "content; rename your parameter."
+        )
+
+
 class AdapterApp:
     """Wraps an ``AdapterService`` in a contract-compliant FastAPI app.
 
@@ -216,6 +243,11 @@ class AdapterApp:
             if self._service is None and self._service_factory is not None:
                 self._service = self._service_factory()
             assert self._service is not None
+            # Hand the service a back-reference to this AdapterApp so
+            # streaming handlers can read ``self.metrics``. Done before
+            # ``load()`` so any handler the load path spawns (rare but
+            # possible) can already see it.
+            self._service.attach_app(self)
             self._service.load()
             self._metrics.set_model_loaded(self._service.is_ready())
             try:
@@ -348,6 +380,17 @@ class AdapterApp:
         correlation_id = getattr(request.state, "correlation_id", "?")
         try:
             payload = await self._parse_infer_body(request)
+        except _BodyTooLarge as exc:
+            # §3.5 — oversize bodies surface as HTTP 413 so reverse
+            # proxies and clients can distinguish "too big" from
+            # generic malformed_input.
+            # 413 — newer Starlette uses HTTP_413_CONTENT_TOO_LARGE; the
+            # int literal lets the SDK stay compatible across versions.
+            return self._transport_error(
+                "malformed_input",
+                str(exc),
+                status_code=413,
+            )
         except ValueError as exc:
             message = str(exc)
             if "Content-Type" in message:
@@ -418,7 +461,7 @@ class AdapterApp:
                 )
             content = await file_value.read()
             if len(content) > self._max_body_bytes:
-                raise ValueError(
+                raise _BodyTooLarge(
                     f"Body exceeds {self._max_body_bytes}-byte limit ({len(content)} received)."
                 )
             params: dict[str, Any] = {}
@@ -430,7 +473,8 @@ class AdapterApp:
                     raise ValueError(f"Invalid JSON in 'params' field: {exc}") from exc
                 if not isinstance(params, dict):
                     raise ValueError("'params' must be a JSON object.")
-            params["__file__"] = content
+            _reject_reserved_payload_key(params)
+            params[BODY_BYTES_KEY] = content
             return params
 
         if raw_ct == "application/json":
@@ -450,11 +494,12 @@ class AdapterApp:
             except Exception as exc:
                 raise ValueError(f"{b64_field!r} is not valid base64: {exc}") from exc
             if len(content) > self._max_body_bytes:
-                raise ValueError(
+                raise _BodyTooLarge(
                     f"Body exceeds {self._max_body_bytes}-byte limit ({len(content)} received)."
                 )
             params = {k: v for k, v in body.items() if k != b64_field}
-            params["__file__"] = content
+            _reject_reserved_payload_key(params)
+            params[BODY_BYTES_KEY] = content
             return params
 
         raise ValueError(
@@ -551,7 +596,15 @@ class AdapterApp:
                 reason=f"auth: {failure}",
             )
             return
-        await self._service.handle_stream(websocket)
+        # SDK owns the stream-connection gauge so handlers don't have
+        # to remember to inc/dec it. Per-frame inflight + outcome
+        # counters are still the handler's responsibility (via
+        # ``self.metrics`` on the service).
+        self._metrics.inc_stream_connection()
+        try:
+            await self._service.handle_stream(websocket)
+        finally:
+            self._metrics.dec_stream_connection()
 
 
 # ── Helpers (module-private) ───────────────────────────────────────

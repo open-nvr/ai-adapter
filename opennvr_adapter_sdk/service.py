@@ -11,7 +11,7 @@ writes only model-specific logic.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.interfaces.contract import (
     ErrorCategory,
@@ -21,6 +21,10 @@ from app.interfaces.contract import (
     InferResponse,
     ModelInfo,
 )
+
+if TYPE_CHECKING:
+    from opennvr_adapter_sdk.adapter_app import AdapterApp
+    from opennvr_adapter_sdk.metrics import Metrics
 
 
 class AdapterService(ABC):
@@ -99,11 +103,12 @@ class AdapterService(ABC):
 
         ``payload`` is a dict produced by the SDK's body parser:
 
-        * For multipart requests, file-typed form fields are exposed
-          as ``payload["__files__"][field_name] = bytes`` and the
-          ``params`` JSON field is merged into the top-level dict.
-        * For application/json requests, the request body is the
-          payload directly.
+        * For ``BodyShape.TEXT`` adapters: the request body (JSON
+          object, or multipart text fields) merged into a flat dict.
+        * For ``BodyShape.IMAGE`` / ``AUDIO`` / ``GENERIC`` adapters:
+          the binary content lives at ``payload["__file__"]`` as
+          bytes, and the parsed ``params`` JSON (or the JSON body
+          itself minus the base64 field) is merged at the top level.
 
         Raise ``ServiceError`` on every failure path so the SDK can
         translate to a typed §7 envelope with the correct HTTP
@@ -124,11 +129,47 @@ class AdapterService(ABC):
         """Override to implement the §6 WS protocol. The SDK calls
         this from the /infer/stream route AFTER the auth and lifespan
         readiness checks pass. Only called when the adapter declares
-        ``supports_stream=True`` on its ``AdapterApp``."""
+        ``supports_stream=True`` on its ``AdapterApp``.
+
+        The websocket arrives un-accepted — handlers must call
+        ``await websocket.accept()`` themselves so they can refuse
+        the upgrade (with a §6.5 close code) if e.g. the model isn't
+        loaded yet. The SDK has already wrapped the call with
+        ``inc_stream_connection`` / ``dec_stream_connection``, so
+        handlers only need to manage per-frame ``inc_inflight`` /
+        ``record_infer`` via ``self.metrics``."""
         raise NotImplementedError(
             "AdapterService.handle_stream() must be overridden when "
             "supports_stream=True is set on AdapterApp."
         )
+
+    # ── SDK back-reference (set by AdapterApp at lifespan startup) ─
+
+    def attach_app(self, app: "AdapterApp") -> None:
+        """Called by ``AdapterApp`` at lifespan startup so streaming
+        handlers can reach the SDK's metrics + config.
+
+        Subclasses don't normally need to override this — use
+        ``self.metrics`` or ``self.app`` to read what was attached.
+        """
+        self._app = app
+
+    @property
+    def app(self) -> "AdapterApp":
+        """The owning ``AdapterApp``. Available after lifespan startup."""
+        app = getattr(self, "_app", None)
+        if app is None:
+            raise RuntimeError(
+                "AdapterService.app accessed before AdapterApp.attach_app() "
+                "ran — only available inside handle_stream / infer / etc."
+            )
+        return app
+
+    @property
+    def metrics(self) -> "Metrics":
+        """Shortcut for ``self.app.metrics`` — what streaming handlers
+        use to record per-frame inflight + outcome counters."""
+        return self.app.metrics
 
 
 # ── ServiceError ───────────────────────────────────────────────────

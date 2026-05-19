@@ -91,7 +91,7 @@ That's a complete contract-compliant adapter. The SDK handles `/health`, `/capab
 | `BodyShape.AUDIO` | multipart `audio` file + JSON `audio_b64` | ASR, audio classification, TTS post-process |
 | `BodyShape.GENERIC` | multipart `data` file + JSON `data_b64` | Anything else with binary input |
 
-For non-TEXT shapes, the SDK puts the binary content at `payload["__file__"]` (bytes) and merges any `params` JSON into the dict.
+For non-TEXT shapes, the SDK puts the binary content at `payload[BODY_BYTES_KEY]` (bytes) and merges any `params` JSON into the dict. `BODY_BYTES_KEY` is re-exported from the SDK root — import it rather than hard-coding the literal so future renames don't silently break adapters. Caller-supplied params that shadow this key are rejected with `malformed_input` so collisions surface at the wire, not as silently-overwritten values.
 
 ## Streaming adapters
 
