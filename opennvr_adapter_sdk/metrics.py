@@ -2,40 +2,36 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Prometheus exposition for the Piper contract service.
+Prometheus metrics (SDK consolidated).
 
-Implements the §3.4 minimum-baseline metrics:
-
-* ``adapter_infer_total{outcome}`` — labelled counter; outcomes match the
-  failure-envelope categories plus ``ok``.
-* ``adapter_infer_latency_seconds`` — histogram.
-* ``adapter_model_loaded`` — gauge (0/1).
-* ``adapter_stream_connections_active`` — gauge (always 0 for Piper —
-  streaming not supported, kept for spec compliance).
-* ``adapter_inflight_requests`` — gauge.
-* ``adapter_queue_depth`` — gauge.
-
-Implementation uses a simple in-process registry with no external
-dependencies. ``prometheus_client`` would be a nicer choice but adds a
-direct dep just for this adapter; the §3.4 spec only requires
-"Prometheus exposition format", which we can emit by hand in ~40 lines.
+Replaces the per-adapter ``metrics.py`` files. Latency buckets are
+configurable per-adapter — the default covers TTS / vision detection
+/ ASR in one shot (10ms - 60s). Adapters with different latency
+profiles can pass custom buckets to ``Metrics(...)``.
 """
 from __future__ import annotations
 
 import threading
 from collections import defaultdict
-from typing import Iterable
+
+
+# Default bucket set — spans 10ms (cached short clip) → 60s (long
+# audio on CPU). YOLOv8 on GPU lives in the 5-50ms range; Whisper
+# CPU lives in 1-30s. Both fit.
+DEFAULT_LATENCY_BUCKETS_SECONDS: tuple[float, ...] = (
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+)
 
 
 class Metrics:
-    """In-process metrics registry. Thread-safe for the gauge/counter
-    operations the adapter performs."""
+    """In-process metrics registry. Thread-safe for the counter and
+    gauge operations the adapter performs concurrently.
 
-    # Histogram buckets in seconds. Piper TTS latency is typically
-    # 50ms - 5s; pick buckets that bracket that range.
-    LATENCY_BUCKETS_SECONDS: tuple[float, ...] = (
-        0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
-    )
+    All adapters share this implementation; latency buckets are the
+    only tunable. Prometheus exposition format ("text/plain version
+    0.0.4") is emitted by ``render()`` — no ``prometheus_client``
+    dependency required.
+    """
 
     KNOWN_OUTCOMES: tuple[str, ...] = (
         "ok",
@@ -45,12 +41,16 @@ class Metrics:
         "refused",
     )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        latency_buckets_seconds: tuple[float, ...] = DEFAULT_LATENCY_BUCKETS_SECONDS,
+    ) -> None:
+        self._latency_buckets = latency_buckets_seconds
         self._lock = threading.Lock()
         self._infer_total: dict[str, int] = defaultdict(int)
-        # Histogram: bucket upper bound (or +Inf) → cumulative count.
         self._latency_bucket_counts: dict[float, int] = {
-            ub: 0 for ub in self.LATENCY_BUCKETS_SECONDS
+            ub: 0 for ub in self._latency_buckets
         }
         self._latency_inf_count: int = 0
         self._latency_sum: float = 0.0
@@ -60,26 +60,22 @@ class Metrics:
         self._inflight: int = 0
         self._queue_depth: int = 0
 
-        # Pre-seed all outcomes at 0 so Prometheus sees them even before
-        # the first request.
+        # Pre-seed all outcomes at 0 so Prometheus sees them even
+        # before the first request.
         for outcome in self.KNOWN_OUTCOMES:
             self._infer_total[outcome] = 0
 
-    # ── Counter ────────────────────────────────────────────────────
-
     def record_infer(self, outcome: str, latency_seconds: float) -> None:
         if outcome not in self.KNOWN_OUTCOMES:
-            outcome = "model_error"  # safety: any unrecognized outcome
+            outcome = "model_error"
         with self._lock:
             self._infer_total[outcome] += 1
-            for ub in self.LATENCY_BUCKETS_SECONDS:
+            for ub in self._latency_buckets:
                 if latency_seconds <= ub:
                     self._latency_bucket_counts[ub] += 1
             self._latency_inf_count += 1
             self._latency_sum += latency_seconds
             self._latency_count += 1
-
-    # ── Gauges ─────────────────────────────────────────────────────
 
     def set_model_loaded(self, loaded: bool) -> None:
         with self._lock:
@@ -97,14 +93,19 @@ class Metrics:
         with self._lock:
             self._queue_depth = max(0, int(depth))
 
-    # ── Exposition ─────────────────────────────────────────────────
+    def inc_stream_connection(self) -> None:
+        with self._lock:
+            self._stream_active += 1
+
+    def dec_stream_connection(self) -> None:
+        with self._lock:
+            self._stream_active = max(0, self._stream_active - 1)
 
     def render(self) -> str:
         """Emit the Prometheus text exposition format."""
         with self._lock:
             lines: list[str] = []
 
-            # adapter_infer_total
             lines.append("# HELP adapter_infer_total Total inference calls by outcome.")
             lines.append("# TYPE adapter_infer_total counter")
             for outcome in self.KNOWN_OUTCOMES:
@@ -112,20 +113,18 @@ class Metrics:
                     f'adapter_infer_total{{outcome="{outcome}"}} {self._infer_total.get(outcome, 0)}'
                 )
 
-            # adapter_infer_latency_seconds
             lines.append("# HELP adapter_infer_latency_seconds Inference latency histogram.")
             lines.append("# TYPE adapter_infer_latency_seconds histogram")
-            cumulative = 0
-            for ub in self.LATENCY_BUCKETS_SECONDS:
-                cumulative = self._latency_bucket_counts[ub]
-                lines.append(f'adapter_infer_latency_seconds_bucket{{le="{ub}"}} {cumulative}')
+            for ub in self._latency_buckets:
+                lines.append(
+                    f'adapter_infer_latency_seconds_bucket{{le="{ub}"}} {self._latency_bucket_counts[ub]}'
+                )
             lines.append(
                 f'adapter_infer_latency_seconds_bucket{{le="+Inf"}} {self._latency_inf_count}'
             )
             lines.append(f"adapter_infer_latency_seconds_sum {self._latency_sum}")
             lines.append(f"adapter_infer_latency_seconds_count {self._latency_count}")
 
-            # gauges
             lines.append("# HELP adapter_model_loaded 1 if the model is loaded into memory.")
             lines.append("# TYPE adapter_model_loaded gauge")
             lines.append(f"adapter_model_loaded {self._model_loaded}")
