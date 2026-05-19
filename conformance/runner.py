@@ -102,6 +102,12 @@ class ConformanceRunner:
     SAMPLE_INFER_PAYLOADS: dict[str, dict[str, Any]] = {
         "speech_synthesis": {"text": "Conformance check: hello, world."},
         "object_detection": {"confidence_threshold": 0.5},
+        # ASR adapters receive audio bytes via the multipart path (see
+        # _post_multipart_audio below); this JSON payload is a no-op
+        # fallback for adapters that don't accept multipart for some
+        # reason. Real test goes through the audio multipart path.
+        "audio_transcription": {"task": "audio_transcription"},
+        "audio_translation": {"task": "audio_translation"},
         "echo": {"hello": "world"},
     }
 
@@ -128,6 +134,33 @@ class ConformanceRunner:
     SAMPLE_STREAM_FRAMES: dict[str, bytes] = {
         "object_detection": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
     }
+
+    # ── Sample audio for ASR adapters ──────────────────────────────
+    #
+    # A 100ms silent WAV @ 8 kHz mono int16 (~1.6 KB). Whisper's VAD
+    # gates out silence so the transcript is typically empty, but the
+    # §5.3 result shape still validates. Good enough to confirm the
+    # wire path works without bundling a real-speech asset and the
+    # licensing baggage that goes with one. Generated at module-load
+    # time via stdlib ``wave`` — no extra deps, no large source-tree
+    # constants.
+    @classmethod
+    def _build_sample_silent_wav(cls) -> bytes:
+        import io
+        import wave as _wave
+        buf = io.BytesIO()
+        with _wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(8000)
+            w.writeframes(b"\x00\x00" * 800)
+        return buf.getvalue()
+
+    # Computed once at class-body evaluation, NOT at every check_infer.
+    # ``__class_getitem__``-style lazy attribute would be nicer but a
+    # plain method-call-into-dict at module load is fine for the
+    # conformance kit's scale.
+    SAMPLE_AUDIO_BYTES: dict[str, bytes] = {}  # populated below
 
     def __init__(
         self,
@@ -305,15 +338,21 @@ class ConformanceRunner:
         if not self._capabilities.endpoints.infer.supported:
             return self._record("infer", CheckOutcome.SKIP, detail="adapter declares infer.supported = false")
 
-        # §3.5 — adapters that take image input prefer multipart (real
-        # binary bytes); text-only adapters get the JSON path. Pick
-        # based on declared modalities so the conformance kit exercises
-        # whichever transport the adapter actually expects.
-        image_in = "image" in (self._capabilities.model.modalities_in or [])
+        # §3.5 — adapters that take image or audio input prefer
+        # multipart (real binary bytes); text-only adapters get the
+        # JSON path. Pick based on declared modalities so the
+        # conformance kit exercises whichever transport the adapter
+        # actually expects.
+        modalities = self._capabilities.model.modalities_in or []
+        image_in = "image" in modalities
+        audio_in = "audio" in modalities
         sample_frame = self._sample_stream_frame_for(self._capabilities) if image_in else None
+        sample_audio = self._sample_audio_for(self._capabilities) if audio_in else None
 
         if image_in and sample_frame is not None:
             ok, response, latency_ms, err = self._post_multipart_frame("/infer", sample_frame)
+        elif audio_in and sample_audio is not None:
+            ok, response, latency_ms, err = self._post_multipart_audio("/infer", sample_audio)
         else:
             payload = self._sample_payload_for(self._capabilities)
             if payload is None:
@@ -613,6 +652,12 @@ class ConformanceRunner:
                 return self.SAMPLE_STREAM_FRAMES[task]
         return None
 
+    def _sample_audio_for(self, caps: CapabilitiesResponse) -> bytes | None:
+        for task in caps.tasks_advertised:
+            if task in self.SAMPLE_AUDIO_BYTES:
+                return self.SAMPLE_AUDIO_BYTES[task]
+        return None
+
     def _headers(self, *, with_auth: bool) -> dict[str, str]:
         h = {}
         if with_auth and self._token:
@@ -667,13 +712,39 @@ class ConformanceRunner:
     ) -> tuple[bool, Any, int, str]:
         """POST a frame as multipart/form-data. Works for both httpx.Client
         and Starlette's TestClient (both accept the same ``files=`` kwarg)."""
+        return self._post_multipart_file(
+            path, file_field="frame", filename="frame.jpg",
+            content=frame_bytes, content_type="image/jpeg",
+        )
+
+    def _post_multipart_audio(
+        self,
+        path: str,
+        audio_bytes: bytes,
+    ) -> tuple[bool, Any, int, str]:
+        """POST audio bytes as multipart/form-data with field name
+        ``audio`` (the ASR-adapter convention; YOLOv8 uses ``frame``)."""
+        return self._post_multipart_file(
+            path, file_field="audio", filename="audio.wav",
+            content=audio_bytes, content_type="audio/wav",
+        )
+
+    def _post_multipart_file(
+        self,
+        path: str,
+        *,
+        file_field: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> tuple[bool, Any, int, str]:
         url = self.base_url + path
         headers = self._headers(with_auth=True)
         start = time.monotonic()
         try:
             response = self._client.post(
                 url,
-                files={"frame": ("frame.jpg", frame_bytes, "image/jpeg")},
+                files={file_field: (filename, content, content_type)},
                 headers=headers,
             )
         except Exception as exc:
@@ -731,3 +802,13 @@ class ConformanceRunner:
         )
         self._report.results.append(result)
         return result
+
+
+# Populate the audio-sample dict once at module load. Has to happen
+# AFTER the class is fully defined because we call the classmethod.
+_silent_wav = ConformanceRunner._build_sample_silent_wav()
+ConformanceRunner.SAMPLE_AUDIO_BYTES = {
+    "audio_transcription": _silent_wav,
+    "audio_translation": _silent_wav,
+}
+del _silent_wav
