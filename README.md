@@ -16,6 +16,8 @@ The honest answer first: **for a single-camera hobby project, you don't need it.
 
 ai-adapter exists because a **security product** has cross-cutting concerns that none of the underlying ML libraries (`ultralytics`, `faster-whisper`, `piper-tts`) provide. The same trade-off as `docker run` vs Kubernetes: the abstractions earn their keep at the scale and stakes where direct calls become liabilities.
 
+![Where ai-adapter sits in the camera-security stack](docs/diagrams/ai_adapter_value_diagram.svg)
+
 ### What this layer adds that loading YOLO directly does NOT
 
 | # | Concern | What you get | Direct YOLO | ai-adapter |
