@@ -1,3 +1,6 @@
+# Copyright (c) 2026 OpenNVR
+# SPDX-License-Identifier: Apache-2.0
+
 """
 opennvr-adapter-sdk — the boilerplate-free way to write an AI Adapter
 Contract v1 service.
@@ -43,9 +46,11 @@ to ``["1"]``; bump when you support both.
 from opennvr_adapter_sdk.adapter_app import AdapterApp, BodyShape, BODY_BYTES_KEY
 from opennvr_adapter_sdk.service import AdapterService, ServiceError
 
-# Re-export contract types from the central source-of-truth so adapter
-# authors only need one import line.
-from app.interfaces.contract import (
+# Re-export the most commonly-needed contract types so adapter authors
+# only need one import line. Less common types (streaming messages,
+# DetectionResult, AsrResult, etc.) live in ``opennvr_adapter_sdk.contract``
+# — import from there when you need them.
+from opennvr_adapter_sdk.contract import (
     AdapterInfo,
     CapabilitiesResponse,
     Cost,

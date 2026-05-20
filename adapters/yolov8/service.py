@@ -36,7 +36,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from adapters.yolov8.coco_classes import class_id_to_label
 from app.adapters.vision.yolov8_adapter import YOLOv8Adapter
 from app.config import INPUT_SIZE, MODEL_WEIGHTS_DIR
-from app.interfaces.contract import (
+from opennvr_adapter_sdk.contract import (
     DetectionItem,
     DetectionResult,
     ErrorCategory,

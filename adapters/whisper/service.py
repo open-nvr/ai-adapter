@@ -49,7 +49,7 @@ from typing import Any
 
 from app.adapters.audio.whisper_adapter import WhisperAdapter
 from app.config import MODEL_WEIGHTS_DIR
-from app.interfaces.contract import (
+from opennvr_adapter_sdk.contract import (
     AsrResult,
     AsrSegment,
     ErrorCategory,

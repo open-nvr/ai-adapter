@@ -1,5 +1,5 @@
 # Copyright (c) 2026 OpenNVR
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 
 """
 AdapterService ABC + ServiceError envelope.
@@ -13,7 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from app.interfaces.contract import (
+from opennvr_adapter_sdk.contract import (
     ErrorCategory,
     ErrorDetail,
     FailureEnvelope,

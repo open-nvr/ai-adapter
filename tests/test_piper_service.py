@@ -17,7 +17,7 @@ from tests._piper_service_fixtures import (  # noqa: F401
     piper_app_with_auth,
     piper_environment,
 )
-from app.interfaces.contract import (
+from opennvr_adapter_sdk.contract import (
     CapabilitiesResponse,
     FailureEnvelope,
     HardwareEvaluationResponse,
@@ -214,7 +214,7 @@ def test_loading_state_returns_prefix_namespaced_code(piper_app, monkeypatch):
     prefix-namespaced ``piper.model_loading`` code, not the un-namespaced
     string. Catches regression of B18."""
     import adapters.piper.main as main_module
-    from app.interfaces.contract import HealthStatus
+    from opennvr_adapter_sdk.contract import HealthStatus
 
     service = main_module._service
     # Simulate LOADING (state between init and successful load).

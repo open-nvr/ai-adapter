@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from app.interfaces.contract import (
+from opennvr_adapter_sdk.contract import (
     CapabilitiesResponse,
     DetectionResult,
     FailureEnvelope,

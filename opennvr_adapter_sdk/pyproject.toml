@@ -1,0 +1,93 @@
+# Copyright (c) 2026 OpenNVR
+# SPDX-License-Identifier: Apache-2.0
+#
+# Standalone packaging for opennvr-adapter-sdk.
+#
+# The SDK is published to PyPI separately from the opennvr-ai-adapter
+# application that lives in the rest of this repo, so third-party
+# adapter authors can ``pip install opennvr-adapter-sdk`` without
+# pulling the whole NVR stack. Authors get the four-line dependency
+# story from the README: AdapterService ABC, AdapterApp builder,
+# ServiceError envelope, BODY_BYTES_KEY constant.
+#
+# Run from the SDK directory:
+#     pip install -e .
+# or from the repo root:
+#     pip install -e ./opennvr_adapter_sdk
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opennvr-adapter-sdk"
+version = "1.0.0"
+description = "Boilerplate-free SDK for writing AI Adapter Contract v1 services for OpenNVR."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "OpenNVR", email = "contact@open-nvr.org" },
+]
+keywords = [
+    "ai", "inference", "adapter", "sdk", "fastapi", "websocket",
+    "computer-vision", "nvr", "object-detection", "asr", "tts",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Framework :: Pydantic :: 2",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+# Minimal — the SDK speaks FastAPI + Pydantic and nothing else. Adapter
+# authors bring their own model runtime (onnxruntime, faster-whisper,
+# piper-tts, etc.). Versions are pinned to the same series the rest
+# of the ai-adapter app uses so a single environment can host both
+# without resolver fights; if you want a looser pin for community
+# adoption, relax the upper bounds here.
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "pydantic>=2.7,<3.0",
+    "python-multipart>=0.0.9",  # FastAPI form() parsing
+]
+
+[project.optional-dependencies]
+# Bring uvicorn yourself in production; we recommend it but won't
+# force the choice (Hypercorn, Daphne, etc., also work).
+serve = ["uvicorn[standard]>=0.30,<1.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+]
+
+[project.urls]
+Homepage = "https://github.com/open-nvr/ai-adapter"
+Documentation = "https://github.com/open-nvr/ai-adapter/tree/main/opennvr_adapter_sdk"
+Repository = "https://github.com/open-nvr/ai-adapter"
+Issues = "https://github.com/open-nvr/ai-adapter/issues"
+Changelog = "https://github.com/open-nvr/ai-adapter/blob/main/opennvr_adapter_sdk/CHANGELOG.md"
+
+# ── setuptools package discovery ──────────────────────────────────
+#
+# We sit BELOW the repo root, so setuptools needs hints: the package
+# lives in "." (this directory) and the import name is the directory's
+# basename. ``package-dir`` flips the root from the default
+# "src layout" to "this dir is the package."
+[tool.setuptools]
+packages = ["opennvr_adapter_sdk"]
+package-dir = { "opennvr_adapter_sdk" = "." }
+
+[tool.setuptools.package-data]
+opennvr_adapter_sdk = ["README.md", "LICENSE"]

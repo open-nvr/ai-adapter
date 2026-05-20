@@ -21,7 +21,7 @@ from __future__ import annotations
 import base64
 import json
 
-from app.interfaces.contract import (
+from opennvr_adapter_sdk.contract import (
     AsrResult,
     CapabilitiesResponse,
     FailureEnvelope,

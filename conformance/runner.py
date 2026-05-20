@@ -30,7 +30,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import ValidationError
 
-from app.interfaces.contract import (
+from opennvr_adapter_sdk.contract import (
     CapabilitiesResponse,
     FailureEnvelope,
     HardwareEvaluationResponse,

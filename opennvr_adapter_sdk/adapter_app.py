@@ -1,5 +1,5 @@
 # Copyright (c) 2026 OpenNVR
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 
 """
 ``AdapterApp`` — wraps an ``AdapterService`` in a FastAPI app with
@@ -44,7 +44,7 @@ from fastapi import FastAPI, Request, Response, WebSocket, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from app.interfaces.contract import (
+from opennvr_adapter_sdk.contract import (
     AdapterInfo,
     CapabilitiesResponse,
     Cost,
@@ -326,10 +326,10 @@ class AdapterApp:
     def _build_health(self) -> HealthResponse:
         info = self._service.model_info()
         if self._service.is_ready():
-            from app.interfaces.contract import HealthStatus
+            from opennvr_adapter_sdk.contract import HealthStatus
             status_value = HealthStatus.OK
         else:
-            from app.interfaces.contract import HealthStatus
+            from opennvr_adapter_sdk.contract import HealthStatus
             status_value = HealthStatus.LOADING
         return HealthResponse(
             status=status_value,
