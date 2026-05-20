@@ -9,6 +9,16 @@ A minimal adapter is now **~30 lines of FastAPI**, per §3.7 of the contract des
 - `ServiceError` — typed §7 failure envelope
 - Re-exports of every contract Pydantic type, so adapter authors get one import line
 
+## Install
+
+```bash
+uv add opennvr-adapter-sdk
+# with the uvicorn server bundled too:
+uv add 'opennvr-adapter-sdk[serve]'
+```
+
+Not on [uv](https://docs.astral.sh/uv/) yet? `pip install opennvr-adapter-sdk` works the same — the package is a single wheel with `fastapi`, `pydantic`, and `python-multipart` as its only runtime deps. We recommend `uv` because adapter projects tend to grow heavy ML deps fast and `uv sync` keeps the resolve time + lockfile manageable.
+
 ## The minimum viable adapter
 
 ```python

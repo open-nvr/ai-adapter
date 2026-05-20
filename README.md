@@ -10,6 +10,79 @@ A plug-and-play AI inference server for the **[OpenNVR](https://github.com/open-
 
 ---
 
+## Why use ai-adapter (vs loading your model directly)?
+
+The honest answer first: **for a single-camera hobby project, you don't need it.** `uv add ultralytics && python -c "from ultralytics import YOLO; YOLO('yolov8n.onnx')(frame)"` is shorter, faster, and totally fine.
+
+ai-adapter exists because a **security product** has cross-cutting concerns that none of the underlying ML libraries (`ultralytics`, `faster-whisper`, `piper-tts`) provide. The same trade-off as `docker run` vs Kubernetes: the abstractions earn their keep at the scale and stakes where direct calls become liabilities.
+
+### What this layer adds that loading YOLO directly does NOT
+
+| # | Concern | What you get | Direct YOLO | ai-adapter |
+|---|---------|--------------|-------------|------------|
+| 1 | **Audit + correlation_id** | Every inference traceable from alert → middleware (KAI-C) → adapter line | not built in | one `X-Correlation-Id` per call, joined across the chain |
+| 2 | **Fingerprint drift detection** | sha256 of weights polled every 60s — spots tampering / accidental rotation | impossible without re-rolling | §11.3 of the contract; surfaced as `adapter.fingerprint_mismatch` audit events |
+| 3 | **Sovereignty (local_only)** | KAI-C refuses to register adapters that declare `network_egress` under `AI_SOVEREIGNTY=local_only` | self-enforce in your own code | enforced at the middleware boundary; verifiable from the audit log |
+| 4 | **Operator permissions (§8)** | GPU / filesystem / network egress declared in `/capabilities`, surfaced for approval | implicit, ungated | explicit, gated, drift-detected |
+| 5 | **Process isolation** | Model crash doesn't take down alerts pipeline | one Python process, one OOM | each adapter is its own container with its own resource limits |
+| 6 | **Hot-swap any model** | Operator changes `kaic_adapter_name`; no monitoring-app rewrite | rewrite the script | YOLOv8 → YOLOv11 → cloud, one config line |
+| 7 | **Multi-tenant fair queuing** | N monitoring apps share one adapter; one chatty camera can't starve the rest | each app owns its model | `scheduling.fair_queuing="per_camera"` in `/capabilities` (§9) |
+| 8 | **Typed §7 error envelope** | Same wire shape across HTTP + WebSocket; clients write one parser | invent your own | `FailureEnvelope` with `category`, `code`, `transient`, `retry_after_ms` |
+| 9 | **Prometheus metrics** | `adapter_infer_total{outcome=...}`, latency histograms, in-flight gauges — no glue | wire it yourself | built into the SDK; same labels across every adapter |
+
+### How the [intrusion-detection example](https://github.com/open-nvr/open-nvr/tree/main/examples/intrusion-detection) uses it
+
+```
+┌─────────────────────┐  every poll_interval_seconds (or WS @ frame rate)
+│  Camera (RTSP/HTTP) │ ─────────────────────────────┐
+└─────────────────────┘                              │
+                                                     ▼
+                                       ┌──────────────────────────┐
+                                       │  intrusion-detection     │  watch_labels, zones,
+                                       │  monitoring app          │  restricted_hours
+                                       └──────────┬───────────────┘
+                                                  │ frame bytes + correlation_id
+                                                  ▼
+                                       ┌──────────────────────────┐
+                                       │  KAI-C                   │  registry · sovereignty
+                                       │  POST /api/v1/infer/...  │  · audit · authz · WS
+                                       └──────────┬───────────────┘  proxy (A2.4b)
+                                                  │
+                                                  ▼
+                                       ┌──────────────────────────┐
+                                       │  YOLOv8 adapter (SDK)    │  §5.1 DetectionResult
+                                       │  /infer · /infer/stream  │  (normalized bboxes)
+                                       └──────────────────────────┘
+```
+
+When an operator investigates *"why did this alert fire at 22:14?"*, they can join:
+
+```
+alert correlation_id  →  KAI-C inference event log  →  adapter audit line
+       a4f1b...                same a4f1b...               same a4f1b...
+                                                       + model fingerprint sha256:...
+                                                       + latency 38ms
+                                                       + outcome=ok
+```
+
+If the weights file was tampered with, the fingerprint at the alert time differs from the registered fingerprint — visible as an `adapter.fingerprint_mismatch` drift event. If you'd just `from ultralytics import YOLO` in your script, you couldn't prove anything about which weights actually produced the detection.
+
+### So when do you actually need it?
+
+| If you... | Skip ai-adapter, just `uv add ultralytics` | Use ai-adapter |
+|-----------|--------------------------------------------|----------------|
+| One camera in your garage | ✓ | overkill |
+| Prototype a detection idea | ✓ | overkill |
+| Ship a security product to operators | dangerous | ✓ |
+| Need to prove "AI didn't lie" in an incident | impossible | the audit chain is the proof |
+| Swap YOLOv8 → YOLOv11 without rewriting alerts | painful | one config line |
+| Run on `local_only` (no cloud calls ever) | self-enforce | KAI-C refuses non-compliant adapters |
+| Run multiple monitoring apps on shared GPU | each owns its model | one adapter, fair-queued |
+
+The wire contract is spec'd in [`open-nvr/docs/AI_ADAPTER_CONTRACT.md`](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md); the boilerplate-free SDK lives in [`opennvr_adapter_sdk/`](./opennvr_adapter_sdk/).
+
+---
+
 ## Why build adapters here?
 
 - **Real users, real cameras.** OpenNVR is a self-hosted NVR — every adapter you ship runs against live RTSP/ONVIF streams on real hardware, not a toy benchmark.

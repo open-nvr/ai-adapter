@@ -5,15 +5,16 @@
 #
 # The SDK is published to PyPI separately from the opennvr-ai-adapter
 # application that lives in the rest of this repo, so third-party
-# adapter authors can ``pip install opennvr-adapter-sdk`` without
-# pulling the whole NVR stack. Authors get the four-line dependency
-# story from the README: AdapterService ABC, AdapterApp builder,
-# ServiceError envelope, BODY_BYTES_KEY constant.
+# adapter authors can ``uv add opennvr-adapter-sdk`` (or
+# ``pip install`` if they're not on uv yet) without pulling the whole
+# NVR stack. Authors get the four-line dependency story from the
+# README: AdapterService ABC, AdapterApp builder, ServiceError
+# envelope, BODY_BYTES_KEY constant.
 #
-# Run from the SDK directory:
-#     pip install -e .
+# Local development — from the SDK directory:
+#     uv pip install -e .
 # or from the repo root:
-#     pip install -e ./opennvr_adapter_sdk
+#     uv pip install -e ./opennvr_adapter_sdk
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
