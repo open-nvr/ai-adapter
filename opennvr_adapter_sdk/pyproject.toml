@@ -60,7 +60,11 @@ classifiers = [
 dependencies = [
     "fastapi>=0.115,<1.0",
     "pydantic>=2.7,<3.0",
-    "python-multipart>=0.0.9",  # FastAPI form() parsing
+    # ≥0.0.18 is the fix for CVE-2024-53981 (DoS via malformed
+    # multipart). FastAPI's own form() parsing pulls this transitively;
+    # we pin a safe lower bound so anyone installing the SDK alone
+    # also gets the fixed version.
+    "python-multipart>=0.0.18",
 ]
 
 [project.optional-dependencies]
@@ -91,4 +95,4 @@ packages = ["opennvr_adapter_sdk"]
 package-dir = { "opennvr_adapter_sdk" = "." }
 
 [tool.setuptools.package-data]
-opennvr_adapter_sdk = ["README.md", "LICENSE"]
+opennvr_adapter_sdk = ["README.md", "LICENSE", "CHANGELOG.md", "RELEASING.md"]
