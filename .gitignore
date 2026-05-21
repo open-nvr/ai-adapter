@@ -8,6 +8,10 @@ __pycache__/
 dist/
 build/
 *.whl
+# Extracted sdists that setuptools sometimes leaves behind when
+# `python -m build` aborts. The pattern matches the standard
+# {name}-{version}/ layout inside opennvr_adapter_sdk/.
+opennvr_adapter_sdk/opennvr_adapter_sdk-*/
 
 # Virtual Environment
 venv/

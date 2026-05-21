@@ -1,0 +1,289 @@
+# Copyright (c) 2026 OpenNVR
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build + publish workflow for opennvr-adapter-sdk.
+#
+# Triggered on:
+#   - PRs that touch the SDK or this workflow file  → build + twine
+#     check + matrix smoke-test (no publish). Catches packaging
+#     regressions before merge.
+#   - Any push to arch-rev                          → build + matrix
+#     smoke-test + publish to TestPyPI. (No path filter on push — see
+#     the comment under ``on:`` for why.) The integration branch gets
+#     a real TestPyPI upload so we can ``pip install`` from there
+#     before cutting a real release.
+#   - Tags matching ``sdk-v*``                      → build + matrix
+#     smoke-test + verify-tag-matches-version + publish to PyPI.
+#     Releasing is "push a tag," nothing else.
+#
+# Both publishes use PyPI's *trusted publisher* mechanism (OIDC).
+# There is no PyPI API token stored in this repo or in repo secrets —
+# PyPI is configured to trust this specific workflow on this specific
+# repo for the ``opennvr-adapter-sdk`` project, and GitHub Actions
+# mints a short-lived OIDC token at job runtime. See
+# ``opennvr_adapter_sdk/RELEASING.md`` for the one-time PyPI-side
+# setup the maintainer does.
+
+name: publish-sdk
+
+on:
+  # No ``paths`` filter on the push event. GitHub applies push-level
+  # ``paths`` filters to BOTH branch and tag refs, which means a release
+  # tag pointing at a commit that doesn't touch the SDK gets silently
+  # skipped — exactly the failure mode we can't tolerate at release
+  # time. We accept the cheap cost of running this workflow on every
+  # arch-rev push in exchange for not having that landmine. The
+  # publish-testpypi job is gated by ``skip-existing: true`` so a
+  # no-op push doesn't fail.
+  push:
+    # Both ``arch-rev`` and ``main`` trigger TestPyPI publishes (with
+    # skip-existing). arch-rev is the dogfooding path; main covers the
+    # case where a hotfix lands directly on main without going through
+    # arch-rev — without this, a tag pushed to that main SHA would go
+    # straight to PyPI without any TestPyPI validation.
+    branches: [arch-rev, main]
+    tags:
+      - "sdk-v*"
+  pull_request:
+    paths:
+      - "opennvr_adapter_sdk/**"
+      - ".github/workflows/publish-sdk.yml"
+
+# Keep multiple in-flight runs on the same ref from racing each
+# other to PyPI. Tag pushes are their own ref so a release run never
+# gets cancelled by a follow-up PR.
+concurrency:
+  group: publish-sdk-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Explicit minimal default. The build/validate jobs only need to read
+# the checkout; only the publish jobs need ``id-token: write`` and
+# they re-declare it themselves below. Declaring this at the top
+# stops a future repo-wide "make GITHUB_TOKEN read+write by default"
+# setting change from silently widening fork-PR permissions.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build==1.* twine==5.*
+
+      # The SDK's pyproject.toml lives at opennvr_adapter_sdk/pyproject.toml
+      # and uses ``package-dir = { "opennvr_adapter_sdk" = "." }`` so the
+      # build must run from inside that directory.
+      - name: Build sdist + wheel
+        working-directory: opennvr_adapter_sdk
+        run: python -m build
+
+      - name: twine check (PEP 621 metadata + README rendering)
+        working-directory: opennvr_adapter_sdk
+        run: twine check dist/*
+
+      # Catch the "bumped __init__.py but not pyproject.toml" failure
+      # mode (or vice versa) at build time, not after PyPI rejects the
+      # second push.
+      - name: Verify __init__.py and pyproject.toml versions match
+        working-directory: opennvr_adapter_sdk
+        run: |
+          python - <<'PY'
+          # Regex-only so this works on 3.10 too (tomllib is 3.11+). The
+          # __init__.py side accepts both " and ' as quote characters —
+          # a future ruff/black config flip to single-quote style would
+          # otherwise break releases. TOML requires double quotes so
+          # the pyproject.toml side stays double-only.
+          import pathlib, re, sys
+          init_src = pathlib.Path("__init__.py").read_text()
+          init_match = re.search(r"""^__version__\s*=\s*["']([^"']+)["']""", init_src, re.M)
+          if not init_match:
+              sys.exit("__version__ not found in __init__.py")
+          init_version = init_match.group(1)
+          pyproj_src = pathlib.Path("pyproject.toml").read_text()
+          pyproj_match = re.search(r'^version\s*=\s*"([^"]+)"', pyproj_src, re.M)
+          if not pyproj_match:
+              sys.exit("project.version not found in pyproject.toml")
+          pyproj_version = pyproj_match.group(1)
+          if init_version != pyproj_version:
+              sys.exit(
+                  f"version drift: __init__.py={init_version!r} "
+                  f"pyproject.toml={pyproj_version!r}"
+              )
+          print(f"versions match: {init_version}")
+          PY
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: opennvr-adapter-sdk-dist
+          path: opennvr_adapter_sdk/dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Install the built wheel into a fresh interpreter for each supported
+  # Python and import the package. The SDK is pure-Python and the wheel
+  # tags as ``py3-none-any``, so all three runs use the same wheel —
+  # this catches anything that imports cleanly on 3.11 but trips a
+  # Python-version-specific runtime check elsewhere. Cheap insurance.
+  smoke-test:
+    name: Smoke-test wheel on Python ${{ matrix.python-version }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: opennvr-adapter-sdk-dist
+          path: dist/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install wheel and import
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+          python -c "
+          import opennvr_adapter_sdk as sdk
+          from opennvr_adapter_sdk import (
+              AdapterApp, AdapterService, BodyShape,
+              BODY_BYTES_KEY, ServiceError,
+          )
+          from opennvr_adapter_sdk.contract import (
+              ModelInfo, InferResponse, HardwareEvaluationResponse,
+          )
+          print(f'opennvr-adapter-sdk {sdk.__version__} (wheel) OK on Python', __import__('sys').version)
+          "
+      # Also install the sdist in a fresh venv. The PR explicitly adds
+      # ``MANIFEST.in`` to control sdist contents and the runtime path
+      # is non-obvious because ``package-dir = { "opennvr_adapter_sdk"
+      # = "." }`` flattens the layout. Missing-file-in-sdist is a real
+      # release-breaking failure mode (any resolver that picks the
+      # tarball — corporate proxies, ``pip --no-binary``, future cases
+      # where the wheel isn't yet uploaded — would import-fail), and
+      # the wheel-only smoke-test can't catch it.
+      - name: Install sdist and import (fresh venv)
+        run: |
+          python -m venv /tmp/sdist-venv
+          /tmp/sdist-venv/bin/pip install --upgrade pip
+          /tmp/sdist-venv/bin/pip install dist/*.tar.gz
+          /tmp/sdist-venv/bin/python -c "
+          import opennvr_adapter_sdk as sdk
+          from opennvr_adapter_sdk import (
+              AdapterApp, AdapterService, BodyShape,
+              BODY_BYTES_KEY, ServiceError,
+          )
+          from opennvr_adapter_sdk.contract import (
+              ModelInfo, InferResponse, HardwareEvaluationResponse,
+          )
+          print(f'opennvr-adapter-sdk {sdk.__version__} (sdist) OK on Python', __import__('sys').version)
+          "
+
+  # On a tag push, fail the release before we touch PyPI if the tag
+  # name and the package version disagree. The ``sdk-v1.0.0`` tag must
+  # match ``__version__ = "1.0.0"``. Complementary to the in-``build``
+  # ``__init__.py vs pyproject.toml`` drift check — that one verifies
+  # internal consistency, this one verifies the tag a maintainer just
+  # pushed matches the package they're about to ship.
+  verify-tag-matches-version:
+    name: Verify tag matches package version
+    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compare tag to __version__
+        run: |
+          TAG="${GITHUB_REF#refs/tags/sdk-v}"
+          VER=$(python - <<'PY'
+          # Accepts both " and ' quotes — see comment in build job's
+          # version-drift check for why.
+          import pathlib, re
+          src = pathlib.Path("opennvr_adapter_sdk/__init__.py").read_text()
+          print(re.search(r"""__version__\s*=\s*["']([^"']+)["']""", src).group(1))
+          PY
+          )
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::Tag sdk-v$TAG does not match __version__ $VER" >&2
+            exit 1
+          fi
+          echo "Tag and __version__ both at $VER."
+
+  # TestPyPI publish from arch-rev. Lets us ``pip install --index-url
+  # https://test.pypi.org/simple/ opennvr-adapter-sdk`` to dogfood
+  # the package before a real release. arch-rev only — PRs from forks
+  # don't get the OIDC token they'd need anyway.
+  publish-testpypi:
+    name: Publish to TestPyPI (arch-rev + main)
+    if: >
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/arch-rev' || github.ref == 'refs/heads/main')
+    needs: [build, smoke-test]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/opennvr-adapter-sdk
+    permissions:
+      id-token: write  # OIDC token for trusted-publisher auth
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: opennvr-adapter-sdk-dist
+          path: dist/
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # TestPyPI versions are immutable and we re-push on every
+          # arch-rev / main commit, so allow skipping when the version
+          # hasn't been bumped (otherwise the second push 400s on
+          # duplicate). Each release version is uploaded to TestPyPI
+          # exactly once — the first push that carries the bumped
+          # version. Subsequent no-op pushes are quietly skipped.
+          skip-existing: true
+          # Explicit PEP 740 attestations. Defaults are version-dependent
+          # in the action; pin behavior so a future action version
+          # change doesn't silently drop attestations from our dogfood
+          # path.
+          attestations: true
+
+  publish-pypi:
+    name: Publish to PyPI (tag release)
+    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    needs: [build, smoke-test, verify-tag-matches-version]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/opennvr-adapter-sdk
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: opennvr-adapter-sdk-dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Explicit PEP 740 attestations — see comment on
+          # publish-testpypi for why we don't trust the action's
+          # version-dependent default.
+          attestations: true
+        # No ``skip-existing`` here — a real release MUST be a new
+        # version. If you re-push the same tag, the second job should
+        # fail loudly, not silently no-op.

@@ -1,0 +1,30 @@
+# sdist-only inclusions. The wheel picks these up via
+# [tool.setuptools.package-data] in pyproject.toml; setuptools' default
+# sdist heuristics skip non-Python files at the package root unless we
+# spell them out here.
+#
+# Why every file is listed explicitly:
+#   - README.md is referenced via ``readme = "README.md"`` in
+#     pyproject.toml and setuptools auto-includes it. Listing it again
+#     here makes sdist contents independent of that backend behavior.
+#   - LICENSE is NOT auto-included by ``license = { text = "Apache-2.0" }``
+#     in modern setuptools — that key only sets metadata, it doesn't
+#     copy a file. (PEP 639 ``license-files = ["LICENSE"]`` would, but
+#     we're not on that yet.) So LICENSE ships ONLY because it's
+#     listed here (sdist) and in package-data (wheel).
+#   - CHANGELOG.md and RELEASING.md have no auto-include path; listed
+#     here is the only way they make it into the sdist.
+#
+# If you remove any of these lines, ``twine check`` will still pass
+# but ``tar tzf dist/*.tar.gz`` will be silently missing files.
+include LICENSE
+include README.md
+include CHANGELOG.md
+include RELEASING.md
+
+# Belt-and-suspenders: keep build leftovers and old sdist extractions
+# out of the next sdist build.
+prune dist
+prune build
+prune *.egg-info
+prune opennvr_adapter_sdk-*
