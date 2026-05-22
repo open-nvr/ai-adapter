@@ -1,5 +1,5 @@
 """
-Piper TTS adapter — A2.1 reference implementation of the AI Adapter Contract v1.
+Piper TTS adapter — reference implementation of the AI Adapter Contract v1.
 
 This package is the contract-compliant HTTP service that wraps Piper's
 ONNX TTS voices. The inference logic lives in

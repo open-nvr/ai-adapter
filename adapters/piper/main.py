@@ -4,7 +4,7 @@
 """
 Piper TTS adapter — contract-compliant service.
 
-Migrated to ``opennvr-adapter-sdk`` in A2.3a. This file is now the
+Migrated to ``opennvr-adapter-sdk`` in the SDK migration. This file is now the
 minimum viable adapter §3.7 promised: ~30 lines of FastAPI app
 construction. The Piper-specific logic lives in
 ``adapters/piper/service.py``; the SDK provides everything else

@@ -133,6 +133,10 @@ class ConformanceRunner:
     )
     SAMPLE_STREAM_FRAMES: dict[str, bytes] = {
         "object_detection": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
+        # LPR adapters take a pre-cropped plate image; reuse the
+        # 1x1 black JPEG so the multipart path is exercised without
+        # bundling a real plate asset.
+        "license_plate_recognition": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
     }
 
     # ── Sample audio for ASR adapters ──────────────────────────────

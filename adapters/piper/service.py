@@ -4,7 +4,7 @@
 """
 PiperService — Piper-specific implementation of ``AdapterService``.
 
-Migrated to ``opennvr-adapter-sdk`` in A2.3a. All boilerplate (auth,
+Migrated to ``opennvr-adapter-sdk`` in the SDK migration. All boilerplate (auth,
 metrics, FastAPI routes, body parsing, error-envelope translation) is
 now in the SDK; this service holds only the Piper-specific:
 

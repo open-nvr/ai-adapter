@@ -4,7 +4,7 @@
 """
 WhisperService — Whisper-specific implementation of ``AdapterService``.
 
-Migrated to ``opennvr-adapter-sdk`` in A2.3c. All cross-adapter
+Migrated to ``opennvr-adapter-sdk`` in the SDK migration. All cross-adapter
 boilerplate (auth, metrics, FastAPI routes, request body parsing,
 error-envelope translation, lifespan) is now in the SDK; this module
 holds only the Whisper-specific pieces:

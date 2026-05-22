@@ -10,18 +10,19 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased] — targeting v0.1.0
 
 First public release of the reference adapter server. Aligned with the
-v0.1.0 cut of the [OpenNVR](https://github.com/open-nvr/open-nvr) NVR and the
-`opennvr-adapter-sdk` v1.0.0 published to PyPI.
+v0.1.0 cut of the [OpenNVR](https://github.com/open-nvr/open-nvr) NVR. The
+`opennvr-adapter-sdk` is packaged for PyPI and ships on the first
+`sdk-v*` tag.
 
 ### Added
 
 #### SDK & contract
 
-- **`opennvr-adapter-sdk` published on PyPI.** Apache-2.0 SDK that adapter
+- **`opennvr-adapter-sdk` packaged for PyPI.** Apache-2.0 SDK that adapter
   authors install to write a new contract-compliant detector in ~30 lines.
   Public API: `AdapterService` ABC, `AdapterApp` FastAPI builder,
   `ServiceError` envelope, `BodyShape` enum, and re-exports of every Pydantic
-  wire type from the contract.
+  wire type from the contract. Published to PyPI on the first `sdk-v*` tag.
 - **AI Adapter Contract v1 compliance.** All six mandatory endpoints
   (`/health`, `/capabilities`, `/hardware/evaluation`, `/metrics`, `/infer`,
   `/infer/stream`), the five result conventions, the WebSocket streaming
@@ -42,6 +43,10 @@ startup:
 - **HuggingFace** — cloud inference proxy.
 - **Whisper** — speech-to-text via faster-whisper (CPU or GPU).
 - **Piper** — text-to-speech via ONNX voices.
+- **fast-plate-ocr** — license-plate recognition (Apache-2.0 upstream,
+  ONNX, CPU-only, plate-specific). New `lpr` install extra; single-
+  purpose OCR adapter designed to be chained downstream of YOLOv8 by
+  the `license-plate-recognition` example app on OpenNVR.
 - **Ollama** — local LLM access over HTTP.
 
 #### Architecture

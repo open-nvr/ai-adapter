@@ -4,7 +4,7 @@
 """
 YoloV8Service — Yolo-specific implementation of ``AdapterService``.
 
-Migrated to ``opennvr-adapter-sdk`` in A2.3b. All cross-adapter
+Migrated to ``opennvr-adapter-sdk`` in the SDK migration. All cross-adapter
 boilerplate (auth, metrics, FastAPI routes, request body parsing,
 error-envelope translation, lifespan) is now in the SDK; this module
 holds only the YOLOv8-specific pieces:
@@ -196,7 +196,7 @@ class YoloV8Service(AdapterService):
           1. Accept the upgrade.
           2. Receive the first message; must be a ``handshake``. Reply
              with ``handshake_ack`` echoing the negotiated transport
-             (downgrades shared_memory → websocket since A2.2b hasn't
+             (downgrades shared_memory → websocket since a planned follow-up hasn't
              landed yet).
           3. Loop: receive either a control message (pause/resume/
              close/stats) or a ``frame`` JSON message followed by a
@@ -227,11 +227,11 @@ class YoloV8Service(AdapterService):
 
         # Reject shared-memory offers with a websocket fallback —
         # §6.1 allows the adapter to downgrade the transport in the
-        # ack. A2.2b will land shm support; bump
+        # ack. a planned follow-up will land shm support; bump
         # shared_memory_protocol_version to 1 then.
         ack = HandshakeAckMessage(
             frame_transport=FrameTransport.WEBSOCKET,
-            result_sink="websocket",  # NATS sink lands with B1
+            result_sink="websocket",  # NATS sink
             max_inflight=1,            # serial inference for v1
             session_id=session_id,
         )
