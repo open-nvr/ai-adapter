@@ -1,6 +1,6 @@
 # YOLOv8 Object-Detection Adapter (Contract v1)
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping the YOLOv8 ONNX object detector. This is the **second adapter migrated** (A2.2 milestone) and the **first one to exercise the §6 WebSocket streaming protocol**.
+Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping the YOLOv8 ONNX object detector. This is the **second adapter migrated to the contract** and the **first one to exercise the §6 WebSocket streaming protocol**.
 
 ## What it does
 
@@ -128,7 +128,7 @@ adapters/yolov8/
 
 ## Why a new service vs. extending the legacy monolith
 
-Same reason as Piper (A2.1): "one adapter wraps one model" per §1 of the contract. Each adapter is its own container with its own declared permissions. The legacy `app/main.py` keeps running until every adapter has its own contract-compliant service.
+Same reason as Piper: "one adapter wraps one model" per §1 of the contract. Each adapter is its own container with its own declared permissions. The legacy `app/main.py` keeps running until every adapter has its own contract-compliant service.
 
 ## Tests
 
