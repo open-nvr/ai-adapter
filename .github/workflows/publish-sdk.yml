@@ -76,9 +76,15 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tooling
+        # twine 6.0+ is required to parse Metadata-Version 2.4, which is
+        # what setuptools >= 77 writes by default (twine 5.x lists only
+        # Metadata-Version 1.0 – 2.3 as supported and fails with
+        # "Metadata is missing required fields: Name, Version" on 2.4
+        # wheels — even though Name + Version ARE in the wheel, twine
+        # just can't see them in an unrecognised metadata version).
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build==1.* twine==5.*
+          python -m pip install build==1.* "twine>=6.1,<7"
 
       # The SDK's pyproject.toml lives at opennvr_adapter_sdk/pyproject.toml
       # and uses ``package-dir = { "opennvr_adapter_sdk" = "." }`` so the
