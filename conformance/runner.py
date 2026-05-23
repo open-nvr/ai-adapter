@@ -137,6 +137,13 @@ class ConformanceRunner:
         # 1x1 black JPEG so the multipart path is exercised without
         # bundling a real plate asset.
         "license_plate_recognition": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
+        # Face tasks — same reasoning. The fixture-stubbed adapter
+        # never actually decodes the bytes; production adapters
+        # decode + face-detect, with no face → empty result, which
+        # still passes the wire-shape check.
+        "face_detection": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
+        "face_recognition": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
+        "face_embedding": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
     }
 
     # ── Sample audio for ASR adapters ──────────────────────────────

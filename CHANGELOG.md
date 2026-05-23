@@ -11,18 +11,19 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 First public release of the reference adapter server. Aligned with the
 v0.1.0 cut of the [OpenNVR](https://github.com/open-nvr/open-nvr) NVR. The
-`opennvr-adapter-sdk` is packaged for PyPI and ships on the first
-`sdk-v*` tag.
+`opennvr-adapter-sdk` is structured for PyPI distribution; the upload wires
+off the first `sdk-v*` tag, so until then install from source.
 
 ### Added
 
 #### SDK & contract
 
-- **`opennvr-adapter-sdk` packaged for PyPI.** Apache-2.0 SDK that adapter
-  authors install to write a new contract-compliant detector in ~30 lines.
-  Public API: `AdapterService` ABC, `AdapterApp` FastAPI builder,
-  `ServiceError` envelope, `BodyShape` enum, and re-exports of every Pydantic
-  wire type from the contract. Published to PyPI on the first `sdk-v*` tag.
+- **`opennvr-adapter-sdk`.** Apache-2.0 SDK that adapter authors install to
+  write a new contract-compliant detector in ~30 lines. Public API:
+  `AdapterService` ABC, `AdapterApp` FastAPI builder, `ServiceError`
+  envelope, `BodyShape` enum, and re-exports of every Pydantic wire type
+  from the contract. PyPI publish wires off the first `sdk-v*` tag; until
+  then, install from source via `pip install -e ./opennvr_adapter_sdk`.
 - **AI Adapter Contract v1 compliance.** All six mandatory endpoints
   (`/health`, `/capabilities`, `/hardware/evaluation`, `/metrics`, `/infer`,
   `/infer/stream`), the five result conventions, the WebSocket streaming
@@ -38,7 +39,13 @@ startup:
 
 - **YOLOv8** — ONNX object detection, CPU-friendly, no torch dependency.
 - **YOLOv11** — PyTorch person counting with ByteTrack.
-- **InsightFace** — face detection and recognition (Buffalo-L ArcFace).
+- **InsightFace** — face detection, recognition, and embedding extraction
+  (Buffalo-L ArcFace). SDK-based; accepts multipart / base64 frames.
+  Exposes face-DB CRUD (`/faces/register`, `/faces`, `/faces/{id}`) so
+  external apps like the Smart Doorbell example can enroll known faces
+  via REST without a shared volume. Embeddings live in a JSON-file
+  face DB at `OPENNVR_INSIGHTFACE_FACE_DB`; raw face images are never
+  persisted.
 - **BLIP** — scene captioning.
 - **HuggingFace** — cloud inference proxy.
 - **Whisper** — speech-to-text via faster-whisper (CPU or GPU).
