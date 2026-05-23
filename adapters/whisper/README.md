@@ -1,6 +1,6 @@
 # Whisper ASR Adapter (Contract v1)
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping faster-whisper / CTranslate2. **Third adapter migrated** (A2.3-prep, after A2.1 Piper and A2.2 YOLOv8) — validates the contract on a third modality (audio) and grounds the SDK design that A2.3 will extract.
+Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping faster-whisper / CTranslate2. **Third adapter migrated** to the contract (after Piper and YOLOv8) — validates the contract on a third modality (audio) and grounds the SDK design that was later extracted.
 
 ## What it does
 
@@ -33,7 +33,7 @@ Two tasks:
 | `GET /hardware/evaluation` | required | reports device (cuda/cpu) + compute_type |
 | `GET /metrics` | required | Prometheus exposition; latency buckets tuned for ASR (10ms - 60s) |
 | `POST /infer` | required | multipart (`audio` file) or JSON (`audio_b64`) |
-| `POST /infer/stream` | refused | HTTP 501 — streaming ASR (overlap windows, partial-result emission, VAD gating) lands in A2.3b |
+| `POST /infer/stream` | refused | HTTP 501 — streaming ASR (overlap windows, partial-result emission, VAD gating) is a planned follow-up |
 
 ## Operational notes
 
@@ -110,7 +110,7 @@ docker run --rm --gpus all -p 9003:9003 \
 python -m conformance http://localhost:9003 --token $OPENNVR_ADAPTER_TOKEN
 ```
 
-The conformance kit automatically detects `modalities_in: ["audio"]` in /capabilities and drives `/infer` with multipart-audio (added in A2.3-prep alongside the image-modality multipart from A2.2).
+The conformance kit automatically detects `modalities_in: ["audio"]` in /capabilities and drives `/infer` with multipart-audio (added alongside the image-modality multipart support).
 
 ## Try it
 
@@ -152,4 +152,4 @@ pytest tests/test_whisper_service.py tests/test_conformance_against_whisper.py
 
 ## What's next
 
-This is the **third grounded data point** for A2.3 SDK extraction. With Piper + YOLOv8 + Whisper migrated, the duplicated boilerplate (auth.py, metrics.py, service.py skeleton) is concrete enough to extract into `opennvr-adapter-sdk` without speculative API design.
+This is the **third grounded data point** for the SDK extraction. With Piper + YOLOv8 + Whisper migrated, the duplicated boilerplate (auth.py, metrics.py, service.py skeleton) was concrete enough to extract into `opennvr-adapter-sdk` without speculative API design.

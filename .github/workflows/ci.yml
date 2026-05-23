@@ -1,0 +1,61 @@
+# Copyright (c) 2026 OpenNVR
+# SPDX-License-Identifier: Apache-2.0
+#
+# CI for ai-adapter. Runs on every push to main / arch-rev and on
+# every PR. Complementary to publish-sdk.yml — that workflow builds
+# and publishes the SDK; this one runs the broader test suite that
+# includes conformance against the three reference adapters (piper,
+# whisper, yolov8) plus pipelines and router tests.
+#
+# What this catches:
+#   - regressions in the reference adapter server (app/)
+#   - regressions in the conformance suite (conformance/)
+#   - regressions in the SDK that show up only when the reference
+#     adapters consume it (publish-sdk.yml builds + smoke-tests the
+#     SDK in isolation; this catches integration drift between SDK
+#     and the things that use it)
+#
+# What this does NOT do (kept in publish-sdk.yml):
+#   - SDK sdist + wheel build
+#   - SDK matrix smoke-test
+#   - TestPyPI / PyPI publish
+
+name: ci
+
+on:
+  push:
+    branches: [main, arch-rev]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Reference adapter server + conformance + pipelines ───────────
+  # The heavy ML libraries (ultralytics, onnxruntime, faster-whisper,
+  # piper-tts, insightface, transformers, torch, fast-plate-ocr) are
+  # stubbed by the fixtures in tests/_*_service_fixtures.py, so
+  # installing the ``dev`` extra alone is enough to run the full
+  # ~163-test suite — no torch wheel needed in CI, no model weights
+  # downloaded.
+  tests:
+    name: ai-adapter (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Sync dependencies (core + dev)
+        # No --frozen for now: pyproject's `all` extra references the
+        # new `lpr` group and uv.lock pre-dates it. Re-lock locally
+        # (`uv lock` from the repo root) and commit, then add
+        # --frozen back here.
+        run: uv sync --extra dev
+      - name: Run pytest
+        run: uv run pytest tests/ -q

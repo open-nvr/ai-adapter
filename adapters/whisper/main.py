@@ -4,7 +4,7 @@
 """
 Whisper ASR adapter — contract-compliant FastAPI service.
 
-Migrated to ``opennvr-adapter-sdk`` in A2.3c. This file is now the
+Migrated to ``opennvr-adapter-sdk`` in the SDK migration. This file is now the
 minimum viable adapter §3.7 promised: ~50 lines of FastAPI app
 construction. Whisper-specific logic lives in
 ``adapters/whisper/service.py``; the SDK provides everything else

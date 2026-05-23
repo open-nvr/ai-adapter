@@ -4,7 +4,7 @@
 """
 YOLOv8 object-detection adapter — contract-compliant FastAPI service.
 
-Migrated to ``opennvr-adapter-sdk`` in A2.3b. This file is now the
+Migrated to ``opennvr-adapter-sdk`` in the SDK migration. This file is now the
 minimum viable adapter §3.7 promised: ~30 lines of FastAPI app
 construction. The YOLOv8-specific logic lives in
 ``adapters/yolov8/service.py`` (including the full §6 WS protocol
@@ -51,7 +51,7 @@ _adapter_app = AdapterApp(
         # registration time.
         gpu=True,
         network_egress=[],
-        # Match pre-A2.3b: advertise the weights *directory* (no
+        # advertise the weights *directory* (no
         # trailing slash) — KAI-C / operator policy comparison is
         # string-equality on this value.
         host_filesystem=[MODEL_WEIGHTS_DIR],
@@ -74,7 +74,7 @@ _adapter_app = AdapterApp(
     stream_max_concurrent=16,
     # Shared-memory fast path is documented in §6.2 but not yet
     # implemented. Advertise false so KAI-C never sends frame_ref.
-    # A2.2b will land shm support; bump
+    # a planned follow-up will land shm support; bump
     # ``stream_supports_shared_memory=True`` then.
     stream_supports_shared_memory=False,
 )

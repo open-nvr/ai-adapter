@@ -2,7 +2,7 @@
 
 Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping Piper neural TTS voices.
 
-This is the **first adapter ported to the contract** (A2.1 milestone). It serves as the canonical example for community contributors: ~450 lines of code, six mandatory contract endpoints, bearer-token auth, correlation-id wiring, Prometheus metrics, and a passing conformance run.
+This is the **first adapter ported to the contract**. It serves as the canonical example for community contributors: ~450 lines of code, six mandatory contract endpoints, bearer-token auth, correlation-id wiring, Prometheus metrics, and a passing conformance run.
 
 ## What it does
 
@@ -110,7 +110,7 @@ adapters/piper/
 
 ## Why a new service instead of refactoring the legacy monolith
 
-The existing `app/main.py` bundles all 8 adapters into one FastAPI service. Per the contract, "one adapter wraps one model" — so each adapter gets its own container with its own declared permissions. The legacy monolith stays running and untouched until every adapter has a contract-compliant service (A2.2 through A2.4); then it retires. See §13 of the design doc for the migration roadmap.
+The existing `app/main.py` bundles all 8 adapters into one FastAPI service. Per the contract, "one adapter wraps one model" — so each adapter gets its own container with its own declared permissions. The legacy monolith stays running and untouched until every adapter has a contract-compliant service; then it retires. See §13 of the design doc for the migration roadmap.
 
 ## Tests
 

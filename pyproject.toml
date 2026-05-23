@@ -30,6 +30,7 @@ dependencies = [
 #   uv sync --extra huggingface   → HuggingFace cloud inference proxy
 #   uv sync --extra stt           → Whisper speech-to-text (faster-whisper, CPU or GPU)
 #   uv sync --extra tts           → Piper text-to-speech (ONNX, CPU-friendly)
+#   uv sync --extra lpr           → fast-plate-ocr license-plate recognition (ONNX, CPU-only)
 #   uv sync --extra cpu           → PyTorch CPU-only build (needed by yolo11+blip)
 #   uv sync --extra gpu           → PyTorch CUDA build (needed by yolo11+blip on GPU)
 #   uv sync --extra all           → Everything (backward-compatible default)
@@ -94,6 +95,13 @@ tts = [
     "piper-tts>=1.2.0",
 ]
 
+# fast-plate-ocr license-plate recognition adapter (fast_plate_ocr_adapter).
+# Brings its own onnxruntime; weights (~3 MB per bundle) are downloaded on
+# first load() and cached locally. CPU-only — no torch needed.
+lpr = [
+    "fast-plate-ocr>=2.0",
+]
+
 # PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
 cpu = [
     "torch==2.9.1+cpu",
@@ -117,7 +125,7 @@ dev = [
 # Backward-compatible "install everything" profile
 # Equivalent to the old plain `uv sync` that had all deps in [project.dependencies]
 all = [
-    "opennvr-ai-adapter[yolo,yolo11,face,blip,huggingface,stt,tts]",
+    "opennvr-ai-adapter[yolo,yolo11,face,blip,huggingface,stt,tts,lpr]",
 ]
 
 # ── PyTorch index source ───────────────────────────────────────────────────────

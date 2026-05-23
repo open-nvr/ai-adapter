@@ -29,7 +29,7 @@ The CLI exits non-zero if any check FAILs — wire it into CI to gate adapter PR
 | `hardware_evaluation` | GET /hardware/evaluation returns valid `HardwareEvaluationResponse` |
 | `metrics` | GET /metrics emits Prometheus exposition with the §3.4 baseline metrics |
 | `infer` | POST /infer with a sample payload returns either `InferResponse` or a typed `FailureEnvelope` |
-| `infer_stream` | Adapters that declared `infer_stream.supported = false` MUST refuse with HTTP 501; supported adapters get a basic reachability check (full WS handshake is A2.2) |
+| `infer_stream` | Adapters that declared `infer_stream.supported = false` MUST refuse with HTTP 501; supported adapters get a basic reachability check (full WS handshake added with the YOLOv8 reference) |
 
 ## Sample output
 
@@ -72,6 +72,6 @@ The runner looks up a sample input by adapter's `tasks_advertised`. If your new 
 ## Roadmap
 
 - v1 (now): validates the HTTP surface end-to-end.
-- v1.1: full WebSocket handshake exercise (lands with YOLOv8 in A2.2).
+- v1.1: full WebSocket handshake exercise (shipped with the YOLOv8 reference adapter).
 - v1.2: tamper-detection probe — re-fetch `/capabilities` after N seconds and verify `model.fingerprint` is stable.
 - v1.5: integration with KAI-C registry — `kaic register --conformance-check` rejects registration unless this runs green.

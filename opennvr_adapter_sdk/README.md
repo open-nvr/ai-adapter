@@ -164,8 +164,8 @@ AdapterApp(
 `opennvr-adapter-sdk` is currently the production runtime for:
 
 - `adapters/piper/` — TTS adapter (`BodyShape.TEXT`, no streaming)
-- (A2.3b) `adapters/yolov8/` — object detection (`BodyShape.IMAGE`, streaming via WS)
-- (A2.3c) `adapters/whisper/` — ASR (`BodyShape.AUDIO`, no streaming)
+- `adapters/yolov8/` — object detection (`BodyShape.IMAGE`, streaming via WS)
+- `adapters/whisper/` — ASR (`BodyShape.AUDIO`, no streaming)
 
 Read those `main.py` files for non-trivial reference implementations.
 
@@ -177,4 +177,4 @@ SDK ships with the same major version as the contract. SDK v1.x targets contract
 
 `AdapterService` is an ABC, not a metaclass. `AdapterApp` is a builder, not a base class. The SDK lives between you and FastAPI — your service code never imports FastAPI directly, but you can still drop down to `app.add_route(...)` for adapter-specific endpoints (see Piper's `/voices` route).
 
-The contract is the source of truth. The SDK is a convenience layer on top of it. If the SDK gets in your way, write the service hand-rolled the way A2.1 / A2.2 / A2.3-prep did initially — the contract is implementable without it, just more boilerplate.
+The contract is the source of truth. The SDK is a convenience layer on top of it. If the SDK gets in your way, write the service hand-rolled the way the early reference adapters did before the SDK was extracted — the contract is implementable without it, just more boilerplate.

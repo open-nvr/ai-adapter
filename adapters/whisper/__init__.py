@@ -1,8 +1,8 @@
 """
-Whisper ASR adapter — A2.3-prep reference implementation of the AI
+Whisper ASR adapter — reference implementation of the AI
 Adapter Contract v1.
 
-Third adapter migrated to the contract (after A2.1 Piper and A2.2
+Third adapter migrated to the contract (after Piper and YOLOv8
 YOLOv8). Validates the contract on a third modality (audio) and
 exercises the §5.3 ASR output convention. Same structural template as
 ``adapters/piper/`` and ``adapters/yolov8/`` — auth, metrics, service,

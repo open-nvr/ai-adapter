@@ -1,5 +1,5 @@
 """
-YOLOv8 person/object-detection adapter — A2.2 reference implementation
+YOLOv8 person/object-detection adapter — reference implementation
 of the AI Adapter Contract v1.
 
 This package is the contract-compliant HTTP+WebSocket service that
