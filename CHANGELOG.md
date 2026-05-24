@@ -54,7 +54,13 @@ startup:
   ONNX, CPU-only, plate-specific). New `lpr` install extra; single-
   purpose OCR adapter designed to be chained downstream of YOLOv8 by
   the `license-plate-recognition` example app on OpenNVR.
-- **Ollama** — local LLM access over HTTP.
+- **Ollama** — local LLM access over HTTP. Supports the OpenAI-style
+  `tools` / `tool_choice` request fields and normalises Ollama's
+  native tool-call response into the OpenAI-shaped `message.tool_calls`
+  array (with synthesised call ids and JSON-stringified arguments)
+  so Pipecat / OpenAI clients work without translation. Tool support
+  requires a tool-capable model (Llama 3.1+, Qwen 2.5+, Mistral Nemo,
+  others — see https://ollama.com/blog/tool-support).
 
 #### Architecture
 
