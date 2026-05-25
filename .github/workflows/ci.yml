@@ -221,9 +221,18 @@ jobs:
             echo "::error::/health returned HTTP $STATUS, expected 200"
             exit 1
           fi
-          printf '%s' "$JSON" | python3 - <<'PY'
-          import json, sys
-          body = json.loads(sys.stdin.read())
+          # Pass the JSON through an env var, NOT a pipe. When you
+          # write ``somecmd | python3 - <<'PY'`` the heredoc steals
+          # stdin from the pipe — python reads the SCRIPT from the
+          # heredoc (because of the ``-``), and by the time the
+          # script's ``sys.stdin.read()`` runs, stdin is at EOF and
+          # returns ``""``. ``json.loads('')`` then raises with
+          # "Expecting value: line 1 column 1 (char 0)" — exactly the
+          # symptom this step had pre-fix. Env-var-and-heredoc is
+          # the standard fix.
+          JSON_BODY="$JSON" python3 <<'PY'
+          import json, os
+          body = json.loads(os.environ["JSON_BODY"])
           status = body.get("status")
           assert status in ("ok", "loading", "error"), (
               f"/health.status was {status!r}; expected one of "
@@ -259,9 +268,11 @@ jobs:
             echo "::error::/capabilities returned HTTP $STATUS, expected 200"
             exit 1
           fi
-          printf '%s' "$JSON" | python3 - <<'PY'
-          import json, os, sys
-          cfg = json.loads(sys.stdin.read())
+          # See the /health step above for why we pass JSON_BODY as
+          # an env var instead of piping into stdin.
+          JSON_BODY="$JSON" python3 <<'PY'
+          import json, os
+          cfg = json.loads(os.environ["JSON_BODY"])
           top_level = ("adapter", "model", "endpoints", "tasks_advertised",
                        "permissions", "scheduling", "cost")
           for key in top_level:
@@ -308,9 +319,11 @@ jobs:
             echo "::error::/hardware/evaluation returned HTTP $STATUS, expected 200"
             exit 1
           fi
-          printf '%s' "$JSON" | python3 - <<'PY'
-          import json, sys
-          body = json.loads(sys.stdin.read())
+          # See the /health step above for why we pass JSON_BODY as
+          # an env var instead of piping into stdin.
+          JSON_BODY="$JSON" python3 <<'PY'
+          import json, os
+          body = json.loads(os.environ["JSON_BODY"])
           verdict = body.get("verdict")
           assert verdict in ("ok", "warn", "blocked"), \
               f"unexpected verdict {verdict!r}; expected ok/warn/blocked"
