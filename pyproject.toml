@@ -137,3 +137,23 @@ torchvision = { index = "pytorch-cpu" }
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+# ── Resolution targets ─────────────────────────────────────────────────────────
+# uv resolves universally across all (Python × platform) combinations
+# by default. Some adapter extras pull packages that don't publish
+# wheels for every combination — most notably ``fast-plate-ocr`` 2.x
+# has no macOS wheel for Python 3.12 as of 2026-05, which makes the
+# universal resolve fail on the ``[lpr]`` extra even when nobody is
+# actually installing it.
+#
+# Restrict resolution to the combinations OpenNVR actually deploys
+# to: Linux (the supported server target, including the Docker
+# image) and macOS on Python 3.11 (developer laptops). Windows and
+# macOS + 3.12 developers can still ``uv sync`` against the
+# subset of extras whose wheels they need; only the universal
+# lockfile is constrained.
+[tool.uv]
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin' and python_full_version < '3.12'",
+]
