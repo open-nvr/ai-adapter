@@ -99,16 +99,30 @@ tts = [
 # Brings its own onnxruntime; weights (~3 MB per bundle) are downloaded on
 # first load() and cached locally. CPU-only — no torch needed.
 #
-# Platform marker: fast-plate-ocr 2.x publishes wheels for Python 3.11 on
-# every platform AND for Linux x86_64 on Python 3.12, but as of 2026-05
-# the macOS-3.12 and Linux-aarch64-3.12 wheels don't exist. The marker
-# below makes the universal-lockfile resolution skip fast-plate-ocr on
-# those two combos so the rest of the install can succeed. Operators on
-# the excluded combos who want LPR have two options: (1) cross-build or
-# wait for the upstream wheel; (2) run the adapter image in Docker
-# against an x86_64 base. Documented in the LPR example README.
+# Python-version marker: fast-plate-ocr 2.x publishes wheels for Python
+# 3.11 across all supported platforms (Linux x86_64 + aarch64, macOS),
+# but as of 2026-05 has NOT shipped any Python 3.12 wheels. Empirically
+# verified by the universal-resolve failure we saw on the CI matrix:
+# every Python-3.12 platform variant uv probed (darwin, linux x86_64,
+# linux aarch64) reported "only fast-plate-ocr<=1.1.0 is available".
+#
+# The marker below makes the universal-lockfile resolution skip fast-
+# plate-ocr on Python 3.12 entirely so the rest of the install can
+# succeed across the deployment matrix. Operators who need LPR have
+# two options:
+#   1. Run the adapter on Python 3.11 (pyproject's lower bound) until
+#      upstream publishes 3.12 wheels — straightforward, the Docker
+#      image can pin to 3.11 in its base image.
+#   2. Cross-build the wheel locally and pin via `tool.uv.sources`.
+#
+# We deliberately do NOT downgrade to fast-plate-ocr 1.x (which has
+# 3.12 wheels) because the adapter's service.py uses the 2.x API
+# (``from fast_plate_ocr import LicensePlateRecognizer``); 1.x exposed
+# a different surface.
+#
+# Once upstream ships 3.12 wheels, drop the marker.
 lpr = [
-    "fast-plate-ocr>=2.0; python_full_version < '3.12' or (sys_platform == 'linux' and platform_machine == 'x86_64')",
+    "fast-plate-ocr>=2.0; python_full_version < '3.12'",
 ]
 
 # PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
