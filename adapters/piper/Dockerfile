@@ -39,6 +39,11 @@ RUN pip install --no-cache-dir \
 #   - app.adapters.base + app.interfaces.adapter (transitive base classes)
 #   - app.utils.audio_utils + app.config (supporting helpers)
 #   - adapters.piper.* (this service)
+# Install the OpenNVR adapter SDK so ``adapters.piper.main`` can
+# import AdapterApp et al. Mirrors insightface/fast_plate_ocr.
+COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
+RUN pip install --no-cache-dir ./opennvr_adapter_sdk
+
 COPY app/__init__.py                            ./app/__init__.py
 COPY app/interfaces/                            ./app/interfaces/
 COPY app/adapters/__init__.py                   ./app/adapters/__init__.py

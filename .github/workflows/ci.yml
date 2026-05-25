@@ -14,6 +14,21 @@
 #     adapters consume it (publish-sdk.yml builds + smoke-tests the
 #     SDK in isolation; this catches integration drift between SDK
 #     and the things that use it)
+#   - Docker-image drift across ALL six SDK adapters: the smoke
+#     job builds each per-adapter Dockerfile with real deps (no
+#     stubs) in a matrix and exercises /health, /capabilities,
+#     /hardware/evaluation against the running container. Catches:
+#       * Dockerfile inline-pip-install diverging from pyproject
+#       * Missing runtime deps surfaced only at import time
+#         (we hit this in 3/5 Dockerfiles when the smoke first
+#         landed against just yolov8 — extending to the matrix
+#         catches all of them on every PR going forward)
+#       * Uvicorn lifespan / startup ordering bugs
+#       * Contract envelope drift on the read-only endpoints
+#       * Cross-adapter inconsistency on contract-required fields
+#     We deliberately do NOT exercise /infer here — that would force
+#     weights downloads (~50MB to ~990MB per adapter) on each CI run.
+#     The pytest matrix already covers /infer paths with stubs.
 #
 # What this does NOT do (kept in publish-sdk.yml):
 #   - SDK sdist + wheel build
@@ -59,3 +74,273 @@ jobs:
         run: uv sync --extra dev
       - name: Run pytest
         run: uv run pytest tests/ -q
+
+  # ── Docker smoke (matrix over all 6 SDK adapters) ────────────────
+  # Builds + boots each per-adapter Docker image and hits the
+  # read-only contract endpoints. Catches the class of bugs the
+  # pytest matrix can't:
+  #   * Dockerfile inline pip-install drift vs pyproject (e.g. the
+  #     python-multipart bug we hit on a fresh venv install).
+  #   * SDK install missing from an adapter Dockerfile — we hit
+  #     this in THREE Dockerfiles before this smoke layer landed.
+  #   * Container-level startup ordering / lifespan failures.
+  #   * Contract envelope drift on /capabilities + /hardware/evaluation.
+  #   * Cross-adapter inconsistency (one adapter declaring fields
+  #     the SDK contract requires that another misses).
+  #
+  # Matrix layout: one job per adapter, ``fail-fast: false`` so a
+  # broken adapter surfaces its name directly in the PR check list
+  # rather than masking the others. Each job runs on its own
+  # GitHub-hosted VM so they parallelise; wall time = slowest
+  # single build (BLIP, ~5-8min cold because of torch + transformers).
+  #
+  # We deliberately do NOT exercise /infer here — that would force
+  # weights downloads (~50MB to ~990MB depending on the adapter)
+  # on every CI run. The pytest matrix already covers /infer paths
+  # with stubbed weights.
+  smoke:
+    name: smoke (${{ matrix.adapter }} docker)
+    runs-on: ubuntu-latest
+    # 25 min budget per adapter: BLIP is the long pole — image build
+    # (torch CPU wheel + transformers + tokenizers) is ~5-8 min, then
+    # lifespan blocks on a ~990MB HuggingFace download on first boot
+    # (1-3 min on GitHub-hosted runners). Adapters that need smaller
+    # weights or have local-only loading complete in 4-6 min total.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adapter: yolov8
+            dockerfile_dir: yolov8
+            port: 9002
+            expected_task: object_detection
+          - adapter: piper
+            dockerfile_dir: piper
+            port: 9001
+            expected_task: speech_synthesis
+          - adapter: whisper
+            dockerfile_dir: whisper
+            port: 9003
+            expected_task: audio_transcription
+          - adapter: fast-plate-ocr
+            dockerfile_dir: fast_plate_ocr
+            port: 9004
+            expected_task: license_plate_recognition
+          - adapter: insightface
+            dockerfile_dir: insightface
+            port: 9005
+            expected_task: face_detection
+          - adapter: blip
+            dockerfile_dir: blip
+            port: 9006
+            expected_task: scene_caption
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.adapter }} adapter image
+        # Use the existing per-adapter Dockerfile (not the monolithic
+        # root Dockerfile) — that's what production deploys reference
+        # in the example READMEs.
+        run: |
+          docker build \
+            -f adapters/${{ matrix.dockerfile_dir }}/Dockerfile \
+            -t opennvr/${{ matrix.adapter }}-adapter:smoke \
+            .
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name ${{ matrix.adapter }}-smoke \
+            -p ${{ matrix.port }}:${{ matrix.port }} \
+            -e OPENNVR_ADAPTER_TOKEN=smoke-test-token \
+            opennvr/${{ matrix.adapter }}-adapter:smoke
+
+      - name: Wait for /health 200 (HTTP-level boot)
+        # /health returns 200 regardless of model load state — but
+        # only AFTER the FastAPI lifespan completes. The SDK calls
+        # ``service.load()`` SYNCHRONOUSLY inside lifespan startup,
+        # which means uvicorn doesn't accept TCP connections until
+        # weights are loaded (or load() catches and sets ERROR).
+        #
+        # This matters here because the smoke runs without weight
+        # mounts:
+        #   * piper: ``ensure_model_loaded`` raises FileNotFoundError
+        #     immediately (no auto-download), load() catches → ERROR.
+        #     Lifespan completes in <1s.
+        #   * yolov8 / whisper / fast-plate-ocr: auto-download small
+        #     weights (yolov8n.pt ~6MB; faster-whisper tiny ~75MB;
+        #     fast-plate-ocr ONNX ~10MB). Lifespan completes in
+        #     30-90s on GitHub-hosted runners.
+        #   * insightface: auto-downloads buffalo_l (~280MB) from
+        #     the insightface CDN. Lifespan ~60-120s.
+        #   * blip: auto-downloads ~990MB from HuggingFace
+        #     (BlipProcessor + BlipForConditionalGeneration weights
+        #     + tokenizer). Lifespan ~90-180s.
+        #
+        # The 300s ceiling is generous to absorb cold-CDN variance.
+        # We don't expect a healthy adapter to need anywhere near it
+        # — exceeding 60s consistently for one adapter is a signal
+        # to revisit the load() strategy or pre-bake a weights layer.
+        run: |
+          for i in $(seq 1 300); do
+            if curl -sf http://localhost:${{ matrix.port }}/health > /dev/null; then
+              echo "✓ http reachable after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::container did not become reachable in 300s"
+          docker logs ${{ matrix.adapter }}-smoke || true
+          exit 1
+
+      - name: Verify /health body shape
+        # Verifies envelope contract: HTTP 200 + JSON body with a
+        # ``status`` field that's one of the three valid enum values
+        # (``ok`` / ``loading`` / ``error``). We deliberately accept
+        # ``error`` here because the smoke runs without a
+        # model_weights mount — for adapters whose load() requires
+        # local weights and has no auto-download (e.g. piper), the
+        # canonical state in this configuration IS ``error``. The
+        # /capabilities and /hardware/evaluation steps below catch
+        # envelope-shape regressions on those endpoints; this step's
+        # job is just to confirm /health is serving a parseable body
+        # with the documented field set.
+        #
+        # If we ever start mounting weights in smoke (or pre-baking
+        # them into the image), tighten this back to ``ok`` /
+        # ``loading`` only.
+        run: |
+          BODY=$(curl -s -w '\n__HTTP__:%{http_code}' \
+            http://localhost:${{ matrix.port }}/health)
+          STATUS=$(printf '%s' "$BODY" | sed -n 's/^__HTTP__://p')
+          JSON=$(printf '%s' "$BODY" | sed '$d')
+          echo "HTTP status: $STATUS"
+          echo "Body: $JSON"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::/health returned HTTP $STATUS, expected 200"
+            exit 1
+          fi
+          # Pass the JSON through an env var, NOT a pipe. When you
+          # write ``somecmd | python3 - <<'PY'`` the heredoc steals
+          # stdin from the pipe — python reads the SCRIPT from the
+          # heredoc (because of the ``-``), and by the time the
+          # script's ``sys.stdin.read()`` runs, stdin is at EOF and
+          # returns ``""``. ``json.loads('')`` then raises with
+          # "Expecting value: line 1 column 1 (char 0)" — exactly the
+          # symptom this step had pre-fix. Env-var-and-heredoc is
+          # the standard fix.
+          JSON_BODY="$JSON" python3 <<'PY'
+          import json, os
+          body = json.loads(os.environ["JSON_BODY"])
+          status = body.get("status")
+          assert status in ("ok", "loading", "error"), (
+              f"/health.status was {status!r}; expected one of "
+              f"'ok' / 'loading' / 'error' per §3.1 contract."
+          )
+          print(f"✓ /health.status = {status}")
+          PY
+
+      - name: Verify /capabilities returns a valid §3 contract envelope
+        # Read-only endpoint, no auth required during the 5min grace
+        # window after startup (per AuthAndCorrelationMiddleware).
+        # We send the token anyway — same shape as a real KAI-C poll.
+        #
+        # CapabilitiesResponse shape (from opennvr_adapter_sdk/contract.py):
+        #   - adapter: AdapterInfo  (name/version/vendor/license/...)
+        #   - model: ModelInfo
+        #   - endpoints: EndpointsInfo  (infer / infer_stream / extra)
+        #   - tasks_advertised: list[str]
+        #   - permissions: Permissions
+        #   - scheduling: Scheduling
+        #   - cost: Cost
+        env:
+          EXPECTED_TASK: ${{ matrix.expected_task }}
+        run: |
+          BODY=$(curl -s -w '\n__HTTP__:%{http_code}' \
+            -H "Authorization: Bearer smoke-test-token" \
+            http://localhost:${{ matrix.port }}/capabilities)
+          STATUS=$(printf '%s' "$BODY" | sed -n 's/^__HTTP__://p')
+          JSON=$(printf '%s' "$BODY" | sed '$d')
+          echo "HTTP status: $STATUS"
+          echo "Body: $JSON"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::/capabilities returned HTTP $STATUS, expected 200"
+            exit 1
+          fi
+          # See the /health step above for why we pass JSON_BODY as
+          # an env var instead of piping into stdin.
+          JSON_BODY="$JSON" python3 <<'PY'
+          import json, os
+          cfg = json.loads(os.environ["JSON_BODY"])
+          top_level = ("adapter", "model", "endpoints", "tasks_advertised",
+                       "permissions", "scheduling", "cost")
+          for key in top_level:
+              assert key in cfg, f"missing {key!r} in /capabilities response"
+          adapter = cfg["adapter"]
+          for key in ("name", "version", "vendor", "license",
+                      "supported_contract_versions"):
+              assert key in adapter, f"missing adapter.{key} in /capabilities"
+          tasks = cfg["tasks_advertised"]
+          assert isinstance(tasks, list), "tasks_advertised must be a list"
+          # Each adapter advertises a canonical task name; the matrix
+          # entry supplies the expected one via $EXPECTED_TASK so we
+          # catch a refactor that drops the task ID or replaces it
+          # with garbage — which would pass a generic non-empty
+          # check but break every caller relying on the name.
+          expected = os.environ["EXPECTED_TASK"]
+          assert expected in tasks, (
+              f"expected {expected!r} in tasks_advertised; got {tasks}"
+          )
+          print(f"✓ /capabilities ok: {adapter['name']}=={adapter['version']} "
+                f"tasks={tasks}")
+          PY
+
+      - name: Verify /hardware/evaluation returns a valid envelope
+        # Smoke runs without a model_weights mount, so the adapter's
+        # hardware-evaluation may legitimately report any of the
+        # three documented verdicts — typically ``warn`` (still
+        # loading) or ``blocked`` (weights not found / download
+        # failed). The goal of this step is to confirm the endpoint
+        # serves a well-formed §3 envelope, not to assert the
+        # adapter is production-ready. A regression that broke
+        # even the BLOCKED-with-reason path would still surface
+        # because ``reasoning`` is required and validated
+        # server-side.
+        run: |
+          BODY=$(curl -s -w '\n__HTTP__:%{http_code}' \
+            -H "Authorization: Bearer smoke-test-token" \
+            http://localhost:${{ matrix.port }}/hardware/evaluation)
+          STATUS=$(printf '%s' "$BODY" | sed -n 's/^__HTTP__://p')
+          JSON=$(printf '%s' "$BODY" | sed '$d')
+          echo "HTTP status: $STATUS"
+          echo "Body: $JSON"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::/hardware/evaluation returned HTTP $STATUS, expected 200"
+            exit 1
+          fi
+          # See the /health step above for why we pass JSON_BODY as
+          # an env var instead of piping into stdin.
+          JSON_BODY="$JSON" python3 <<'PY'
+          import json, os
+          body = json.loads(os.environ["JSON_BODY"])
+          verdict = body.get("verdict")
+          assert verdict in ("ok", "warn", "blocked"), \
+              f"unexpected verdict {verdict!r}; expected ok/warn/blocked"
+          assert body.get("reasoning"), (
+              "reasoning must be present and non-empty per §3 contract"
+          )
+          assert "checked_at" in body, "missing checked_at timestamp"
+          print(f"✓ /hardware/evaluation ok: verdict={verdict} "
+                f"reasoning={body['reasoning'][:80]!r}")
+          PY
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker logs ${{ matrix.adapter }}-smoke || true
+
+      - name: Teardown
+        if: always()
+        run: |
+          docker rm -f ${{ matrix.adapter }}-smoke || true
+          docker image rm opennvr/${{ matrix.adapter }}-adapter:smoke || true

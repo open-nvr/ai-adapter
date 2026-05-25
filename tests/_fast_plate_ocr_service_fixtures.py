@@ -53,7 +53,14 @@ def install_fake_fast_plate_ocr(model_file_path: Path | None = None):
                 # Service looks for ``model_path`` first; honour that.
                 self.model_path = str(model_file_path)
 
-        def run(self, image_bytes, *, return_confidence: bool = False):
+        # Match the real LicensePlateRecognizer.run signature in
+        # fast-plate-ocr 1.x: ``source`` is ndarray-or-path, NOT
+        # bytes. The adapter decodes request bytes via cv2.imdecode
+        # before invoking run(), so what arrives here is a numpy
+        # array. We stash it for tests that want to assert on
+        # input shape; the canned return value is independent.
+        def run(self, source, *, return_confidence: bool = False):
+            _FakeLicensePlateRecognizer.last_run_source = source
             text, conf = _FakeLicensePlateRecognizer.next_output
             if return_confidence:
                 return [(text, conf)]
@@ -66,20 +73,22 @@ def install_fake_fast_plate_ocr(model_file_path: Path | None = None):
 
 
 def _tiny_jpeg_bytes() -> bytes:
-    """Generate a small valid-ish JPEG byte string for tests.
+    """Generate a real-decodable JPEG via Pillow.
 
-    The fake recognizer ignores image contents, but request validation
-    (multipart parsing, body-size checks) may inspect leading bytes,
-    so we ship a well-formed JPEG marker prefix instead of garbage.
+    The fake recognizer ignores image contents, but the service path
+    now decodes the request body via ``cv2.imdecode`` BEFORE calling
+    the recognizer (since fast-plate-ocr 1.x's API takes ndarrays,
+    not bytes). A garbage JPEG-marker-prefix would fail the decode
+    and return TRANSPORT_ERROR before the recognizer ever ran.
+    Synthesising a tiny valid JPEG via Pillow keeps the decode path
+    exercised and keeps the test focused on the recognizer flow.
     """
-    # JFIF header + minimal SOI/EOI markers. Not a renderable image,
-    # but the bytes parse as a JPEG container far enough for HTTP
-    # bodies to round-trip.
-    return (
-        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
-        b"\xff\xdb\x00\x43\x00" + b"\x08" * 64
-        + b"\xff\xd9"
-    )
+    from PIL import Image  # core project dep; opencv-python's installed too
+
+    img = Image.new("RGB", (64, 32), (180, 180, 180))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
 
 
 @pytest.fixture

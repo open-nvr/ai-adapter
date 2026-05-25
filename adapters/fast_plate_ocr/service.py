@@ -247,10 +247,34 @@ class FastPlateOcrService(AdapterService):
                 http_status=400,
             )
 
+        # Decode raw bytes → numpy array. ``fast-plate-ocr`` 1.x's
+        # ``LicensePlateRecognizer.run()`` only accepts
+        # ``str | list[str] | numpy.ndarray | list[numpy.ndarray]`` —
+        # passing the request body bytes directly would crash inside
+        # the library with an opaque AttributeError. The decode also
+        # gives us a clean place to surface "invalid image bytes" as
+        # a typed TRANSPORT_ERROR envelope rather than letting it
+        # masquerade as a model error.
+        #
+        # cv2.IMREAD_COLOR gives a 3-channel HxWx3 BGR array; fast-
+        # plate-ocr's PlateConfig handles the colour-mode conversion
+        # internally (the library docstring says it accepts grayscale
+        # OR colour and converts per the loaded config).
+        try:
+            image_array = _decode_image_bytes(image_bytes)
+        except _ImageDecodeError as exc:
+            raise ServiceError(
+                ErrorCategory.TRANSPORT_ERROR,
+                code="invalid_image",
+                message=str(exc),
+                transient=False,
+                http_status=400,
+            ) from exc
+
         started = time.monotonic()
         try:
             raw = self._recognizer.run(  # type: ignore[union-attr]
-                image_bytes, return_confidence=True
+                image_array, return_confidence=True
             )
         except Exception as exc:
             logger.exception("fast-plate-ocr inference failed")
@@ -413,3 +437,48 @@ def _recognizer_model_path(recognizer: Any) -> str | None:
         if isinstance(value, str):
             return value
     return None
+
+
+# ── Image decoding ─────────────────────────────────────────────────
+
+
+class _ImageDecodeError(Exception):
+    """Raised when request body bytes can't be decoded as an image.
+
+    Separate from ``ServiceError`` so the call site can wrap it with
+    the right ``ErrorCategory.TRANSPORT_ERROR`` envelope — keeps the
+    decode logic itself dependency-free for easier unit testing."""
+
+
+def _decode_image_bytes(image_bytes: bytes):
+    """Decode request body bytes into a 3-channel BGR ``numpy.ndarray``.
+
+    fast-plate-ocr 1.x's ``LicensePlateRecognizer.run()`` only accepts
+    paths or numpy arrays, NOT raw bytes. We decode here so the
+    adapter contract (image bytes in the request body) matches what
+    the library actually consumes. ``cv2.imdecode`` handles JPEG /
+    PNG / WebP / BMP via OpenCV's built-in codecs — same dependency
+    surface the InsightFace and YOLOv8 adapters already use, so no
+    new install footprint.
+    """
+    # Lazy import — keeps the module importable in test environments
+    # that haven't installed opencv-python yet (same pattern the
+    # InsightFace service uses).
+    import cv2  # type: ignore[import-not-found]
+    import numpy as np
+
+    if not image_bytes:
+        raise _ImageDecodeError(
+            "empty request body — fast-plate-ocr expects a plate "
+            "crop in the request body (multipart 'frame' field or "
+            "JSON 'frame_b64')"
+        )
+
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if image is None:
+        raise _ImageDecodeError(
+            "could not decode image bytes — expected JPEG, PNG, "
+            "WebP, or BMP (opencv handles the codec sniff)"
+        )
+    return image

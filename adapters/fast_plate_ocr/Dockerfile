@@ -32,13 +32,20 @@ WORKDIR /app
 
 # Versions track pyproject.toml exactly. fast-plate-ocr brings its
 # own onnxruntime so we don't pin it here.
+#
+# fast-plate-ocr is pinned to >=1.1.0 because 2.x doesn't exist on
+# PyPI — latest published is 1.1.0 (verified via the PyPI JSON
+# index at https://pypi.org/pypi/fast-plate-ocr/json). An earlier
+# pin against >=2.0 broke the smoke job with "No matching
+# distribution found" and won't unblock until upstream publishes a
+# 2.x release. Matches the pyproject.toml [lpr] extra exactly.
 RUN pip install --no-cache-dir \
         fastapi==0.127.0 \
         uvicorn==0.40.0 \
         pydantic==2.12.5 \
         httpx==0.28.1 \
         python-multipart==0.0.20 \
-        "fast-plate-ocr>=2.0"
+        "fast-plate-ocr>=1.1.0"
 
 COPY adapters/fast_plate_ocr/  ./adapters/fast_plate_ocr/
 

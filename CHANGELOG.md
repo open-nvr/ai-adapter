@@ -46,14 +46,32 @@ startup:
   via REST without a shared volume. Embeddings live in a JSON-file
   face DB at `OPENNVR_INSIGHTFACE_FACE_DB`; raw face images are never
   persisted.
-- **BLIP** — scene captioning.
+- **BLIP** — scene captioning via HuggingFace
+  ``Salesforce/blip-image-captioning-base`` (default; ``-large`` available
+  by env override). SDK-based contract-compliant adapter — accepts JPEG /
+  PNG / WebP / BMP request bodies and returns ``result.caption``. The
+  camera-agent example's ``describe_camera`` tool calls this adapter via
+  KAI-C. CPU-friendly (~2-4s/image on a modern 4-core); GPU-accelerated
+  when ``torch.cuda.is_available()``. Operators with strict sovereignty
+  pre-bake the model into the image or mount a populated HF cache.
 - **HuggingFace** — cloud inference proxy.
 - **Whisper** — speech-to-text via faster-whisper (CPU or GPU).
-- **Piper** — text-to-speech via ONNX voices.
+- **Piper** — text-to-speech via ONNX voices. Default response shape
+  returns ``audio_uri`` (the internal ``opennvr://audio/...`` scheme,
+  suitable for shared-volume deployments). Callers without a shared
+  filesystem — e.g. the camera-agent example's Pipecat TTS service —
+  send ``inline: true`` in the request body to also receive
+  ``audio_b64`` inline alongside the URI.
 - **fast-plate-ocr** — license-plate recognition (Apache-2.0 upstream,
   ONNX, CPU-only, plate-specific). New `lpr` install extra; single-
   purpose OCR adapter designed to be chained downstream of YOLOv8 by
-  the `license-plate-recognition` example app on OpenNVR.
+  the `license-plate-recognition` example app on OpenNVR. The adapter
+  decodes request body bytes (JPEG / PNG / WebP / BMP via OpenCV)
+  into a numpy array before invoking
+  `LicensePlateRecognizer.run()`, since the upstream library's 1.x
+  API accepts paths or ndarrays but not raw bytes. Garbage bytes
+  surface as a typed `TRANSPORT_ERROR(invalid_image)` envelope with
+  HTTP 400.
 - **Ollama** — local LLM access over HTTP. Supports the OpenAI-style
   `tools` / `tool_choice` request fields and normalises Ollama's
   native tool-call response into the OpenAI-shaped `message.tool_calls`
