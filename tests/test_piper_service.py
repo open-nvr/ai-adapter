@@ -109,6 +109,55 @@ def test_infer_happy_path_returns_InferResponse(piper_app):
     assert infer.model_name == "test-voice"
     assert infer.result["audio_uri"].startswith("opennvr://audio/tts/")
     assert infer.result["sample_rate"] == 22050
+    # Default mode: NO inline audio_b64 — keeps the response payload
+    # small for shared-volume callers.
+    assert "audio_b64" not in infer.result
+
+
+def test_infer_inline_audio_returns_b64_alongside_uri(piper_app):
+    """Streaming-friendly clients (camera-agent's Pipecat TTS service)
+    that don't share a filesystem with the adapter need the audio
+    bytes returned inline. ``inline: true`` adds an ``audio_b64``
+    field next to the standard ``audio_uri``."""
+    import base64
+    response = piper_app.post(
+        "/infer",
+        json={"text": "Inline mode", "inline": True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    infer = InferResponse.model_validate(body)
+    # Both URI and inline payload present — non-inline callers keep
+    # using audio_uri, inline callers get audio_b64 too.
+    assert infer.result["audio_uri"].startswith("opennvr://audio/tts/")
+    assert "audio_b64" in infer.result
+    decoded = base64.b64decode(infer.result["audio_b64"])
+    # WAV files start with the RIFF magic — sanity check we got real
+    # audio bytes, not an error string base64-encoded.
+    assert decoded[:4] == b"RIFF", (
+        f"expected RIFF WAV header; got {decoded[:8]!r}"
+    )
+
+
+def test_infer_inline_alias_return_audio_inline(piper_app):
+    """Both ``inline`` and ``return_audio_inline`` are accepted —
+    we picked up the second name during review and don't want to
+    break any operator client that latched onto the early name."""
+    response = piper_app.post(
+        "/infer",
+        json={"text": "Alias test", "return_audio_inline": True},
+    )
+    body = response.json()
+    assert "audio_b64" in body["result"]
+
+
+def test_infer_inline_false_or_missing_omits_b64(piper_app):
+    response = piper_app.post(
+        "/infer",
+        json={"text": "Default mode", "inline": False},
+    )
+    body = response.json()
+    assert "audio_b64" not in body["result"]
 
 
 def test_infer_rejects_missing_text(piper_app):

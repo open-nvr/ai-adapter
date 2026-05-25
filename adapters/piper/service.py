@@ -193,6 +193,30 @@ class PiperService(AdapterService):
         else:
             result = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw)
 
+        # Optional inline-audio mode. The default response shape returns
+        # ``audio_uri`` (the internal ``opennvr://audio/...`` scheme) so
+        # operators with shared-volume deployments can stream the file
+        # directly without ballooning the response payload. Callers that
+        # don't have a shared volume — the camera-agent example, which
+        # uses Pipecat's TTS service over the network — set
+        # ``inline: true`` (or ``return_audio_inline: true``) in the
+        # request body. The adapter then base64-encodes the generated
+        # WAV alongside the URI so both consumer styles work from one
+        # endpoint.
+        #
+        # Payload-size posture: Piper at 22050 Hz × 16-bit mono produces
+        # ~44 KB/s of audio. The ``MAX_TEXT_CHARS`` input cap (10000
+        # chars) bounds the worst case at roughly 5-8 MB of base64
+        # alongside the JSON envelope. That's under FastAPI/Starlette's
+        # default response limits but above some reverse-proxy
+        # defaults — operators behind nginx / Traefik with tight
+        # ``client_max_body_size`` may need to raise it for the
+        # camera-agent path. Documented in the example README.
+        if _wants_inline_audio(payload):
+            audio_b64 = _read_audio_inline(result, self._adapter)
+            if audio_b64 is not None:
+                result["audio_b64"] = audio_b64
+
         return InferResponse(
             model_name=self._default_voice,
             model_version=f"piper-tts/{self._default_voice}",
@@ -223,3 +247,67 @@ class PiperService(AdapterService):
             for chunk in iter(lambda: fh.read(65536), b""):
                 digest.update(chunk)
         return f"sha256:{digest.hexdigest()}"
+
+
+# ── Inline-audio helpers ───────────────────────────────────────────
+
+
+def _wants_inline_audio(payload: dict[str, Any]) -> bool:
+    """Truthy if the caller asked for ``audio_b64`` inline.
+
+    Accepts both ``inline`` and ``return_audio_inline`` because the
+    canonical name moved during review and we don't want to break
+    pre-existing operator clients that picked up the early field
+    name from the README draft. Standard Python truthy semantics
+    on the parsed JSON value.
+    """
+    for key in ("inline", "return_audio_inline", "audio_inline"):
+        if key in payload and bool(payload[key]):
+            return True
+    return False
+
+
+def _read_audio_inline(
+    result: dict[str, Any], adapter: Any,
+) -> str | None:
+    """Base64-encode the WAV the legacy adapter just wrote.
+
+    Resolve the file path from the adapter's response. The adapter
+    surfaces it under ``audio_uri`` (the ``opennvr://audio/...``
+    scheme) and we resolve via ``resolve_audio_uri`` to a real
+    filesystem path. Returns ``None`` if the file isn't there
+    (rare — the adapter just wrote it; mostly a defensive guard
+    against test fixtures or odd race conditions).
+    """
+    import base64
+    audio_uri = result.get("audio_uri")
+    if not isinstance(audio_uri, str) or not audio_uri:
+        return None
+    # Late import — keeps the legacy ``app/`` dependency localised
+    # so a future de-coupling cleanup only has to touch this helper.
+    try:
+        from app.utils.audio_utils import resolve_audio_uri
+    except Exception:
+        logger.exception("piper inline: could not import resolve_audio_uri")
+        return None
+    try:
+        path = resolve_audio_uri(audio_uri)
+    except Exception:
+        logger.exception(
+            "piper inline: could not resolve audio_uri %r", audio_uri
+        )
+        return None
+    if not os.path.isfile(path):
+        logger.warning(
+            "piper inline: resolved path %r does not exist (adapter "
+            "may have written it elsewhere)", path,
+        )
+        return None
+    try:
+        with open(path, "rb") as fh:
+            return base64.b64encode(fh.read()).decode("ascii")
+    except Exception:
+        logger.exception(
+            "piper inline: could not read audio file %r", path
+        )
+        return None
