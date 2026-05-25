@@ -29,13 +29,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# faster-whisper>=1.1.0 (matching pyproject.toml [stt] extra) so the
+# transitive ``av`` dep is unpinned and pip can pick a recent PyAV
+# (currently 17.x) that has cp311-linux-x86_64 manylinux wheels.
+# faster-whisper 1.0.0 / 1.0.1 pinned ``av==11.*`` and av 11.0.0 ships
+# only a source tarball (no binary wheels), so pip falls back to a
+# from-source build that needs pkg-config + libav*-dev headers we
+# don't install here. The smoke job failed with "pkg-config is
+# required for building PyAV" before this bump.
 RUN pip install --no-cache-dir \
         fastapi==0.127.0 \
         uvicorn==0.40.0 \
         pydantic==2.12.5 \
         httpx==0.28.1 \
         python-multipart==0.0.20 \
-        faster-whisper==1.0.0
+        "faster-whisper>=1.1.0"
 
 # Install the OpenNVR adapter SDK so ``adapters.whisper.main`` can
 # import AdapterApp et al. Mirrors insightface/fast_plate_ocr.
