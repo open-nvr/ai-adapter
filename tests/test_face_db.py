@@ -76,13 +76,20 @@ def test_best_match_higher_similarity_still_wins_over_smaller_id() -> None:
 
 def test_best_match_below_threshold_returns_none() -> None:
     db = FaceDB()
+    # Concentrate alice's weight on axis 0; query concentrates on
+    # axis 3. Dot product = 4 * (1.0 * 0.1) / (norms) — well below
+    # 0.99 cosine similarity. We hard-code these instead of using
+    # ``_make_unit_embedding`` because that helper's mod-7 trick
+    # aliases distant seeds back onto the same vector
+    # (``_make_unit_embedding(99)`` == ``_make_unit_embedding(1)``
+    # because 99 % 7 == 1), which would silently invalidate the
+    # threshold check.
     db.register(
         person_id="alice",
         name="Alice",
-        embedding=_make_unit_embedding(1),
+        embedding=[1.0, 0.1, 0.1, 0.1],
     )
-    # A query orthogonal-ish to alice should score below a high threshold.
-    other = _make_unit_embedding(99)
+    other = [0.1, 0.1, 0.1, 1.0]
     assert db.best_match(other, threshold=0.99) is None
 
 

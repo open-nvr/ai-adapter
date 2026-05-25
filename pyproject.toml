@@ -179,3 +179,18 @@ torchvision = { index = "pytorch-cpu" }
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+# ── Pytest config ──────────────────────────────────────────────────────────────
+# The project ships several top-level packages (``app``, ``adapters``,
+# ``conformance``, ``opennvr_adapter_sdk``) that live at the repo root.
+# Without a ``[build-system]`` + ``[tool.hatch.build.targets.wheel]``
+# packages declaration, ``uv sync`` installs the declared dependencies
+# but does NOT install the project's own code as an importable
+# package — so ``uv run pytest`` can't find ``app.utils.loader`` from
+# tests/conftest.py. Adding the repo root to pythonpath here is the
+# minimum fix; a proper hatch/setuptools packaging declaration is a
+# separate (larger) cleanup.
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
