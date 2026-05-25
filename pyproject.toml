@@ -18,6 +18,16 @@ dependencies = [
     "pillow==12.0.0",
     "numpy==1.26.4",
     "opencv-python==4.10.0.84",
+    # Required by FastAPI for any multipart/form-data route. Every
+    # adapter that accepts image/audio body via the SDK's body parser
+    # (insightface /faces/register + every /infer with multipart) and
+    # every conformance test that POSTs multipart hits the SDK's
+    # ``await request.form()`` call which assert-raises without this
+    # package. Not a transitive dep of fastapi as of 0.127, even
+    # though many older installs happened to drag it in via Starlette.
+    # Pin per FastAPI's own minimum:
+    #   https://fastapi.tiangolo.com/tutorial/request-forms-and-files/
+    "python-multipart>=0.0.7",
 ]
 
 # ── Optional adapter dependency groups ────────────────────────────────────────
@@ -98,8 +108,50 @@ tts = [
 # fast-plate-ocr license-plate recognition adapter (fast_plate_ocr_adapter).
 # Brings its own onnxruntime; weights (~3 MB per bundle) are downloaded on
 # first load() and cached locally. CPU-only — no torch needed.
+#
+# Python-version marker: fast-plate-ocr 2.x publishes wheels for Python
+# 3.11 across all supported platforms (Linux x86_64 + aarch64, macOS),
+# but as of 2026-05 has NOT shipped any Python 3.12 wheels. Empirically
+# verified by the universal-resolve failure we saw on the CI matrix:
+# every Python-3.12 platform variant uv probed (darwin, linux x86_64,
+# linux aarch64) reported "only fast-plate-ocr<=1.1.0 is available".
+#
+# The marker below makes the universal-lockfile resolution skip fast-
+# plate-ocr on Python 3.12 entirely so the rest of the install can
+# succeed across the deployment matrix. Operators who need LPR have
+# two options:
+#   1. Run the adapter on Python 3.11 (pyproject's lower bound) until
+#      upstream publishes 3.12 wheels — straightforward, the Docker
+#      image can pin to 3.11 in its base image.
+#   2. Cross-build the wheel locally and pin via `tool.uv.sources`.
+#
+# Empirically verified against PyPI: the LATEST published version of
+# fast-plate-ocr is 1.1.0 — there is no 2.x release. The previous
+# `>=2.0` pin was speculative against an unreleased 2.x API and made
+# the universal lockfile resolution unsatisfiable on every platform
+# (uv kept correctly reporting "only fast-plate-ocr<=1.1.0 is
+# available"). Verified via the PyPI JSON API:
+#   https://pypi.org/pypi/fast-plate-ocr/json
+# Use `>=1.1.0` so 1.1.0 satisfies today and any future 2.x ships
+# naturally if/when upstream releases it.
+#
+# KNOWN ADAPTER GAP — TODO before LPR ships end-to-end:
+# adapters/fast_plate_ocr/service.py:252 calls
+# ``self._recognizer.run(image_bytes, return_confidence=True)`` with
+# raw bytes. fast-plate-ocr 1.1.0's ``run()`` accepts
+# ``str | list[str] | numpy.ndarray | list[numpy.ndarray]`` only,
+# NOT raw bytes. The adapter needs ``cv2.imdecode`` (or PIL.Image →
+# numpy array) before passing to ``run()`` — see how the InsightFace
+# adapter handles the same body shape. Tracked separately; the CI
+# fix below only addresses the universal-resolve break.
+#
+# CI is unaffected by the adapter gap above: CI runs
+# ``uv sync --extra dev`` (no [lpr]), and the fast-plate-ocr adapter
+# tests stub the recognizer entirely via
+# tests/_fast_plate_ocr_service_fixtures.py so they exercise the
+# wrapper logic without touching real fast-plate-ocr code.
 lpr = [
-    "fast-plate-ocr>=2.0",
+    "fast-plate-ocr>=1.1.0",
 ]
 
 # PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
@@ -137,3 +189,18 @@ torchvision = { index = "pytorch-cpu" }
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+# ── Pytest config ──────────────────────────────────────────────────────────────
+# The project ships several top-level packages (``app``, ``adapters``,
+# ``conformance``, ``opennvr_adapter_sdk``) that live at the repo root.
+# Without a ``[build-system]`` + ``[tool.hatch.build.targets.wheel]``
+# packages declaration, ``uv sync`` installs the declared dependencies
+# but does NOT install the project's own code as an importable
+# package — so ``uv run pytest`` can't find ``app.utils.loader`` from
+# tests/conftest.py. Adding the repo root to pythonpath here is the
+# minimum fix; a proper hatch/setuptools packaging declaration is a
+# separate (larger) cleanup.
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"

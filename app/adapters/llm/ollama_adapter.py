@@ -15,21 +15,59 @@ don't need an LLM pay zero install cost.
 Input shape (either ``messages`` or ``prompt`` is required):
     {
         "task": "chat_completion",
-        "messages": [{"role": "system"|"user"|"assistant", "content": "..."}],
+        "messages": [{"role": "system"|"user"|"assistant"|"tool", "content": "..."}],
         "prompt": "...",                 # shortcut → [{"role":"user","content":prompt}]
         "system": "You are...",          # optional system prompt prepended
         "model": "llama3.2:3b",          # optional override of adapter default
         "temperature": 0.7,              # optional
         "max_tokens": 512,               # optional
         "stop": ["</end>"],              # optional list of stop sequences
+
+        # ── Tool calling (OpenAI-compatible) ──
+        # Optional. When provided, the response may carry
+        # ``message.tool_calls`` instead of plain text, and
+        # ``finish_reason`` is set to ``"tool_calls"``. The caller
+        # executes the tools, appends the results as additional
+        # messages with ``role: "tool"``, and re-issues the request
+        # to continue the conversation.
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "describe_camera",
+                    "description": "Return a one-sentence scene description.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "camera_id": {"type": "string"},
+                        },
+                        "required": ["camera_id"],
+                    },
+                },
+            }
+        ],
+        # Optional; "auto" lets the model decide; "none" forces text;
+        # an object {"type":"function","function":{"name":"..."}} forces
+        # a specific tool. Falls through to Ollama's native behaviour
+        # when omitted.
+        "tool_choice": "auto",
     }
+
+Tool-calling support requires an Ollama model that advertises tools
+(Llama 3.1+, Qwen 2.5+, Mistral Nemo, others — see
+https://ollama.com/blog/tool-support). On models without tool support
+Ollama silently ignores the ``tools`` field; the response is plain
+text. The adapter does not gate against this — operators choose models
+appropriately.
 
 Streaming is intentionally NOT supported at this layer — the pipeline engine
 and OpenNVR clients expect a single response blob. Streaming is a separate
 architectural change at the API boundary (see README streaming follow-up).
 """
+import json
 import logging
 import os
+import secrets
 import time
 from typing import Any, Dict, List, Optional
 
@@ -110,6 +148,18 @@ class OllamaAdapter(BaseAdapter):
         if options:
             body["options"] = options
 
+        # ── Tools (OpenAI-compatible) ──
+        # Ollama accepts the same ``tools`` shape OpenAI does, plus
+        # ``tool_choice`` for steering. We pass through only when the
+        # caller actually supplied tools so models without tool support
+        # stay on their fast path.
+        tools = input_data.get("tools")
+        if isinstance(tools, list) and tools:
+            body["tools"] = tools
+            tool_choice = input_data.get("tool_choice")
+            if tool_choice is not None:
+                body["tool_choice"] = tool_choice
+
         start_time = time.time()
         resp = self._client.post("/api/chat", json=body)
         if resp.status_code >= 400:
@@ -119,6 +169,7 @@ class OllamaAdapter(BaseAdapter):
         message = payload.get("message") or {}
         content = message.get("content", "")
         role = message.get("role", "assistant")
+        tool_calls = self._normalise_tool_calls(message.get("tool_calls"))
 
         prompt_tokens = payload.get("prompt_eval_count")
         completion_tokens = payload.get("eval_count")
@@ -126,11 +177,25 @@ class OllamaAdapter(BaseAdapter):
         if prompt_tokens is not None and completion_tokens is not None:
             total_tokens = int(prompt_tokens) + int(completion_tokens)
 
-        finish_reason = "length" if payload.get("done_reason") == "length" else "stop"
+        # Ollama's ``done_reason`` is "stop" / "length" / "load" /
+        # rarely "tool_calls"; we override to "tool_calls" if the
+        # message carries any, since that's what OpenAI-style clients
+        # branch on regardless of vendor field. Same default as before
+        # when there are no tool calls.
+        if tool_calls:
+            finish_reason = "tool_calls"
+        elif payload.get("done_reason") == "length":
+            finish_reason = "length"
+        else:
+            finish_reason = "stop"
+
+        normalised_message: Dict[str, Any] = {"role": role, "content": content}
+        if tool_calls:
+            normalised_message["tool_calls"] = tool_calls
 
         return {
             "task": "chat_completion",
-            "message": {"role": role, "content": content},
+            "message": normalised_message,
             "model": model,
             "finish_reason": finish_reason,
             "prompt_tokens": int(prompt_tokens) if prompt_tokens is not None else None,
@@ -139,6 +204,65 @@ class OllamaAdapter(BaseAdapter):
             "executed_at": int(time.time() * 1000),
             "latency_ms": int((time.time() - start_time) * 1000),
         }
+
+    @staticmethod
+    def _normalise_tool_calls(raw: Any) -> List[Dict[str, Any]]:
+        """Coerce Ollama's tool_calls payload into the OpenAI-style
+        shape Pipecat / OpenAI clients expect.
+
+        Ollama emits ``[{"function": {"name": "...", "arguments": {...}}}]``
+        without an ``id`` field and with ``arguments`` as a JSON object,
+        whereas OpenAI clients expect:
+
+            [{
+                "id": "call_...",
+                "type": "function",
+                "function": {
+                    "name": "...",
+                    "arguments": "<JSON string>",
+                },
+            }]
+
+        We:
+          * synthesise a short ``id`` so tool-result messages can refer
+            back to the call (``call_<8-hex>``);
+          * leave a missing ``id`` alone if the model already provided
+            one (some Ollama forks include it);
+          * stringify ``arguments`` as JSON when it arrives as a dict
+            (Pipecat and the OpenAI SDK both parse it back themselves);
+          * pass through string arguments untouched.
+        """
+        if not isinstance(raw, list) or not raw:
+            return []
+        out: List[Dict[str, Any]] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            func = entry.get("function") or {}
+            if not isinstance(func, dict):
+                continue
+            name = func.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            arguments = func.get("arguments", "")
+            if isinstance(arguments, (dict, list)):
+                arguments_str = json.dumps(arguments)
+            elif arguments is None:
+                arguments_str = ""
+            else:
+                arguments_str = str(arguments)
+            call_id = entry.get("id")
+            if not isinstance(call_id, str) or not call_id:
+                call_id = f"call_{secrets.token_hex(4)}"
+            out.append({
+                "id": call_id,
+                "type": entry.get("type", "function"),
+                "function": {
+                    "name": name,
+                    "arguments": arguments_str,
+                },
+            })
+        return out
 
     @staticmethod
     def _build_messages(input_data: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -164,19 +288,22 @@ class OllamaAdapter(BaseAdapter):
             "tasks": sorted(_SUPPORTED_TASKS),
             "description": "Open-source LLM chat completion via a local Ollama daemon.",
             "input_fields": {
-                "messages": {"type": "array", "description": "OpenAI-style chat messages"},
+                "messages": {"type": "array", "description": "OpenAI-style chat messages; supports role=tool for tool results"},
                 "prompt": {"type": "string", "description": "Shortcut for a single user message"},
                 "system": {"type": "string", "description": "System prompt (prepended if not in messages)"},
                 "model": {"type": "string", "description": f"Ollama model tag (default: {_DEFAULT_MODEL})"},
                 "temperature": {"type": "number"},
                 "max_tokens": {"type": "integer"},
                 "stop": {"type": "array"},
+                "tools": {"type": "array", "description": "OpenAI-style function definitions; requires a tool-capable model"},
+                "tool_choice": {"type": "string|object", "description": "'auto' | 'none' | {type:'function',function:{name}}"},
             },
             "response_fields": {
                 "message.role": {"type": "string"},
                 "message.content": {"type": "string"},
+                "message.tool_calls": {"type": "array", "description": "Present iff the model invoked tools"},
                 "model": {"type": "string"},
-                "finish_reason": {"type": "string"},
+                "finish_reason": {"type": "string", "description": "stop | length | tool_calls"},
                 "prompt_tokens": {"type": "integer"},
                 "completion_tokens": {"type": "integer"},
                 "total_tokens": {"type": "integer"},

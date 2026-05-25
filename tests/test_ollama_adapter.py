@@ -159,3 +159,295 @@ def test_env_var_overrides_config_base_url(monkeypatch, fake_httpx):
     fake_httpx()
     adapter = OllamaAdapter({"enabled": True, "base_url": "http://config-host:11434"})
     assert adapter._base_url == "http://env-host:11434"
+
+
+# ── Tool calling ───────────────────────────────────────────────────
+
+
+_TOOL_DEF = {
+    "type": "function",
+    "function": {
+        "name": "describe_camera",
+        "description": "Return a one-sentence description of what the camera sees.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "camera_id": {"type": "string"},
+            },
+            "required": ["camera_id"],
+        },
+    },
+}
+
+
+def test_tools_field_is_forwarded_to_ollama(fake_httpx):
+    """When the caller passes tools, the adapter relays them into
+    /api/chat untouched and the Ollama model decides whether to
+    invoke."""
+    ctx = fake_httpx()
+    adapter = OllamaAdapter({"enabled": True})
+    adapter.infer({
+        "task": "chat_completion",
+        "prompt": "What's at the front door?",
+        "tools": [_TOOL_DEF],
+        "tool_choice": "auto",
+    })
+    chat_call = next(c for c in ctx["client"].calls if c["path"] == "/api/chat")
+    body = chat_call["json"]
+    assert body["tools"] == [_TOOL_DEF]
+    assert body["tool_choice"] == "auto"
+
+
+def test_tools_field_is_not_forwarded_when_absent(fake_httpx):
+    """A vanilla chat_completion without tools must NOT include the
+    tools key in the upstream request — keeps tool-incapable models
+    on their fast path and the /api/chat body free of empty arrays."""
+    ctx = fake_httpx()
+    adapter = OllamaAdapter({"enabled": True})
+    adapter.infer({"task": "chat_completion", "prompt": "Hello"})
+    chat_call = next(c for c in ctx["client"].calls if c["path"] == "/api/chat")
+    assert "tools" not in chat_call["json"]
+    assert "tool_choice" not in chat_call["json"]
+
+
+def test_empty_tools_list_is_not_forwarded(fake_httpx):
+    """An empty tools list is treated the same as no tools at all."""
+    ctx = fake_httpx()
+    adapter = OllamaAdapter({"enabled": True})
+    adapter.infer({"task": "chat_completion", "prompt": "Hello", "tools": []})
+    chat_call = next(c for c in ctx["client"].calls if c["path"] == "/api/chat")
+    assert "tools" not in chat_call["json"]
+
+
+def test_tool_calls_response_is_normalised_to_openai_shape(fake_httpx):
+    """When Ollama returns a tool_calls list (no id, dict args), the
+    adapter surfaces an OpenAI-shaped list with synthesised ids and
+    JSON-stringified args. finish_reason becomes 'tool_calls'."""
+    chat_response = _FakeResponse(200, {
+        "model": "llama3.1:8b",
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {
+                    "name": "describe_camera",
+                    "arguments": {"camera_id": "front-porch"},
+                }},
+            ],
+        },
+        "done": True,
+        "done_reason": "stop",
+        "prompt_eval_count": 30,
+        "eval_count": 8,
+    })
+    ctx = fake_httpx(chat_response=chat_response)
+    adapter = OllamaAdapter({"enabled": True})
+    result = adapter.infer({
+        "task": "chat_completion",
+        "prompt": "Look at the porch",
+        "tools": [_TOOL_DEF],
+    })
+
+    assert result["finish_reason"] == "tool_calls"
+    tool_calls = result["message"]["tool_calls"]
+    assert len(tool_calls) == 1
+    call = tool_calls[0]
+    assert call["type"] == "function"
+    assert call["function"]["name"] == "describe_camera"
+    # Arguments are JSON-stringified for OpenAI / Pipecat compatibility.
+    import json as _json
+    assert _json.loads(call["function"]["arguments"]) == {"camera_id": "front-porch"}
+    # A synthetic id was injected.
+    assert call["id"].startswith("call_")
+
+
+def test_tool_calls_preserve_model_supplied_id(fake_httpx):
+    """If a model fork provides its own id, the adapter keeps it
+    instead of overwriting with a synthetic one."""
+    chat_response = _FakeResponse(200, {
+        "model": "llama3.1:8b",
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "modelsuppliedid_abc",
+                    "function": {
+                        "name": "describe_camera",
+                        "arguments": {"camera_id": "x"},
+                    },
+                },
+            ],
+        },
+        "done": True,
+    })
+    ctx = fake_httpx(chat_response=chat_response)
+    adapter = OllamaAdapter({"enabled": True})
+    result = adapter.infer({
+        "task": "chat_completion",
+        "prompt": "x",
+        "tools": [_TOOL_DEF],
+    })
+    assert result["message"]["tool_calls"][0]["id"] == "modelsuppliedid_abc"
+
+
+def test_string_arguments_pass_through(fake_httpx):
+    """Some models emit ``arguments`` as a pre-stringified JSON blob
+    already. We must not double-stringify."""
+    chat_response = _FakeResponse(200, {
+        "model": "llama3.1:8b",
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {
+                    "name": "describe_camera",
+                    "arguments": '{"camera_id":"x"}',
+                }},
+            ],
+        },
+        "done": True,
+    })
+    ctx = fake_httpx(chat_response=chat_response)
+    adapter = OllamaAdapter({"enabled": True})
+    result = adapter.infer({
+        "task": "chat_completion",
+        "prompt": "x",
+        "tools": [_TOOL_DEF],
+    })
+    args = result["message"]["tool_calls"][0]["function"]["arguments"]
+    assert args == '{"camera_id":"x"}'
+
+
+def test_plain_text_response_omits_tool_calls(fake_httpx):
+    """Even when tools were provided in the request, a plain-text
+    response (no tool_calls in message) must NOT carry tool_calls in
+    the result, and finish_reason stays 'stop'."""
+    ctx = fake_httpx()  # default chat_response is plain text
+    adapter = OllamaAdapter({"enabled": True})
+    result = adapter.infer({
+        "task": "chat_completion",
+        "prompt": "Hi",
+        "tools": [_TOOL_DEF],
+    })
+    assert "tool_calls" not in result["message"]
+    assert result["finish_reason"] == "stop"
+
+
+def test_length_finish_reason_passes_through(fake_httpx):
+    """``done_reason=length`` must surface as ``finish_reason=length``
+    when no tool_calls are present. This is the truncation signal
+    callers use to decide whether to ask for a continuation."""
+    chat_response = _FakeResponse(200, {
+        "model": "llama3.1:8b",
+        "message": {"role": "assistant", "content": "An incomplete sente"},
+        "done": True,
+        "done_reason": "length",
+    })
+    fake_httpx(chat_response=chat_response)
+    adapter = OllamaAdapter({"enabled": True})
+    result = adapter.infer({"task": "chat_completion", "prompt": "tell a long story"})
+    assert result["finish_reason"] == "length"
+
+
+def test_tool_calls_override_length_finish_reason(fake_httpx):
+    """If a model emits both tool_calls AND done_reason=length, the
+    tool_calls signal wins — callers branch on tool_calls regardless
+    of vendor-specific truncation flags."""
+    chat_response = _FakeResponse(200, {
+        "model": "llama3.1:8b",
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "describe_camera", "arguments": {"camera_id": "x"}}},
+            ],
+        },
+        "done": True,
+        "done_reason": "length",
+    })
+    fake_httpx(chat_response=chat_response)
+    adapter = OllamaAdapter({"enabled": True})
+    result = adapter.infer({
+        "task": "chat_completion", "prompt": "x", "tools": [_TOOL_DEF],
+    })
+    assert result["finish_reason"] == "tool_calls"
+
+
+def test_null_arguments_become_empty_string(fake_httpx):
+    """A null arguments field (some 1-shot tool models) must
+    normalise to '' rather than crash json.dumps or downstream
+    JSON parsers."""
+    chat_response = _FakeResponse(200, {
+        "model": "llama3.1:8b",
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "describe_camera", "arguments": None}},
+            ],
+        },
+        "done": True,
+    })
+    fake_httpx(chat_response=chat_response)
+    adapter = OllamaAdapter({"enabled": True})
+    result = adapter.infer({
+        "task": "chat_completion", "prompt": "x", "tools": [_TOOL_DEF],
+    })
+    assert result["message"]["tool_calls"][0]["function"]["arguments"] == ""
+
+
+def test_list_arguments_are_json_stringified(fake_httpx):
+    """Some models emit a list (not an object) for tool args — e.g.
+    positional rather than named. The adapter coerces to a JSON
+    string so OpenAI-style downstream code can parse it back."""
+    chat_response = _FakeResponse(200, {
+        "model": "llama3.1:8b",
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "describe_camera", "arguments": ["front-porch"]}},
+            ],
+        },
+        "done": True,
+    })
+    fake_httpx(chat_response=chat_response)
+    adapter = OllamaAdapter({"enabled": True})
+    result = adapter.infer({
+        "task": "chat_completion", "prompt": "x", "tools": [_TOOL_DEF],
+    })
+    import json as _json
+    args = result["message"]["tool_calls"][0]["function"]["arguments"]
+    assert _json.loads(args) == ["front-porch"]
+
+
+def test_tool_role_messages_are_passed_through(fake_httpx):
+    """Multi-turn flow: the caller appends tool-result messages with
+    role=tool. The adapter must not coerce or drop them."""
+    ctx = fake_httpx()
+    adapter = OllamaAdapter({"enabled": True})
+    adapter.infer({
+        "task": "chat_completion",
+        "messages": [
+            {"role": "user", "content": "What's at the porch?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_x",
+                    "type": "function",
+                    "function": {"name": "describe_camera", "arguments": '{"camera_id":"porch"}'},
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_x",
+                "content": "A brown cardboard box on the doormat.",
+            },
+        ],
+        "tools": [_TOOL_DEF],
+    })
+    chat_call = next(c for c in ctx["client"].calls if c["path"] == "/api/chat")
+    roles = [m["role"] for m in chat_call["json"]["messages"]]
+    assert roles == ["user", "assistant", "tool"]
