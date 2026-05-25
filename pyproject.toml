@@ -98,8 +98,17 @@ tts = [
 # fast-plate-ocr license-plate recognition adapter (fast_plate_ocr_adapter).
 # Brings its own onnxruntime; weights (~3 MB per bundle) are downloaded on
 # first load() and cached locally. CPU-only — no torch needed.
+#
+# Platform marker: fast-plate-ocr 2.x publishes wheels for Python 3.11 on
+# every platform AND for Linux x86_64 on Python 3.12, but as of 2026-05
+# the macOS-3.12 and Linux-aarch64-3.12 wheels don't exist. The marker
+# below makes the universal-lockfile resolution skip fast-plate-ocr on
+# those two combos so the rest of the install can succeed. Operators on
+# the excluded combos who want LPR have two options: (1) cross-build or
+# wait for the upstream wheel; (2) run the adapter image in Docker
+# against an x86_64 base. Documented in the LPR example README.
 lpr = [
-    "fast-plate-ocr>=2.0",
+    "fast-plate-ocr>=2.0; python_full_version < '3.12' or (sys_platform == 'linux' and platform_machine == 'x86_64')",
 ]
 
 # PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
@@ -138,22 +147,14 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
-# ── Resolution targets ─────────────────────────────────────────────────────────
-# uv resolves universally across all (Python × platform) combinations
-# by default. Some adapter extras pull packages that don't publish
-# wheels for every combination — most notably ``fast-plate-ocr`` 2.x
-# has no macOS wheel for Python 3.12 as of 2026-05, which makes the
-# universal resolve fail on the ``[lpr]`` extra even when nobody is
-# actually installing it.
-#
-# Restrict resolution to the combinations OpenNVR actually deploys
-# to: Linux (the supported server target, including the Docker
-# image) and macOS on Python 3.11 (developer laptops). Windows and
-# macOS + 3.12 developers can still ``uv sync`` against the
-# subset of extras whose wheels they need; only the universal
-# lockfile is constrained.
-[tool.uv]
-environments = [
-    "sys_platform == 'linux'",
-    "sys_platform == 'darwin' and python_full_version < '3.12'",
-]
+# ── Notes on universal resolution ──────────────────────────────────────────────
+# uv resolves the lockfile universally across all (Python × platform)
+# combinations by default. The ``[lpr]`` extra's fast-plate-ocr
+# dependency carries a marker that excludes the (platform × Python)
+# combos where no wheel is published; see the ``lpr`` block above for
+# detail. That marker keeps the universal resolve succeeding without
+# constraining the global environment list — which matters because
+# OpenNVR is intentionally aarch64-friendly (Raspberry Pi 4/5, AWS
+# Graviton, Apple Silicon Docker) and we don't want to lock those
+# users out of the broader extras matrix just because one extra has
+# patchy wheel coverage.
