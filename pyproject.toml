@@ -115,14 +115,33 @@ tts = [
 #      image can pin to 3.11 in its base image.
 #   2. Cross-build the wheel locally and pin via `tool.uv.sources`.
 #
-# We deliberately do NOT downgrade to fast-plate-ocr 1.x (which has
-# 3.12 wheels) because the adapter's service.py uses the 2.x API
-# (``from fast_plate_ocr import LicensePlateRecognizer``); 1.x exposed
-# a different surface.
+# Empirically verified against PyPI: the LATEST published version of
+# fast-plate-ocr is 1.1.0 — there is no 2.x release. The previous
+# `>=2.0` pin was speculative against an unreleased 2.x API and made
+# the universal lockfile resolution unsatisfiable on every platform
+# (uv kept correctly reporting "only fast-plate-ocr<=1.1.0 is
+# available"). Verified via the PyPI JSON API:
+#   https://pypi.org/pypi/fast-plate-ocr/json
+# Use `>=1.1.0` so 1.1.0 satisfies today and any future 2.x ships
+# naturally if/when upstream releases it.
 #
-# Once upstream ships 3.12 wheels, drop the marker.
+# KNOWN ADAPTER GAP — TODO before LPR ships end-to-end:
+# adapters/fast_plate_ocr/service.py:252 calls
+# ``self._recognizer.run(image_bytes, return_confidence=True)`` with
+# raw bytes. fast-plate-ocr 1.1.0's ``run()`` accepts
+# ``str | list[str] | numpy.ndarray | list[numpy.ndarray]`` only,
+# NOT raw bytes. The adapter needs ``cv2.imdecode`` (or PIL.Image →
+# numpy array) before passing to ``run()`` — see how the InsightFace
+# adapter handles the same body shape. Tracked separately; the CI
+# fix below only addresses the universal-resolve break.
+#
+# CI is unaffected by the adapter gap above: CI runs
+# ``uv sync --extra dev`` (no [lpr]), and the fast-plate-ocr adapter
+# tests stub the recognizer entirely via
+# tests/_fast_plate_ocr_service_fixtures.py so they exercise the
+# wrapper logic without touching real fast-plate-ocr code.
 lpr = [
-    "fast-plate-ocr>=2.0; python_full_version < '3.12'",
+    "fast-plate-ocr>=1.1.0",
 ]
 
 # PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
@@ -160,15 +179,3 @@ torchvision = { index = "pytorch-cpu" }
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
-
-# ── Notes on universal resolution ──────────────────────────────────────────────
-# uv resolves the lockfile universally across all (Python × platform)
-# combinations by default. The ``[lpr]`` extra's fast-plate-ocr
-# dependency carries a marker that excludes the (platform × Python)
-# combos where no wheel is published; see the ``lpr`` block above for
-# detail. That marker keeps the universal resolve succeeding without
-# constraining the global environment list — which matters because
-# OpenNVR is intentionally aarch64-friendly (Raspberry Pi 4/5, AWS
-# Graviton, Apple Silicon Docker) and we don't want to lock those
-# users out of the broader extras matrix just because one extra has
-# patchy wheel coverage.
