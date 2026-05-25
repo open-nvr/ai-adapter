@@ -18,6 +18,16 @@ dependencies = [
     "pillow==12.0.0",
     "numpy==1.26.4",
     "opencv-python==4.10.0.84",
+    # Required by FastAPI for any multipart/form-data route. Every
+    # adapter that accepts image/audio body via the SDK's body parser
+    # (insightface /faces/register + every /infer with multipart) and
+    # every conformance test that POSTs multipart hits the SDK's
+    # ``await request.form()`` call which assert-raises without this
+    # package. Not a transitive dep of fastapi as of 0.127, even
+    # though many older installs happened to drag it in via Starlette.
+    # Pin per FastAPI's own minimum:
+    #   https://fastapi.tiangolo.com/tutorial/request-forms-and-files/
+    "python-multipart>=0.0.7",
 ]
 
 # ── Optional adapter dependency groups ────────────────────────────────────────
