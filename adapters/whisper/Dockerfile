@@ -37,6 +37,11 @@ RUN pip install --no-cache-dir \
         python-multipart==0.0.20 \
         faster-whisper==1.0.0
 
+# Install the OpenNVR adapter SDK so ``adapters.whisper.main`` can
+# import AdapterApp et al. Mirrors insightface/fast_plate_ocr.
+COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
+RUN pip install --no-cache-dir ./opennvr_adapter_sdk
+
 COPY app/__init__.py                            ./app/__init__.py
 COPY app/interfaces/                            ./app/interfaces/
 COPY app/adapters/__init__.py                   ./app/adapters/__init__.py

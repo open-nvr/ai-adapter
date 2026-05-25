@@ -53,7 +53,13 @@ startup:
 - **fast-plate-ocr** — license-plate recognition (Apache-2.0 upstream,
   ONNX, CPU-only, plate-specific). New `lpr` install extra; single-
   purpose OCR adapter designed to be chained downstream of YOLOv8 by
-  the `license-plate-recognition` example app on OpenNVR.
+  the `license-plate-recognition` example app on OpenNVR. The adapter
+  decodes request body bytes (JPEG / PNG / WebP / BMP via OpenCV)
+  into a numpy array before invoking
+  `LicensePlateRecognizer.run()`, since the upstream library's 1.x
+  API accepts paths or ndarrays but not raw bytes. Garbage bytes
+  surface as a typed `TRANSPORT_ERROR(invalid_image)` envelope with
+  HTTP 400.
 - **Ollama** — local LLM access over HTTP. Supports the OpenAI-style
   `tools` / `tool_choice` request fields and normalises Ollama's
   native tool-call response into the OpenAI-shaped `message.tool_calls`

@@ -37,6 +37,14 @@ RUN pip install --no-cache-dir \
         opencv-python-headless==4.10.0.84 \
         onnxruntime==1.23.2
 
+# Install the OpenNVR adapter SDK so ``adapters.yolov8.main`` can
+# import ``AdapterApp``, ``BodyShape``, etc. Sister Dockerfiles
+# (adapters/insightface/Dockerfile, adapters/fast_plate_ocr/
+# Dockerfile) do the same. Without this the container crashes at
+# uvicorn boot with ModuleNotFoundError: opennvr_adapter_sdk.
+COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
+RUN pip install --no-cache-dir ./opennvr_adapter_sdk
+
 COPY app/__init__.py                            ./app/__init__.py
 COPY app/interfaces/                            ./app/interfaces/
 COPY app/adapters/__init__.py                   ./app/adapters/__init__.py

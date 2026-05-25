@@ -14,6 +14,16 @@
 #     adapters consume it (publish-sdk.yml builds + smoke-tests the
 #     SDK in isolation; this catches integration drift between SDK
 #     and the things that use it)
+#   - Docker-image drift: the smoke job builds adapters/yolov8 with
+#     real deps (no stubs) and exercises /health, /capabilities,
+#     /hardware/evaluation against the running container. Catches:
+#       * Dockerfile inline-pip-install diverging from pyproject
+#       * Missing runtime deps surfaced only at import time
+#       * Uvicorn lifespan / startup ordering bugs
+#       * Contract envelope drift on the read-only endpoints
+#     We deliberately do NOT exercise /infer here — that would force
+#     a real ONNX weights download on each CI run and add 1-2min.
+#     The pytest matrix already covers /infer paths with stubs.
 #
 # What this does NOT do (kept in publish-sdk.yml):
 #   - SDK sdist + wheel build
@@ -59,3 +69,187 @@ jobs:
         run: uv sync --extra dev
       - name: Run pytest
         run: uv run pytest tests/ -q
+
+  # ── Docker smoke (yolov8 adapter) ────────────────────────────────
+  # Builds and runs the yolov8 adapter image, then hits the read-only
+  # contract endpoints. Catches the class of bugs the pytest matrix
+  # can't:
+  #   * Dockerfile inline pip-install drift vs pyproject (e.g. the
+  #     python-multipart bug we hit on a fresh venv install).
+  #   * Container-level startup ordering / lifespan failures.
+  #   * Contract envelope drift on /capabilities + /hardware/evaluation.
+  #
+  # Runs in parallel with the pytest job — we want both signals visible
+  # on a red PR, not gated.
+  #
+  # Cost: image build ~3-5min uncached, /health poll <30s, endpoint
+  # checks <5s. Total ≈ 4-6min per run. Acceptable for the v0.1 release
+  # confidence.
+  smoke:
+    name: smoke (yolov8 docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build yolov8 adapter image
+        # Use the existing per-adapter Dockerfile (not the monolithic
+        # root Dockerfile) — that's what production deploys reference
+        # in the Smart Doorbell / LPR / Package Delivery example READMEs.
+        run: |
+          docker build \
+            -f adapters/yolov8/Dockerfile \
+            -t opennvr/yolov8-adapter:smoke \
+            .
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name yolov8-smoke \
+            -p 9002:9002 \
+            -e OPENNVR_ADAPTER_TOKEN=smoke-test-token \
+            opennvr/yolov8-adapter:smoke
+
+      - name: Wait for /health 200 (HTTP-level boot)
+        # /health returns 200 regardless of model load state — the
+        # body's ``status`` field distinguishes loading / ok / error.
+        # This loop only checks HTTP availability; the next step
+        # parses the JSON to confirm the adapter actually loaded.
+        # Poll up to 30 seconds — uvicorn boot is usually <5s on
+        # GitHub-hosted runners, with headroom for cold image pulls.
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9002/health > /dev/null; then
+              echo "✓ http reachable after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::container did not become reachable in 30s"
+          docker logs yolov8-smoke || true
+          exit 1
+
+      - name: Verify /health body status reflects adapter load state
+        # We expect ``status == "loading"`` or ``"ok"`` — NOT
+        # ``"error"``. Smoke runs without a model_weights mount, so
+        # YOLOv8's lazy load() either hasn't fired yet (loading) or
+        # will produce a clean fail-state we surface in the next
+        # /hardware/evaluation step. Catching "error" here would
+        # mean a regression that breaks even the loading path.
+        run: |
+          BODY=$(curl -s -w '\n__HTTP__:%{http_code}' \
+            http://localhost:9002/health)
+          STATUS=$(printf '%s' "$BODY" | sed -n 's/^__HTTP__://p')
+          JSON=$(printf '%s' "$BODY" | sed '$d')
+          echo "HTTP status: $STATUS"
+          echo "Body: $JSON"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::/health returned HTTP $STATUS, expected 200"
+            exit 1
+          fi
+          printf '%s' "$JSON" | python3 - <<'PY'
+          import json, sys
+          body = json.loads(sys.stdin.read())
+          status = body.get("status")
+          assert status in ("ok", "loading"), (
+              f"/health.status was {status!r}; expected 'ok' or 'loading'. "
+              f"'error' would indicate a load failure regression."
+          )
+          print(f"✓ /health.status = {status}")
+          PY
+
+      - name: Verify /capabilities returns a valid §3 contract envelope
+        # Read-only endpoint, no auth required during the 5min grace
+        # window after startup (per AuthAndCorrelationMiddleware).
+        # We send the token anyway — same shape as a real KAI-C poll.
+        #
+        # CapabilitiesResponse shape (from opennvr_adapter_sdk/contract.py):
+        #   - adapter: AdapterInfo  (name/version/vendor/license/...)
+        #   - model: ModelInfo
+        #   - endpoints: EndpointsInfo  (infer / infer_stream / extra)
+        #   - tasks_advertised: list[str]
+        #   - permissions: Permissions
+        #   - scheduling: Scheduling
+        #   - cost: Cost
+        run: |
+          BODY=$(curl -s -w '\n__HTTP__:%{http_code}' \
+            -H "Authorization: Bearer smoke-test-token" \
+            http://localhost:9002/capabilities)
+          STATUS=$(printf '%s' "$BODY" | sed -n 's/^__HTTP__://p')
+          JSON=$(printf '%s' "$BODY" | sed '$d')
+          echo "HTTP status: $STATUS"
+          echo "Body: $JSON"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::/capabilities returned HTTP $STATUS, expected 200"
+            exit 1
+          fi
+          printf '%s' "$JSON" | python3 - <<'PY'
+          import json, sys
+          cfg = json.loads(sys.stdin.read())
+          top_level = ("adapter", "model", "endpoints", "tasks_advertised",
+                       "permissions", "scheduling", "cost")
+          for key in top_level:
+              assert key in cfg, f"missing {key!r} in /capabilities response"
+          adapter = cfg["adapter"]
+          for key in ("name", "version", "vendor", "license",
+                      "supported_contract_versions"):
+              assert key in adapter, f"missing adapter.{key} in /capabilities"
+          tasks = cfg["tasks_advertised"]
+          assert isinstance(tasks, list), "tasks_advertised must be a list"
+          # YOLOv8 specifically advertises object_detection. Asserting
+          # the canonical task name catches a refactor that drops the
+          # task ID and ships {'foo'} — which would technically pass
+          # a generic non-empty list check.
+          assert "object_detection" in tasks, (
+              f"YOLOv8 must advertise 'object_detection'; got {tasks}"
+          )
+          print(f"✓ /capabilities ok: {adapter['name']}=={adapter['version']} "
+                f"tasks={tasks}")
+          PY
+
+      - name: Verify /hardware/evaluation returns a valid envelope
+        # Smoke runs without a model_weights mount, so the YOLOv8
+        # adapter's hardware-evaluation may legitimately report
+        # ``verdict=blocked`` ("Model failed to load: weights not
+        # found"). We accept any of the three documented verdicts so
+        # the smoke job stays green in the no-weights configuration —
+        # the goal of this step is to confirm the endpoint serves a
+        # well-formed §3 envelope, not to assert the adapter is
+        # production-ready. A model-loading regression that breaks
+        # even the BLOCKED-with-reason path would still surface
+        # because ``reasoning`` is required and validated server-side.
+        run: |
+          BODY=$(curl -s -w '\n__HTTP__:%{http_code}' \
+            -H "Authorization: Bearer smoke-test-token" \
+            http://localhost:9002/hardware/evaluation)
+          STATUS=$(printf '%s' "$BODY" | sed -n 's/^__HTTP__://p')
+          JSON=$(printf '%s' "$BODY" | sed '$d')
+          echo "HTTP status: $STATUS"
+          echo "Body: $JSON"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::/hardware/evaluation returned HTTP $STATUS, expected 200"
+            exit 1
+          fi
+          printf '%s' "$JSON" | python3 - <<'PY'
+          import json, sys
+          body = json.loads(sys.stdin.read())
+          verdict = body.get("verdict")
+          assert verdict in ("ok", "warn", "blocked"), \
+              f"unexpected verdict {verdict!r}; expected ok/warn/blocked"
+          assert body.get("reasoning"), (
+              "reasoning must be present and non-empty per §3 contract"
+          )
+          assert "checked_at" in body, "missing checked_at timestamp"
+          print(f"✓ /hardware/evaluation ok: verdict={verdict} "
+                f"reasoning={body['reasoning'][:80]!r}")
+          PY
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker logs yolov8-smoke || true
+
+      - name: Teardown
+        if: always()
+        run: |
+          docker rm -f yolov8-smoke || true
+          docker image rm opennvr/yolov8-adapter:smoke || true

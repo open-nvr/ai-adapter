@@ -200,6 +200,50 @@ def test_infer_missing_image_returns_transport_error(fast_plate_ocr_environment)
     assert excinfo.value.code == "missing_image"
 
 
+def test_infer_garbage_bytes_returns_transport_error(fast_plate_ocr_environment):
+    """Request body that isn't a valid image must surface as
+    TRANSPORT_ERROR(invalid_image), not bubble up as MODEL_ERROR from
+    inside the recognizer (which would happen if the decode step
+    were missing and we passed raw bytes through)."""
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    with pytest.raises(ServiceError) as excinfo:
+        svc.infer({"__file__": b"this-is-not-a-jpeg-or-anything-else"})
+    assert excinfo.value.category == ErrorCategory.TRANSPORT_ERROR
+    assert excinfo.value.code == "invalid_image"
+    assert excinfo.value.http_status == 400
+
+
+def test_infer_passes_decoded_ndarray_to_recognizer(
+    fast_plate_ocr_environment, sample_jpeg,
+):
+    """Regression: the adapter must call recognizer.run() with a
+    decoded numpy.ndarray, NOT the raw request bytes.
+    fast-plate-ocr 1.x's run() signature is
+    ``source: str | ndarray | list[...]`` — passing bytes used to
+    explode inside the library. Capture what we sent and assert."""
+    import numpy as np
+
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    fake_cls = fast_plate_ocr_environment["fake_recognizer_cls"]
+    fake_cls.last_run_source = None  # reset between tests
+
+    svc.infer({"__file__": sample_jpeg})
+
+    received = fake_cls.last_run_source
+    assert received is not None, "recognizer.run() was never called"
+    assert isinstance(received, np.ndarray), (
+        f"recognizer.run() got {type(received).__name__}, expected ndarray"
+    )
+    # cv2.IMREAD_COLOR → 3-channel HxWx3 BGR. _tiny_jpeg_bytes() is
+    # a 64x32 Pillow-generated JPEG.
+    assert received.ndim == 3
+    assert received.shape == (32, 64, 3), (
+        f"expected (32, 64, 3) BGR ndarray; got {received.shape}"
+    )
+
+
 @pytest.mark.parametrize("bad_value", ["not-a-number", None, [], {}])
 def test_infer_invalid_min_confidence_type_returns_transport_error(
     fast_plate_ocr_environment, sample_jpeg, bad_value
