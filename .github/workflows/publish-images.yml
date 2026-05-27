@@ -1,0 +1,197 @@
+# Copyright (c) 2026 OpenNVR
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build + publish workflow for the per-adapter container images.
+#
+# Each of the six adapters in adapters/<name>/Dockerfile is built and
+# pushed to GHCR as ghcr.io/open-nvr/<name>-adapter:<tags>. Operators
+# pull these images straight from the OpenNVR Tier 0 docker-compose
+# instead of building locally — a fresh install on a typical home
+# machine drops from ~25 minutes (build all six from source) to under
+# 5 minutes (pull yolov8 only, lazy-pull the rest).
+#
+# Triggered on:
+#   - Pull request that touches an adapter's Dockerfile, its service
+#     code, the SDK, or this workflow file        → build only, no push.
+#     Catches "Dockerfile broken at boot" before merge.
+#   - Push to main                                → build + push with
+#     :main and :sha-<short> tags. Used by Tier 0 compose's :main pin
+#     for the bleeding-edge install path.
+#   - Tag matching ``v*``                          → build + push with
+#     :<version>, :latest, :sha-<short> tags. The release path.
+#
+# Architecture: linux/amd64 only for v0.1. linux/arm64 is on the v0.2
+# roadmap — several adapters pull in heavy native wheels (onnxruntime,
+# faster-whisper → PyAV) whose arm64 wheel coverage is uneven and
+# would force a build-from-source fallback that inflates publish time
+# and risks intermittent failures. Pi users build locally for now;
+# documented in the Tier 0 README.
+
+name: publish-images
+
+on:
+  # NB: no ``paths`` filter on the push event. As publish-sdk.yml
+  # explains in detail, GitHub applies push-level path filters to
+  # both branch and tag refs, which means a release tag pointing at
+  # a commit that doesn't touch an adapter would silently skip the
+  # publish. Build-on-every-main-push is cheap (BuildKit cache,
+  # adapter Dockerfiles change rarely) and the alternative landmine
+  # is not worth it.
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "adapters/**"
+      - "app/**"
+      - "opennvr_adapter_sdk/**"
+      - ".github/workflows/publish-images.yml"
+  # Manual lever for emergency rebuilds (e.g., upstream base image
+  # CVE that needs a re-publish without touching repo content).
+  workflow_dispatch:
+
+# Keep multiple in-flight runs on the same ref from racing each other
+# to GHCR. Tag refs are unique per release so they never get
+# cancelled by a follow-up commit — same shape as publish-sdk.yml.
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Minimal default. The push job re-declares ``packages: write`` for
+# itself; this top-level read-only block stops a future repo-wide
+# "make GITHUB_TOKEN read+write by default" change from silently
+# widening permissions on PR-from-fork runs.
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: ${{ matrix.adapter.image }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push to ghcr.io/open-nvr/*
+    strategy:
+      # One adapter failing should not cancel the other five — fail-fast
+      # in matrix mode wastes a 20-minute build because of an unrelated
+      # transient pip resolver hiccup.
+      fail-fast: false
+      matrix:
+        adapter:
+          # ``dir`` is the adapters/<dir> path. ``image`` is the GHCR
+          # repo name — hyphenated even when ``dir`` uses an underscore
+          # (fast_plate_ocr → fast-plate-ocr-adapter), matching the
+          # Docker / CLI convention community users expect.
+          - { dir: yolov8,         image: yolov8-adapter,         port: 9002 }
+          - { dir: piper,          image: piper-adapter,          port: 9001 }
+          - { dir: whisper,        image: whisper-adapter,        port: 9003 }
+          - { dir: fast_plate_ocr, image: fast-plate-ocr-adapter, port: 9004 }
+          - { dir: insightface,    image: insightface-adapter,    port: 9005 }
+          - { dir: blip,           image: blip-adapter,           port: 9006 }
+          - { dir: bytetrack,      image: bytetrack-adapter,      port: 9007 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Only log in on the push paths. PR-from-fork builds run with a
+      # read-only GITHUB_TOKEN and would fail the login step otherwise.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # docker/metadata-action computes the full tag set + OCI labels
+      # in one place. The label block populates org.opencontainers.
+      # image.{source,revision,version,licenses,title,description} so
+      # ``docker inspect`` on a pulled image points back at the exact
+      # commit + repo it came from — important for the audit story.
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/open-nvr/${{ matrix.adapter.image }}
+          tags: |
+            # :latest only on a real release tag — not on main pushes,
+            # otherwise ``docker pull :latest`` could regress into a
+            # pre-release commit. Tier 0 compose pins to a real version.
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=OpenNVR ${{ matrix.adapter.image }}
+            org.opencontainers.image.description=OpenNVR AI Adapter Contract v1 — ${{ matrix.adapter.dir }} adapter, port ${{ matrix.adapter.port }}
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+            org.opencontainers.image.vendor=OpenNVR
+            org.opencontainers.image.documentation=https://github.com/open-nvr/ai-adapter/blob/main/adapters/${{ matrix.adapter.dir }}/README.md
+
+      - name: Build${{ github.event_name != 'pull_request' && ' + push' || ' (no push)' }}
+        uses: docker/build-push-action@v5
+        with:
+          # Build context must be the repo root — adapter Dockerfiles
+          # COPY from app/, opennvr_adapter_sdk/, and adapters/<name>/.
+          context: .
+          file: adapters/${{ matrix.adapter.dir }}/Dockerfile
+          platforms: linux/amd64
+          # PR builds: --load to local daemon for the smoke layer
+          # below; main + tag builds: --push to GHCR.
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          # On PRs we additionally tag the loaded image with a fixed
+          # ``local-smoke`` tag so the smoke step below has a
+          # deterministic reference. metadata-action's PR-event tag
+          # format has churned across versions; pinning a known tag
+          # is cheaper than chasing those changes.
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ github.event_name == 'pull_request' && format('ghcr.io/open-nvr/{0}:local-smoke', matrix.adapter.image) || '' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache backend keeps layer cache across runs
+          # without us managing an external registry — type=gha is the
+          # right backend for this volume of builds. ``mode=max``
+          # caches all stages, including the heavy pip install layer
+          # that dominates wall time.
+          cache-from: type=gha,scope=${{ matrix.adapter.image }}
+          cache-to: type=gha,scope=${{ matrix.adapter.image }},mode=max
+
+      # On PR builds we don't push, so verify the image at least boots
+      # to a healthy /health response. Catches the class of failures
+      # that the in-CI smoke matrix would catch on merge — but earlier,
+      # blocking the merge instead of failing post-merge.
+      - name: Smoke-test the built image (PR only)
+        if: github.event_name == 'pull_request'
+        env:
+          ADAPTER_IMAGE: ghcr.io/open-nvr/${{ matrix.adapter.image }}:local-smoke
+          ADAPTER_PORT: ${{ matrix.adapter.port }}
+        run: |
+          set -euo pipefail
+          # ``docker run -d`` returns the container ID we trap on. The
+          # token can be any non-empty string — the adapter only checks
+          # ``len(token) > 0`` at boot, and disables auth on /health.
+          CID=$(docker run -d \
+            -e OPENNVR_ADAPTER_TOKEN=smoke-token \
+            -p 127.0.0.1:${ADAPTER_PORT}:${ADAPTER_PORT} \
+            "$ADAPTER_IMAGE")
+          trap "docker rm -f $CID >/dev/null 2>&1 || true" EXIT
+          # Wait up to 5 minutes for /health to respond — matches the
+          # ci.yml smoke matrix's 300s poll. Heavy adapters (BLIP,
+          # whisper) take 60-90s to download weights on first boot.
+          for i in $(seq 1 60); do
+            if curl -sf "http://127.0.0.1:${ADAPTER_PORT}/health" >/dev/null; then
+              echo "Adapter $ADAPTER_IMAGE healthy after ${i}x5s."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Adapter $ADAPTER_IMAGE never reached /health within 5 minutes." >&2
+          docker logs "$CID" >&2 || true
+          exit 1

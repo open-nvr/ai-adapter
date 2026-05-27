@@ -51,7 +51,11 @@ class MyDetector(AdapterService):
         return HardwareEvaluationResponse(verdict=HardwareVerdict.OK, details="")
 
     def infer(self, payload) -> InferResponse:
-        frame_bytes = payload["__file__"]
+        # Binary payloads land at payload[BODY_BYTES_KEY] — import the constant
+        # from the SDK rather than hardcoding the literal so a future rename
+        # doesn't silently break your adapter.
+        from opennvr_adapter_sdk import BODY_BYTES_KEY
+        frame_bytes = payload[BODY_BYTES_KEY]
         # ... run your model ...
         return InferResponse(result={"detections": [
             {"label": "person", "confidence": 0.93, "bbox": [10, 20, 100, 200]},
@@ -128,12 +132,19 @@ The repo is two things in one:
 ```
 ai-adapter/
 ├── opennvr_adapter_sdk/      # The SDK published to PyPI
-├── app/
-│   ├── adapters/             # Reference adapters (auto-discovered)
+├── adapters/                 # Contract v1 per-adapter services (one container each)
+│   ├── yolov8/               # Object detection
+│   ├── piper/                # TTS
+│   ├── whisper/              # ASR
+│   ├── fast_plate_ocr/       # License plate recognition
+│   ├── insightface/          # Face detection + recognition
+│   ├── blip/                 # Scene captioning
+│   └── bytetrack/            # Multi-object tracking (post-processor)
+├── app/                      # Legacy reference monolith (all adapters in one process)
+│   ├── adapters/             # Auto-discovered legacy adapters
 │   │   ├── vision/           # YOLOv8, YOLOv11, InsightFace, BLIP, HuggingFace
-│   │   └── llm/              # BLIP, HuggingFace, Ollama
-│   ├── pipelines/            # Task business logic (auto-discovered)
-│   └── ...
+│   │   └── llm/              # Ollama, HuggingFace
+│   └── pipelines/            # Task business logic (auto-discovered)
 ├── conformance/              # Wire-contract conformance test suite
 └── docs/                     # Architecture, plugin dev, API reference
 ```
@@ -191,9 +202,45 @@ packages and only grows when you ask for more.
 
 ## 🧩 Write your own adapter
 
-Adding a model takes **3 files** and **zero changes to existing code**.
+There are two paths, and the right one depends on what you're shipping.
 
-### 1. The adapter
+### Path A — Standalone container (recommended for new adapters)
+
+Use the `opennvr-adapter-sdk` from PyPI. Your adapter is its own
+container with its own `pyproject.toml`, declared permissions, and
+lifecycle. No changes to this repo. This is the path the production
+per-adapter Dockerfiles in `adapters/yolov8/`, `adapters/whisper/`, and
+`adapters/piper/` take, and it's how third-party adapters published to
+GHCR plug into KAI-C.
+
+The "30-second SDK install" snippet at the top of this README is the
+complete minimal example. Full walkthrough in the
+[SDK README](opennvr_adapter_sdk/README.md). Real implementations to
+copy from:
+
+- `adapters/yolov8/` — `BodyShape.IMAGE`, WebSocket streaming, ONNX runtime
+- `adapters/whisper/` — `BodyShape.AUDIO`, multipart audio decode
+- `adapters/piper/` — `BodyShape.TEXT`, custom `/voices` route, inline audio response
+- `adapters/insightface/` — `BodyShape.IMAGE`, face DB enrollment
+- `adapters/blip/` — `BodyShape.IMAGE`, transformer model on CPU
+- `adapters/fast_plate_ocr/` — `BodyShape.IMAGE`, two-stage plate detect + OCR
+- `adapters/bytetrack/` — `BodyShape.TEXT`, stateful per-camera tracker (post-processor)
+
+Once your adapter runs (`uvicorn my_adapter.main:app --port 9001`),
+register it with KAI-C's `/api/v1/adapters/register` and it's
+hot-swappable from the operator dashboard. Drift detection, audit
+logging, sovereignty enforcement, and Prometheus metrics come for free.
+
+### Path B — Extend the legacy reference monolith
+
+Older adapters (HuggingFace, the original Ollama wrapper) live inside
+`app/adapters/` and use a `BaseAdapter` plugin pattern that predates
+the contract. This path stays supported for contributors extending the
+bundled monolithic server, but **it's not the path we recommend for new
+adapters** — a standalone container gives you a contract-compliant
+service with no OpenNVR code changes and ships independently.
+
+If you do want to extend the monolith:
 
 ```python
 # app/adapters/vision/fire_adapter.py
@@ -213,11 +260,9 @@ class FireAdapter(BaseAdapter):
         self.model = ort.InferenceSession("model_weights/fire.onnx")
 
     def infer_local(self, input_data):
-        # Load image, run model, return raw results
+        # Load image, run model, return raw results.
         return {"label": "fire", "confidence": 0.95, "bbox": [100, 80, 200, 150]}
 ```
-
-### 2. The routing entry
 
 ```python
 # app/config/config.py
@@ -228,29 +273,14 @@ TASK_ADAPTER_MAP = {
 CONFIG["adapters"]["fire_adapter"] = {"enabled": True, "weights_path": "fire.onnx"}
 ```
 
-### 3. (Optional) A task pipeline for validated output
+`PluginManager` auto-discovers your class at startup; no `main.py` edit.
 
-```python
-# app/pipelines/fire_detection/task.py
-from app.interfaces.task import BaseTask
+> **Anti-bloat rule:** declare your adapter's ML libraries as a new
+> `[project.optional-dependencies]` group in `pyproject.toml`, never in
+> `[project.dependencies]`. Import them inside `load_model()`, not at
+> module top. This keeps the project lean for every other deployment.
 
-class FireDetectionTask(BaseTask):
-    name = "fire_detection"
-
-    def process(self, image, adapter):
-        raw = adapter.predict(image)
-        return FireDetectionResponse(**raw)   # Pydantic-validated
-```
-
-**That's it.** No imports in `main.py`. No registration code. `PluginManager`
-auto-discovers your classes at startup.
-
-> **Important:** Declare your adapter's ML libraries as a new
-> `[project.optional-dependencies]` group in `pyproject.toml` — never add them to
-> `[project.dependencies]`. Import them inside `load_model()`, not at module top.
-> This keeps the project lean for everyone.
-
-→ Full tutorial: **[docs/PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md)**
+→ Full monolith tutorial: **[docs/PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md)**
 → Architecture deep-dive: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 → API reference: **[docs/API_REFERENCE.md](docs/API_REFERENCE.md)**
 
