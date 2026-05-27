@@ -110,7 +110,7 @@ adapters/piper/
 
 ## Why a new service instead of refactoring the legacy monolith
 
-The existing `app/main.py` bundles all 8 adapters into one FastAPI service. Per the contract, "one adapter wraps one model" — so each adapter gets its own container with its own declared permissions. The legacy monolith stays running and untouched until every adapter has a contract-compliant service; then it retires. See §13 of the design doc for the migration roadmap.
+The existing `app/main.py` bundles every adapter into one FastAPI service. Per the contract, "one adapter wraps one model" — so each adapter gets its own container with its own declared permissions. The legacy monolith stays running and untouched until every adapter has a contract-compliant service; then it retires.
 
 ## Tests
 

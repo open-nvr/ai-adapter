@@ -79,6 +79,19 @@ startup:
   so Pipecat / OpenAI clients work without translation. Tool support
   requires a tool-capable model (Llama 3.1+, Qwen 2.5+, Mistral Nemo,
   others — see https://ollama.com/blog/tool-support).
+- **ByteTrack** — multi-object tracking post-processor. Takes a frame's
+  detections in (JSON, `BodyShape.TEXT`), returns the same detections
+  with persistent `track_id` populated. Stateful per camera (TTL-evicted
+  to keep memory bounded), tunable per-call via the `tracker_config`
+  block. Composes with any detection-shaped upstream adapter — chain
+  through KAI-C the same way the license-plate-recognition example
+  chains YOLOv8 → fast-plate-ocr. Wraps
+  [`supervision`](https://github.com/roboflow/supervision)'s
+  ByteTrack (pinned `>=0.21,<0.30`; 0.30 removes ByteTrack from the
+  package). The contract's `DetectionItem.track_id` field gains a
+  populated home with this adapter — alert deduplication, dwell-time
+  analytics, and track-stable state machines all become available
+  to downstream examples.
 
 #### Architecture
 

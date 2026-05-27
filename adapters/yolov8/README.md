@@ -1,6 +1,6 @@
 # YOLOv8 Object-Detection Adapter (Contract v1)
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping the YOLOv8 ONNX object detector. This is the **second adapter migrated to the contract** and the **first one to exercise the §6 WebSocket streaming protocol**.
+Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping the YOLOv8 ONNX object detector. Supports both the HTTP `/infer` path and the `§6` WebSocket streaming protocol for low-latency per-frame inference.
 
 ## What it does
 
