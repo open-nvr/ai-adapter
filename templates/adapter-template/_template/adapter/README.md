@@ -5,7 +5,7 @@
      adapters/yolov8/README.md or adapters/bytetrack/README.md for the
      shape every adapter README follows. -->
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md)
+Reference implementation of the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md)
 wrapping <!-- TODO: model name + provenance -->. <!-- TODO: one sentence
 about what kind of input it takes and what output it returns. -->
 

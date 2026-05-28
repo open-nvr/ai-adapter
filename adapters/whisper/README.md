@@ -1,6 +1,6 @@
 # Whisper ASR Adapter (Contract v1)
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping faster-whisper / CTranslate2. **Third adapter migrated** to the contract (after Piper and YOLOv8) — validates the contract on a third modality (audio) and grounds the SDK design that was later extracted.
+Reference implementation of the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md) wrapping faster-whisper / CTranslate2. The canonical `BodyShape.AUDIO` reference — multipart audio decode, language auto-detect, and a CPU/GPU runtime selection that adapts to what's available at startup.
 
 ## What it does
 
@@ -150,6 +150,3 @@ pytest tests/test_whisper_service.py tests/test_conformance_against_whisper.py
 
 27 tests: 22 service tests (HTTP /infer multipart + JSON, §5.3 shape, translation forces English, params validation, auth, correlation_id) + 5 conformance tests (full kit run including the new audio-multipart path).
 
-## What's next
-
-This is the **third grounded data point** for the SDK extraction. With Piper + YOLOv8 + Whisper migrated, the duplicated boilerplate (auth.py, metrics.py, service.py skeleton) was concrete enough to extract into `opennvr-adapter-sdk` without speculative API design.

@@ -1,13 +1,8 @@
 # opennvr-adapter-sdk
 
-The boilerplate-free way to write an [AI Adapter Contract v1](../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) service.
+The boilerplate-free way to write an [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md) service.
 
-A minimal adapter is now **~30 lines of FastAPI**, per §3.7 of the contract design. The SDK provides:
-
-- `AdapterService` — the ABC every adapter implements (4 abstract methods)
-- `AdapterApp` — wraps the service in a FastAPI app with the six mandatory endpoints, auth, correlation_id, Prometheus metrics, multipart + JSON body parsing
-- `ServiceError` — typed §7 failure envelope
-- Re-exports of every contract Pydantic type, so adapter authors get one import line
+A minimal adapter is around thirty lines of FastAPI. The SDK gives you `AdapterService` — the ABC every adapter implements with four abstract methods — and `AdapterApp`, the builder that wraps your service in a FastAPI app with the six mandatory endpoints, auth, correlation-ID propagation, Prometheus metrics, and multipart plus JSON body parsing. `ServiceError` is the typed failure envelope from §7 of the contract. Every contract Pydantic type is re-exported from the package root, so adapter authors get one import line.
 
 ## Install
 
@@ -17,7 +12,7 @@ uv add opennvr-adapter-sdk
 uv add 'opennvr-adapter-sdk[serve]'
 ```
 
-Not on [uv](https://docs.astral.sh/uv/) yet? `pip install opennvr-adapter-sdk` works the same — the package is a single wheel with `fastapi`, `pydantic`, and `python-multipart` as its only runtime deps. We recommend `uv` because adapter projects tend to grow heavy ML deps fast and `uv sync` keeps the resolve time + lockfile manageable.
+If you're not on [uv](https://docs.astral.sh/uv/) yet, `pip install opennvr-adapter-sdk` works the same — the package is a single wheel with FastAPI, Pydantic, and python-multipart as its only runtime dependencies. We recommend `uv` because adapter projects tend to grow heavy ML deps fast, and `uv sync` keeps resolve time and the lockfile manageable as they do.
 
 ## The minimum viable adapter
 
@@ -161,13 +156,7 @@ AdapterApp(
 
 ## Real-world examples
 
-`opennvr-adapter-sdk` is currently the production runtime for:
-
-- `adapters/piper/` — TTS adapter (`BodyShape.TEXT`, no streaming)
-- `adapters/yolov8/` — object detection (`BodyShape.IMAGE`, streaming via WS)
-- `adapters/whisper/` — ASR (`BodyShape.AUDIO`, no streaming)
-
-Read those `main.py` files for non-trivial reference implementations.
+`opennvr-adapter-sdk` is the production runtime for the seven adapters shipped in this repo: `adapters/yolov8/` for object detection (`BodyShape.IMAGE` with WebSocket streaming); `adapters/piper/` for text-to-speech (`BodyShape.TEXT` with a custom `/voices` route and inline-audio response); `adapters/whisper/` for speech-to-text (`BodyShape.AUDIO`, multipart decode); `adapters/fast_plate_ocr/` for license-plate text recognition on a pre-cropped plate image (`BodyShape.IMAGE`, designed to chain downstream of YOLOv8); `adapters/insightface/` for face detection plus recognition with a REST face DB; `adapters/blip/` for scene captioning, used by the OpenNVR camera-agent; and `adapters/bytetrack/` for stateful multi-object tracking as a post-processor over an upstream detector's results. Their `main.py` files are non-trivial reference implementations worth reading before authoring your own.
 
 ## Versioning
 

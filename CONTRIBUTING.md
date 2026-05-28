@@ -1,24 +1,14 @@
 # Contributing to OpenNVR AI Adapter
 
-Thanks for being here. This repo is two things in one: the `opennvr-adapter-sdk`
-PyPI package (the boilerplate-free way to ship a contract-compliant adapter)
-and a reference monolith server that bundles several adapters in one
-process. There's a contribution path for each.
+Thanks for being here. This repo is two things in one: the `opennvr-adapter-sdk` PyPI package (the boilerplate-free way to ship a contract-compliant adapter) and a reference monolith server that bundles several adapters in one process. There's a contribution path for each, and the recommended path depends on what you're trying to do.
 
 ## Which path are you on?
 
-| You want to... | Use |
-|---|---|
-| Ship a new adapter as its own container | **Path A — SDK + standalone container** |
-| Add to the bundled reference monolith | **Path B — `BaseAdapter` plugin** |
-| Fix a bug in an existing per-adapter service (`adapters/yolov8`, `adapters/whisper`, …) | Path A |
-| Fix a bug in the monolith (`app/adapters/…`) | Path B |
-| Improve the SDK itself (`opennvr_adapter_sdk/`) | See [`SDK README`](opennvr_adapter_sdk/README.md) |
+If you're shipping a new adapter, use **Path A — the SDK plus a standalone container.** Your adapter becomes its own service with its own `pyproject.toml`, declared permissions, and lifecycle. Nothing in this repo needs to change, and the adapter ships under whatever licence you choose. The seven shipped adapters in `adapters/<name>/` are the reference implementations — find the one with the closest body shape and copy the structure. Bug fixes to those services also live on this path.
 
-Both paths produce contract-compliant adapters. Path A is the recommended
-shape for new adapters — independent container, declared permissions,
-ships under any license. Path B keeps existing monolith extensions
-working while we migrate the rest.
+If you're extending the bundled reference monolith — `app/adapters/<name>/` — use **Path B**, the `BaseAdapter` plugin pattern. This path stays supported for contributors keeping the monolith useful, but new adapters should target Path A: a standalone container is contract-compliant out of the box, ships independently, and survives any future change to the monolith's internals.
+
+If you're improving the SDK itself, work in [`opennvr_adapter_sdk/`](opennvr_adapter_sdk/) and read its [README](opennvr_adapter_sdk/README.md) for the surface and conventions.
 
 ## Development setup
 
@@ -186,7 +176,8 @@ parser. If your service passes conformance, KAI-C will register it.
 - `adapters/piper/` — `BodyShape.TEXT`, custom `/voices` route
 - `adapters/insightface/` — `BodyShape.IMAGE`, face DB enrollment endpoints
 - `adapters/blip/` — `BodyShape.IMAGE`, transformer model
-- `adapters/fast_plate_ocr/` — two-stage detect + OCR
+- `adapters/fast_plate_ocr/` — `BodyShape.IMAGE`, OCR over a pre-cropped plate
+- `adapters/bytetrack/` — `BodyShape.TEXT`, stateful post-processor over an upstream detector
 
 Full SDK reference: [`opennvr_adapter_sdk/README.md`](opennvr_adapter_sdk/README.md).
 
@@ -297,17 +288,7 @@ class in the container.)
 
 ## Installation profiles (monolith)
 
-| Profile | Command | Approx size |
-|---|---|---|
-| Core only | `uv sync` | ~50 MB |
-| YOLOv8 detection | `uv sync --extra yolo` | ~250 MB |
-| YOLOv11 counting | `uv sync --extra yolo11 --extra cpu` | ~2.5 GB |
-| Face recognition | `uv sync --extra face` | ~500 MB |
-| Detection + recognition | `uv sync --extra yolo --extra face` | ~750 MB |
-| Scene captioning | `uv sync --extra blip --extra cpu` | ~3 GB |
-| HuggingFace cloud | `uv sync --extra huggingface` | ~60 MB |
-| Everything | `uv sync --extra all --extra cpu` | ~4 GB |
-| Dev (with tests) | `uv sync --extra all --extra cpu --extra dev` | ~4 GB |
+Per-profile dependencies and sizes are documented in the main [README](README.md#install-profiles). The relevant addition for contributors is the `--extra dev` group, which adds the test suite and tooling (around 4 GB total with `--extra all --extra cpu --extra dev`).
 
 ## Testing
 
@@ -368,9 +349,7 @@ docs(contributing): clarify Path A vs Path B
 
 ## Code of conduct
 
-We want this to stay a project people enjoy contributing to. The bar is:
-welcoming language, respectful disagreement, no harassment. Report
-violations to **contact@cryptovoip.in**.
+We want this to stay a project people enjoy contributing to. The expectation is welcoming language and respectful disagreement; harassment, doxxing, and inflammatory off-topic posting are not part of that. Report violations to **contact@cryptovoip.in** — reports are confidential.
 
 ## License
 

@@ -118,15 +118,19 @@ jobs:
         with:
           images: ghcr.io/open-nvr/${{ matrix.adapter.image }}
           tags: |
-            # :latest only on a real release tag — not on main pushes,
-            # otherwise ``docker pull :latest`` could regress into a
-            # pre-release commit. Tier 0 compose pins to a real version.
             type=ref,event=branch
             type=ref,event=pr
             type=sha,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # :latest tracks the most recent build on the default branch
+            # (main) AND any subsequent release tag. Tier 0 compose pins
+            # :latest, so operators trying the project before the first
+            # ``v*`` tag still get a working image. Once we cross v1.0
+            # the policy may tighten to "release tags only" — for v0.1
+            # we keep this loose because the Tier 0 promise depends on
+            # :latest existing the moment the project is announced.
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=OpenNVR ${{ matrix.adapter.image }}
             org.opencontainers.image.description=OpenNVR AI Adapter Contract v1 — ${{ matrix.adapter.dir }} adapter, port ${{ matrix.adapter.port }}

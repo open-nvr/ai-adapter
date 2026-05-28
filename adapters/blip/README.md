@@ -1,6 +1,6 @@
 # BLIP Scene-Caption Adapter (Contract v1)
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md)
+Reference implementation of the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md)
 wrapping Salesforce's BLIP image-captioning model. Drops a JPEG / PNG in,
 gets a one-sentence natural-language description of the scene back. Useful
 for the camera-agent example's "describe what you see" tool, and for any
