@@ -1,6 +1,8 @@
 <div align="center">
 
-# OpenNVR AI Adapter
+<img src=".github/opennvr-logo.svg" alt="OpenNVR" width="260" />
+
+# AI Adapter
 
 ### Any model. Any framework. One contract.
 
