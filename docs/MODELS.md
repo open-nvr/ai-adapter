@@ -1,8 +1,8 @@
 # Models Reference
 
-This document lists all built-in adapters, the tasks they serve, and what optional dependency group installs them.
+> **Scope.** This document lists the AI adapters that ship inside the bundled monolith server in `app/` — the `BaseAdapter` plugins it auto-discovers at startup. Each adapter that also ships as a standalone contract-compliant container has its own per-adapter README under [`adapters/<name>/`](../adapters/) (yolov8, piper, whisper, fast_plate_ocr, insightface, blip, bytetrack). The two entries that are monolith-only — **YOLOv11** and **HuggingFace** — are documented here.
 
-> **Note:** This file reflects the current **new architecture** (adapter + task separation, optional dependency groups, lazy loading). The old term "Handler" has been replaced by "Adapter" throughout.
+This page lists the built-in adapters, the tasks they serve, and what optional dependency group installs them.
 
 ---
 

@@ -1,6 +1,6 @@
 # YOLOv8 Object-Detection Adapter (Contract v1)
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping the YOLOv8 ONNX object detector. Supports both the HTTP `/infer` path and the `§6` WebSocket streaming protocol for low-latency per-frame inference.
+Reference implementation of the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md) wrapping the YOLOv8 ONNX object detector. Supports both the HTTP `/infer` path and the `§6` WebSocket streaming protocol for low-latency per-frame inference.
 
 ## What it does
 
@@ -125,10 +125,6 @@ adapters/yolov8/
 ├── Dockerfile       Self-contained image; CPU + GPU compatible
 └── README.md        you are here
 ```
-
-## Why a new service vs. extending the legacy monolith
-
-Same reason as Piper: "one adapter wraps one model" per §1 of the contract. Each adapter is its own container with its own declared permissions. The legacy `app/main.py` keeps running until every adapter has its own contract-compliant service.
 
 ## Tests
 

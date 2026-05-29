@@ -1,5 +1,7 @@
 # API Reference
 
+> **Scope.** This document covers the REST surface of the bundled monolith server in `app/` (port 9100). Standalone adapters built on the SDK expose the six [contract](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md) endpoints; this page is for the bundled multi-adapter HTTP surface.
+
 The AI Adapter REST API runs on port **9100** and communicates via JSON.
 
 ---

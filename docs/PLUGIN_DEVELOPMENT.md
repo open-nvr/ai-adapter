@@ -1,13 +1,8 @@
-# Plugin Development Guide — Adding Custom AI Capabilities
+# Plugin Development Guide — legacy monolith path
 
-This guide shows you how to add new AI capabilities to OpenNVR. There are **two types** of plugins you can create:
+> **This guide covers the legacy `BaseAdapter` plugin pattern for the bundled monolith server in `app/`.** New adapters should target the [`opennvr-adapter-sdk`](../opennvr_adapter_sdk/README.md) — a standalone container is contract-compliant out of the box, ships independently under any licence, and is the recommended path for everything community-contributed. This guide stays here for maintainers extending the bundled server; if you're starting fresh, the [SDK README](../opennvr_adapter_sdk/README.md) and the [adapter template](../templates/adapter-template/) are where you want to be.
 
-| Plugin Type | What It Does | Where It Lives | Auto-Discovered From |
-|---|---|---|---|
-| **Adapter** | Wraps a model (ONNX, PyTorch, API). Handles raw inference. | `app/adapters/vision/` or `app/adapters/llm/` | `app.adapters` |
-| **Task** | Business logic layer. Takes adapter output → validates → shapes the final response. | `app/pipelines/<task_name>/task.py` | `app.pipelines` |
-
-> **Key Concept:** Adapters do the heavy lifting (loading models, running inference). Tasks apply domain logic on top (e.g., "find the single best person detection from raw YOLO output"). You can have an adapter without a task (raw output goes straight to the client), or a task that transforms the adapter's raw output into a validated Pydantic response.
+This guide shows you how to add new AI capabilities to the monolith server. There are two types of plugins you can create. **Adapters** wrap a model (ONNX, PyTorch, REST API) and handle raw inference — they live under `app/adapters/vision/` or `app/adapters/llm/` and are auto-discovered from `app.adapters`. **Tasks** are the business-logic layer on top: they take adapter output, validate it, and shape the final response — they live under `app/pipelines/<task_name>/task.py` and are auto-discovered from `app.pipelines`. You can ship an adapter without a task (raw output goes straight to the client) or pair them so the adapter's raw output is validated into a Pydantic response.
 
 ---
 

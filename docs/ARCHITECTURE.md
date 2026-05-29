@@ -1,8 +1,8 @@
 # Architecture Overview
 
-This document explains how the AI Adapter server is designed, how data flows through the system, how the plugin discovery system works, and — crucially — **how the architecture prevents bloat as the community adds more adapters**.
+> **Scope.** This document covers the bundled monolith server in `app/` — its layered design, data flow, plugin discovery, and the conventions that keep dependencies from sprawling as adapters are added. For the standalone-container path used by every new adapter shipping under the contract, see the [SDK README](../opennvr_adapter_sdk/README.md) and the [adapter template](../templates/adapter-template/).
 
-Read this before the [Plugin Development Guide](PLUGIN_DEVELOPMENT.md).
+If you're extending the monolith, read this before the [Plugin Development Guide](PLUGIN_DEVELOPMENT.md).
 
 ---
 

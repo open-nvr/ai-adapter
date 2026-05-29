@@ -1,12 +1,11 @@
 # fast-plate-ocr License-Plate Adapter (Contract v1)
 
 Reference implementation of the
-[AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md)
+[AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md)
 wrapping [fast-plate-ocr](https://github.com/ankandrew/fast-plate-ocr) — a
 small, plate-specific OCR model trained for license-plate recognition.
 
-This is the **first adapter explicitly designed to be chained downstream of
-another adapter.** The canonical pipeline is:
+This adapter is designed to be chained downstream of another adapter. The canonical pipeline is:
 
 ```
 camera frame → YOLOv8 (vehicle + plate ROI detection)

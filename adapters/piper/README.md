@@ -1,8 +1,6 @@
 # Piper TTS Adapter (Contract v1)
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md) wrapping Piper neural TTS voices.
-
-This is the **first adapter ported to the contract**. It serves as the canonical example for community contributors: ~450 lines of code, six mandatory contract endpoints, bearer-token auth, correlation-id wiring, Prometheus metrics, and a passing conformance run.
+Reference implementation of the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md) wrapping Piper neural TTS voices. Around 450 lines of code covering the six mandatory contract endpoints, bearer-token auth, correlation-ID wiring, Prometheus metrics, and a passing conformance run. The `BodyShape.TEXT` adapter most contributors copy from when authoring text-input services.
 
 ## What it does
 
@@ -107,10 +105,6 @@ adapters/piper/
 ├── Dockerfile       Self-contained image; versions track pyproject.toml
 └── README.md        you are here
 ```
-
-## Why a new service instead of refactoring the legacy monolith
-
-The existing `app/main.py` bundles every adapter into one FastAPI service. Per the contract, "one adapter wraps one model" — so each adapter gets its own container with its own declared permissions. The legacy monolith stays running and untouched until every adapter has a contract-compliant service; then it retires.
 
 ## Tests
 

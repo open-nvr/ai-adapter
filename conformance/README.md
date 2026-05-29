@@ -1,6 +1,6 @@
 # opennvr-adapter-conformance
 
-CLI that validates an AI adapter against the [AI Adapter Contract v1](../../open-nvr/docs/AI_ADAPTER_CONTRACT.md).
+CLI that validates an AI adapter against the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md).
 
 Point it at any reachable adapter URL. It probes every mandatory endpoint, validates wire shapes against the Pydantic types in `app/interfaces/contract.py`, and reports PASS / WARN / FAIL / SKIP. A green run means KAI-C will accept the adapter.
 

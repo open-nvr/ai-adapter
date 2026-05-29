@@ -1,7 +1,7 @@
 # InsightFace Recognition Adapter (Contract v1)
 
 SDK-based reference implementation of the
-[AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md)
+[AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md)
 wrapping [InsightFace](https://github.com/deepinsight/insightface) for face
 detection, recognition, and embedding extraction. Built for the OpenNVR
 Smart Doorbell example.

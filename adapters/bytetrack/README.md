@@ -1,6 +1,6 @@
 # ByteTrack Multi-Object Tracking Adapter (Contract v1)
 
-Reference implementation of the [AI Adapter Contract v1](../../../open-nvr/docs/AI_ADAPTER_CONTRACT.md)
+Reference implementation of the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md)
 wrapping [supervision](https://github.com/roboflow/supervision)'s
 ByteTrack tracker. Takes a frame's detections in, returns the same
 detections with persistent `track_id` fields populated. Stateful per
