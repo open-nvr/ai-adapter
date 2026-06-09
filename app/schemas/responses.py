@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
@@ -279,6 +279,9 @@ class SpeechSynthesisResponse(BaseModel):
     text_length: int = Field(ge=0)
     executed_at: int = Field(ge=0)
     latency_ms: int = Field(ge=0)
+    # Optional base64 WAV for HTTP-only clients (no shared audio mount).
+    # Populated when the request carries ``inline: true``.
+    audio_b64: Optional[str] = None
 
     @field_validator("audio_uri")
     @classmethod

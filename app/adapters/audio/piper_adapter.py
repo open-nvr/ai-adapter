@@ -126,12 +126,11 @@ class PiperAdapter(BaseAdapter):
         audio_path, audio_uri = mint_audio_path(self._output_subdir, extension="wav")
 
         start_time = time.time()
-        with wave.open(str(audio_path), "wb") as wav_file:
-            voice.synthesize(text, wav_file, **synth_kwargs)
+        self._synthesize_to_wav(voice, text, str(audio_path), synth_kwargs)
 
         sample_rate, duration_seconds = self._probe_wav(audio_path)
 
-        return {
+        result = {
             "task": "speech_synthesis",
             "audio_uri": audio_uri,
             "duration_seconds": duration_seconds,
@@ -141,6 +140,47 @@ class PiperAdapter(BaseAdapter):
             "executed_at": int(time.time() * 1000),
             "latency_ms": int((time.time() - start_time) * 1000),
         }
+        # HTTP-only clients (e.g. camera-agent) have no shared audio mount
+        # to dereference audio_uri, so when asked, inline the WAV bytes as
+        # base64 directly in the response.
+        if input_data.get("inline"):
+            import base64 as _b64
+            with open(audio_path, "rb") as _fh:
+                result["audio_b64"] = _b64.b64encode(_fh.read()).decode("ascii")
+        return result
+
+    @staticmethod
+    def _synthesize_to_wav(voice, text: str, wav_path: str, synth_kwargs: Dict[str, Any]) -> None:
+        """Write a WAV using whichever piper-tts API is installed.
+
+        piper-tts 1.3.x: ``synthesize(text)`` returns AudioChunks and no
+        longer writes to a wave object; ``synthesize_wav(text, wav_file)``
+        writes a complete WAV (sets channels/width/rate). piper-tts 1.2.x:
+        ``synthesize(text, wav_file, **kw)`` wrote into the wave object —
+        calling that on 1.3.x leaves the wave unconfigured ("# channels
+        not specified"). Pick the right path by feature-detection.
+        """
+        with wave.open(wav_path, "wb") as wav_file:
+            if hasattr(voice, "synthesize_wav"):
+                syn_config = None
+                if synth_kwargs:
+                    # 1.3.x takes tuning via a SynthesisConfig object, not
+                    # kwargs. Field names vary across versions, so fall
+                    # back to defaults if construction fails.
+                    try:
+                        try:
+                            from piper import SynthesisConfig
+                        except Exception:
+                            from piper.config import SynthesisConfig
+                        syn_config = SynthesisConfig(**synth_kwargs)
+                    except Exception:
+                        syn_config = None
+                if syn_config is not None:
+                    voice.synthesize_wav(text, wav_file, syn_config=syn_config)
+                else:
+                    voice.synthesize_wav(text, wav_file)
+            else:
+                voice.synthesize(text, wav_file, **synth_kwargs)
 
     @staticmethod
     def _probe_wav(path) -> tuple[int, float]:

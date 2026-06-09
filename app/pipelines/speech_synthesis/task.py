@@ -40,4 +40,5 @@ class SpeechSynthesisTask(BaseTask):
             text_length=int(raw_payload.get("text_length", 0)),
             executed_at=int(raw_payload.get("executed_at", int(time.time() * 1000))),
             latency_ms=int(raw_payload.get("latency_ms", 0)),
+            audio_b64=raw_payload.get("audio_b64"),
         )

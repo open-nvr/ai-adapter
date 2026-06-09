@@ -34,6 +34,27 @@ import sys
 import urllib.request
 from pathlib import Path
 
+# Whisper size / Piper voice mirror app/config/config.py (env-overridable) so a
+# pre-download fetches exactly what the running adapter will later look for.
+_WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "base")
+_PIPER_VOICE = os.getenv("PIPER_VOICE", "en_US-libritts-high")
+_PIPER_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
+
+
+def _piper_voice_url(voice: str, ext: str) -> str:
+    """
+    Build the HuggingFace download URL for a standard Piper voice name, e.g.
+    "en_US-libritts-high" -> .../main/en/en_US/libritts/high/en_US-libritts-high.onnx
+    """
+    parts = voice.split("-")
+    if len(parts) < 3:
+        raise ValueError(f"Unexpected Piper voice name: {voice!r}")
+    locale, quality = parts[0], parts[-1]
+    dataset = "-".join(parts[1:-1])
+    lang = locale.split("_")[0]
+    return f"{_PIPER_BASE_URL}/{lang}/{locale}/{dataset}/{quality}/{voice}{ext}"
+
+
 # ── Model registry ────────────────────────────────────────────────────────────
 # Maps adapter_name → list of weight files it needs.
 # Each entry is a dict with:
@@ -54,6 +75,28 @@ MODEL_REGISTRY: dict[str, list[dict]] = {
             "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m.pt",
             "size_hint": "~40 MB",
         }
+    ],
+    "whisper_adapter": [
+        {
+            # faster-whisper pulls a CTranslate2 snapshot from HuggingFace into
+            # model_weights/whisper/. Library-managed (not a single URL file).
+            "filename": "whisper",
+            "url": "whisper_download",
+            "model_size": _WHISPER_MODEL_SIZE,
+            "size_hint": f"~145 MB ({_WHISPER_MODEL_SIZE})",
+        }
+    ],
+    "piper_adapter": [
+        {
+            "filename": f"piper/{_PIPER_VOICE}.onnx",
+            "url": _piper_voice_url(_PIPER_VOICE, ".onnx"),
+            "size_hint": "~60 MB",
+        },
+        {
+            "filename": f"piper/{_PIPER_VOICE}.onnx.json",
+            "url": _piper_voice_url(_PIPER_VOICE, ".onnx.json"),
+            "size_hint": "~5 KB",
+        },
     ],
     # insightface_adapter downloads its weights automatically via the InsightFace
     # library (buffalo_l pack) on first inference — no manual download needed.
@@ -82,6 +125,31 @@ def _download_file(url: str, dest_path: Path) -> bool:
         return True
     except Exception as exc:
         print(f"\n  ✗ Failed to download {dest_path.name}: {exc}")
+        return False
+
+
+def _whisper_download(model_size: str, dest_dir: Path) -> bool:
+    """Pre-fetch a faster-whisper model into dest_dir (idempotent)."""
+    print(f"  Fetching faster-whisper '{model_size}' into {dest_dir} ...")
+    try:
+        from faster_whisper import WhisperModel  # optional dep: uv sync --extra stt
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        # Instantiating downloads the CT2 weights into download_root; if they
+        # are already present it returns immediately (no network).
+        WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type="int8",
+            download_root=str(dest_dir),
+        )
+        print(f"  ✓ faster-whisper '{model_size}' ready in {dest_dir}")
+        return True
+    except ImportError:
+        print("  ✗ faster-whisper not installed — build with `uv sync --extra stt` (or --extra all)")
+        return False
+    except Exception as exc:
+        print(f"  ✗ Whisper download failed: {exc}")
         return False
 
 
@@ -177,17 +245,28 @@ def main() -> None:
 
         print(f"[{adapter_name}]")
         for entry in entries:
-            dest = model_weights_dir / entry["filename"]
+            url = entry["url"]
             size_hint = entry.get("size_hint", "")
 
+            # Library-managed snapshot (no single file to stat); the handler is
+            # itself idempotent, so just run it.
+            if url == "whisper_download":
+                print(f"  → faster-whisper '{entry.get('model_size', 'base')}' {size_hint}")
+                if _whisper_download(entry.get("model_size", "base"), model_weights_dir / "whisper"):
+                    downloaded += 1
+                else:
+                    failed += 1
+                continue
+
+            dest = model_weights_dir / entry["filename"]
             if dest.exists():
                 size_mb = dest.stat().st_size / 1024 / 1024
                 print(f"  ✓ {entry['filename']} already exists ({size_mb:.1f} MB) — skipping")
                 skipped += 1
                 continue
 
+            dest.parent.mkdir(parents=True, exist_ok=True)   # e.g. model_weights/piper/
             print(f"  → {entry['filename']} {size_hint}")
-            url = entry["url"]
             if url == "ultralytics_export":
                 ok = _ultralytics_export(entry["filename"], dest)
             else:

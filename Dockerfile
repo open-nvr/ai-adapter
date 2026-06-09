@@ -30,10 +30,10 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN if [ "$USE_GPU" = "true" ]; then \
         echo "Installing all adapters with GPU PyTorch..." && \
-        uv sync --no-dev --extra all --extra gpu; \
+        uv sync --no-dev --extra all --extra gpu --active; \
     else \
         echo "Installing all adapters with CPU-only PyTorch..." && \
-        uv sync --no-dev --extra all --extra cpu; \
+        uv sync --no-dev --extra all --extra cpu --active; \
     fi
 
 # Copy application source code into builder stage
@@ -79,10 +79,8 @@ RUN chown aiuser:aiuser /app && \
 
 USER aiuser
 
-EXPOSE 9100
-
-# Add HEALTHCHECK so orchestrators know if the async loop freezes
+# Health endpoint is supplied by the runtime environment.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:9100/health || exit 1
+    CMD test -n "$ADAPTER_HEALTH_URL" && curl -f "$ADAPTER_HEALTH_URL" || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

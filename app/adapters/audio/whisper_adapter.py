@@ -102,10 +102,37 @@ class WhisperAdapter(BaseAdapter):
 
         audio_block = input_data.get("audio") or {}
         uri = audio_block.get("uri") if isinstance(audio_block, dict) else None
-        if not uri:
-            raise ValueError("WhisperAdapter requires 'audio.uri' in input_data")
+        audio_b64 = input_data.get("audio_b64")
+        if uri:
+            audio_path = resolve_audio_uri(uri)
+        elif audio_b64:
+            # Streaming clients (e.g. camera-agent) send the utterance inline
+            # as base64 raw int16 PCM (16 kHz mono) rather than a URI. Wrap it
+            # in a WAV container so faster-whisper can read it from a path.
+            import base64 as _b64
+            import tempfile as _tmp
+            import wave as _wave
 
-        audio_path = resolve_audio_uri(uri)
+            _raw = _b64.b64decode(audio_b64)
+            _f = _tmp.NamedTemporaryFile(suffix=".wav", delete=False)
+            if _raw[:4] == b"RIFF" and _raw[8:12] == b"WAVE":
+                # Already a WAV container (e.g. pipecat SegmentedSTTService
+                # wraps the utterance before sending) -> write as-is rather
+                # than double-wrapping it inside another WAV.
+                with open(_f.name, "wb") as _wf:
+                    _wf.write(_raw)
+            else:
+                # Raw int16 PCM (mono 16 kHz unless overridden) -> wrap.
+                with _wave.open(_f.name, "wb") as _wf:
+                    _wf.setnchannels(int(input_data.get("channels", 1)))
+                    _wf.setsampwidth(2)  # int16
+                    _wf.setframerate(int(input_data.get("sample_rate", 16000)))
+                    _wf.writeframes(_raw)
+            audio_path = _f.name
+        else:
+            raise ValueError(
+                "WhisperAdapter requires 'audio.uri' or inline 'audio_b64' in input_data"
+            )
 
         whisper_task = _WHISPER_MODE_BY_TASK[task]
         language = input_data.get("language")
