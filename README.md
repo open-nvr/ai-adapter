@@ -4,9 +4,9 @@
 
 # AI Adapter
 
-### Any model. Any framework. One contract.
+### Any model. Any framework. One governed contract.
 
-The pluggable inference layer for [OpenNVR](https://github.com/open-nvr/open-nvr). Drop any model behind an HTTP or WebSocket endpoint and it becomes a first-class capability — with end-to-end audit, fingerprint drift detection, and sovereignty enforcement that the underlying model never had to know about.
+The pluggable inference layer for [OpenNVR™](https://github.com/open-nvr/open-nvr). Drop any model behind an HTTP or WebSocket endpoint and it becomes a first-class, *governed* capability — with end-to-end audit, fingerprint drift detection, and sovereignty enforcement that the underlying model never had to know about. Governance lives in the contract itself, not bolted on after: an adapter must declare what it touches (GPU, filesystem, network egress) before it can run, and an operator's sovereignty policy can refuse it at registration. That is what lets you run third-party — even proprietary or classified — AI on regulated, air-gapped sites and still answer "which model, which weights, on which frame, under whose authority?"
 
 [![CI](https://github.com/open-nvr/ai-adapter/actions/workflows/ci.yml/badge.svg)](https://github.com/open-nvr/ai-adapter/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
@@ -163,6 +163,8 @@ Adapter proposals and design discussions go in [Discussions](https://github.com/
 ## License
 
 The reference server in this repo is **AGPLv3**. The SDK at [`opennvr_adapter_sdk/`](opennvr_adapter_sdk/) is **Apache-2.0** so adapter authors can publish under any compatible licence — including proprietary or classified. Adapter model weights you ship are not AGPL-bound; they remain under whatever licence the model itself permits. Running OpenNVR with your adapter as a network service triggers AGPL source-disclosure for the server-side modifications you've made. Full terms in [`LICENSE`](LICENSE).
+
+"OpenNVR" and the OpenNVR logo are trademarks of the project; an adapter may describe itself as "compatible with OpenNVR" but should not use the name as its own. See the [trademark policy](https://github.com/open-nvr/open-nvr/blob/main/TRADEMARK.md).
 
 For commercial licensing — closed-source adapters, proprietary redistribution, enterprise support — write to **[contact@cryptovoip.in](mailto:contact@cryptovoip.in)**.
 
