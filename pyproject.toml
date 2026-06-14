@@ -84,6 +84,14 @@ blip = [
     "transformers==5.0.0",
 ]
 
+# VLM open-vocabulary detection adapter (adapters/vlm) — OWL-ViT v2.
+# Requires torch — add --extra cpu or --extra gpu as well. Pillow for
+# image decode. GPU strongly recommended (CPU inference is slow).
+vlm = [
+    "transformers==5.0.0",
+    "pillow>=10.0.0",
+]
+
 # HuggingFace cloud inference proxy (huggingface_adapter)
 huggingface = [
     "huggingface_hub==1.3.4",
@@ -177,7 +185,7 @@ dev = [
 # Backward-compatible "install everything" profile
 # Equivalent to the old plain `uv sync` that had all deps in [project.dependencies]
 all = [
-    "opennvr-ai-adapter[yolo,yolo11,face,blip,huggingface,stt,tts,lpr]",
+    "opennvr-ai-adapter[yolo,yolo11,face,blip,vlm,huggingface,stt,tts,lpr]",
 ]
 
 # ── PyTorch index source ───────────────────────────────────────────────────────

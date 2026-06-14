@@ -25,10 +25,14 @@ POST a JPEG/PNG frame (or open a WebSocket stream), get COCO-80 object detection
 # Install deps
 uv sync --extra yolo
 
-# Download yolov8n weights (one-time, ~6 MB)
+# Download yolov8n weights and export to ONNX (one-time).
+# Ultralytics retired its public pre-built ONNX, so we derive the
+# ONNX from the .pt checkpoint, which is still hosted upstream.
 mkdir -p model_weights
 cd model_weights
-curl -LO https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx
+curl -LO https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
+pip install --quiet "ultralytics==8.3.40" "onnx>=1.16,<2"
+yolo export model=yolov8n.pt format=onnx opset=12 imgsz=640 simplify=False
 cd ..
 
 # Start the service

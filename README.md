@@ -4,9 +4,9 @@
 
 # AI Adapter
 
-### Any model. Any framework. One contract.
+### Any model. Any framework. One governed contract.
 
-The pluggable inference layer for [OpenNVR](https://github.com/open-nvr/open-nvr). Drop any model behind an HTTP or WebSocket endpoint and it becomes a first-class capability — with end-to-end audit, fingerprint drift detection, and sovereignty enforcement that the underlying model never had to know about.
+The pluggable inference layer for [OpenNVR™](https://github.com/open-nvr/open-nvr). Drop any model behind an HTTP or WebSocket endpoint and it becomes a first-class, *governed* capability — with end-to-end audit, fingerprint drift detection, and sovereignty enforcement that the underlying model never had to know about. Governance lives in the contract itself, not bolted on after: an adapter must declare what it touches (GPU, filesystem, network egress) before it can run, and an operator's sovereignty policy can refuse it at registration. That is what lets you run third-party — even proprietary or classified — AI on regulated, air-gapped sites and still answer "which model, which weights, on which frame, under whose authority?"
 
 [![CI](https://github.com/open-nvr/ai-adapter/actions/workflows/ci.yml/badge.svg)](https://github.com/open-nvr/ai-adapter/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
@@ -76,7 +76,7 @@ app = AdapterApp(
 
 ## What ships
 
-The repo is two things in one. The [`opennvr_adapter_sdk/`](opennvr_adapter_sdk/) directory is the small Apache-2.0 SDK published to PyPI — three classes (`AdapterService`, `AdapterApp`, `ServiceError`), a handful of result models, zero ML dependencies. Adapter authors install it from PyPI and never need to clone this repo. The [`adapters/`](adapters/) directory is the seven reference adapters that ship as standalone Docker images on GHCR (`ghcr.io/open-nvr/*-adapter`) — each is a working example of an SDK-based adapter, and Tier 0 of OpenNVR pulls them by tag.
+The repo is two things in one. The [`opennvr_adapter_sdk/`](opennvr_adapter_sdk/) directory is the small Apache-2.0 SDK published to PyPI — three classes (`AdapterService`, `AdapterApp`, `ServiceError`), a handful of result models, zero ML dependencies. Adapter authors install it from PyPI and never need to clone this repo. The [`adapters/`](adapters/) directory is the eight reference adapters that ship as standalone Docker images on GHCR (`ghcr.io/open-nvr/*-adapter`) — each is a working example of an SDK-based adapter, and Tier 0 of OpenNVR pulls them by tag.
 
 ```
 ai-adapter/
@@ -88,6 +88,7 @@ ai-adapter/
 │   ├── fast_plate_ocr/       License-plate recognition
 │   ├── insightface/          Face detection + recognition with REST face DB
 │   ├── blip/                 Scene captioning — used by the camera-agent
+│   ├── vlm/                  Open-vocabulary detection — OWL-ViT v2, detects free-text queries ("red truck")
 │   └── bytetrack/            Multi-object tracking — stateful post-processor over an upstream detector
 ├── templates/adapter-template/   Scaffold a new adapter in one command
 ├── conformance/              Wire-contract conformance test suite
@@ -95,7 +96,7 @@ ai-adapter/
 └── docs/                     Architecture, plugin dev, API reference
 ```
 
-Each of the seven shipped adapters lives in its own directory with its own `pyproject.toml`, Dockerfile, README, and tests. Replicate the shape, swap the model, and you have a new adapter.
+Each of the eight shipped adapters lives in its own directory with its own `pyproject.toml`, Dockerfile, README, and tests. Replicate the shape, swap the model, and you have a new adapter.
 
 ## Write your own adapter
 
@@ -163,6 +164,8 @@ Adapter proposals and design discussions go in [Discussions](https://github.com/
 ## License
 
 The reference server in this repo is **AGPLv3**. The SDK at [`opennvr_adapter_sdk/`](opennvr_adapter_sdk/) is **Apache-2.0** so adapter authors can publish under any compatible licence — including proprietary or classified. Adapter model weights you ship are not AGPL-bound; they remain under whatever licence the model itself permits. Running OpenNVR with your adapter as a network service triggers AGPL source-disclosure for the server-side modifications you've made. Full terms in [`LICENSE`](LICENSE).
+
+"OpenNVR" and the OpenNVR logo are trademarks of the project; an adapter may describe itself as "compatible with OpenNVR" but should not use the name as its own. See the [trademark policy](https://github.com/open-nvr/open-nvr/blob/main/TRADEMARK.md).
 
 For commercial licensing — closed-source adapters, proprietary redistribution, enterprise support — write to **[contact@cryptovoip.in](mailto:contact@cryptovoip.in)**.
 
