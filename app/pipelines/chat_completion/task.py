@@ -33,9 +33,17 @@ class ChatCompletionTask(BaseTask):
         if not isinstance(message_data, dict):
             raise ValueError("Adapter response 'message' must be an object")
 
+        # Preserve tool_calls when the model invoked a tool — without
+        # this the agent's entire tool-calling loop is silently dropped
+        # (the schema forbids extras, so it must be an explicit field).
+        tool_calls = message_data.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            tool_calls = None
+
         message = ChatMessage(
             role=message_data.get("role", "assistant"),
             content=str(message_data.get("content", "")),
+            tool_calls=tool_calls,
         )
 
         return ChatCompletionResponse(

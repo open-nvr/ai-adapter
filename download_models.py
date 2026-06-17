@@ -55,6 +55,22 @@ MODEL_REGISTRY: dict[str, list[dict]] = {
             "size_hint": "~40 MB",
         }
     ],
+    # Piper TTS voice. Unlike Whisper (which faster-whisper auto-downloads on
+    # first use), the Piper adapter requires the voice files on disk or it fails
+    # with "voice not found", so fetch them here. Both files must sit together
+    # under model_weights/piper/ (matches the adapter's default voice_dir).
+    "piper_adapter": [
+        {
+            "filename": "piper/en_US-libritts-high.onnx",
+            "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx",
+            "size_hint": "~110 MB",
+        },
+        {
+            "filename": "piper/en_US-libritts-high.onnx.json",
+            "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json",
+            "size_hint": "~20 KB",
+        },
+    ],
     # insightface_adapter downloads its weights automatically via the InsightFace
     # library (buffalo_l pack) on first inference — no manual download needed.
     # blip_adapter and huggingface_adapter fetch from HuggingFace Hub on first use.
@@ -178,6 +194,9 @@ def main() -> None:
         print(f"[{adapter_name}]")
         for entry in entries:
             dest = model_weights_dir / entry["filename"]
+            # Filenames may include a subdir (e.g. "piper/voice.onnx"); make sure
+            # the parent exists before downloading into it.
+            dest.parent.mkdir(parents=True, exist_ok=True)
             size_hint = entry.get("size_hint", "")
 
             if dest.exists():

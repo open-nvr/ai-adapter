@@ -89,5 +89,7 @@ dmypy.json
 cython_debug/
 
 .onnx/
-# InsightFace model weights (too large for GitHub)
-model_weights/insightface/
+# Model weights — large, regenerable artifacts. download_models.py and the
+# adapters (faster-whisper, InsightFace) fetch them on build/first use, so they
+# must never be committed; GitHub also rejects the >100 MB Piper/Whisper files.
+model_weights/

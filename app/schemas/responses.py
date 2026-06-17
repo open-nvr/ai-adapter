@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
@@ -244,6 +244,19 @@ class ChatMessage(BaseModel):
 
     role: Literal["system", "user", "assistant", "tool"]
     content: str
+    # OpenAI-style tool calls, present only when the model invoked a
+    # tool. Carried verbatim from the adapter (each entry is
+    # {"id", "type", "function": {"name", "arguments"}}) so tool-calling
+    # clients (e.g. the camera-agent) can act on them. Dropped from the
+    # serialized output when absent so plain-text replies stay clean.
+    tool_calls: list[dict[str, Any]] | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_null_tool_calls(self, handler):
+        data = handler(self)
+        if data.get("tool_calls") is None:
+            data.pop("tool_calls", None)
+        return data
 
 
 class ChatCompletionResponse(BaseModel):
@@ -273,6 +286,12 @@ class SpeechSynthesisResponse(BaseModel):
 
     task: Literal["speech_synthesis"] = "speech_synthesis"
     audio_uri: str = Field(min_length=1)
+    # Base64-encoded WAV bytes, present only when the caller asked for
+    # inline audio (``inline: true``). HTTP-only clients with no shared
+    # audio mount (e.g. the camera-agent) need the bytes on the wire
+    # rather than an ``opennvr://audio/...`` URI they can't dereference.
+    # Dropped from the serialized output when absent.
+    audio_b64: str | None = None
     duration_seconds: float = Field(ge=0.0)
     sample_rate: int = Field(gt=0)
     voice: str = Field(min_length=1)
@@ -286,3 +305,10 @@ class SpeechSynthesisResponse(BaseModel):
         if not value.startswith("opennvr://audio/"):
             raise ValueError("audio_uri must start with opennvr://audio/")
         return value
+
+    @model_serializer(mode="wrap")
+    def _drop_null_audio_b64(self, handler):
+        data = handler(self)
+        if data.get("audio_b64") is None:
+            data.pop("audio_b64", None)
+        return data

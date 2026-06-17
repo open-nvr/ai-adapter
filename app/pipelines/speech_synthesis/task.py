@@ -32,8 +32,16 @@ class SpeechSynthesisTask(BaseTask):
         if not isinstance(audio_uri, str) or not audio_uri:
             raise ValueError("Adapter response missing 'audio_uri'")
 
+        # Surface inline base64 audio when the adapter produced it
+        # (caller passed inline=true). HTTP-only clients with no shared
+        # audio mount need the bytes here, not just the URI.
+        audio_b64 = raw_payload.get("audio_b64")
+        if not isinstance(audio_b64, str) or not audio_b64:
+            audio_b64 = None
+
         return SpeechSynthesisResponse(
             audio_uri=audio_uri,
+            audio_b64=audio_b64,
             duration_seconds=float(raw_payload.get("duration_seconds", 0.0)),
             sample_rate=int(raw_payload.get("sample_rate", 0)),
             voice=str(raw_payload.get("voice", "")).strip() or "unknown",

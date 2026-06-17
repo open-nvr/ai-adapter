@@ -127,11 +127,28 @@ class PiperAdapter(BaseAdapter):
 
         start_time = time.time()
         with wave.open(str(audio_path), "wb") as wav_file:
-            voice.synthesize(text, wav_file, **synth_kwargs)
+            if hasattr(voice, "synthesize_wav"):
+                # piper-tts >=1.3.x: writes the PCM into the wave object AND
+                # sets the WAV header itself. The old positional form
+                # ``synthesize(text, wav_file)`` was replaced by
+                # ``synthesize(text, syn_config) -> AudioChunks``; calling it
+                # the old way silently leaves the WAV unconfigured, which
+                # blows up on close with "# channels not specified".
+                voice.synthesize_wav(text, wav_file)
+            else:
+                # Legacy piper-tts: the caller sets the header and
+                # ``synthesize`` writes frames into the wave object.
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                sample_rate = getattr(
+                    getattr(voice, "config", None), "sample_rate", 22050
+                )
+                wav_file.setframerate(sample_rate)
+                voice.synthesize(text, wav_file, **synth_kwargs)
 
         sample_rate, duration_seconds = self._probe_wav(audio_path)
 
-        return {
+        result: Dict[str, Any] = {
             "task": "speech_synthesis",
             "audio_uri": audio_uri,
             "duration_seconds": duration_seconds,
@@ -141,6 +158,27 @@ class PiperAdapter(BaseAdapter):
             "executed_at": int(time.time() * 1000),
             "latency_ms": int((time.time() - start_time) * 1000),
         }
+
+        # Inline audio: HTTP-only callers with no shared audio mount
+        # (e.g. the camera-agent voice loop) can't dereference the
+        # ``opennvr://audio/...`` URI, so when they pass ``inline: true``
+        # we also return the WAV bytes base64-encoded.
+        if self._wants_inline(input_data):
+            import base64
+
+            with open(audio_path, "rb") as fh:
+                result["audio_b64"] = base64.b64encode(fh.read()).decode("ascii")
+
+        return result
+
+    @staticmethod
+    def _wants_inline(input_data: Dict[str, Any]) -> bool:
+        """True if the caller asked for inline base64 audio. Accepts a
+        few synonyms so different client generations interoperate."""
+        for key in ("inline", "return_audio_inline", "audio_inline"):
+            if bool(input_data.get(key)):
+                return True
+        return False
 
     @staticmethod
     def _probe_wav(path) -> tuple[int, float]:

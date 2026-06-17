@@ -28,12 +28,21 @@ RUN uv venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
+# Raise uv's HTTP timeout (default 30s) so the large torch/ML wheel
+# downloads survive a slow or flaky PyPI connection instead of failing
+# the whole build on a transient read stall.
+ENV UV_HTTP_TIMEOUT=120
+
+# --active installs into the active VIRTUAL_ENV (/opt/venv). Without it,
+# uv targets a project-local .venv and the baked /opt/venv stays empty,
+# which forces `uv run` to re-resolve + re-download every dependency from
+# PyPI on each container boot (and crash-loop on a slow network).
 RUN if [ "$USE_GPU" = "true" ]; then \
         echo "Installing all adapters with GPU PyTorch..." && \
-        uv sync --no-dev --extra all --extra gpu; \
+        uv sync --active --no-dev --extra all --extra gpu; \
     else \
         echo "Installing all adapters with CPU-only PyTorch..." && \
-        uv sync --no-dev --extra all --extra cpu; \
+        uv sync --active --no-dev --extra all --extra cpu; \
     fi
 
 # Copy application source code into builder stage

@@ -96,7 +96,14 @@ class OllamaAdapter(BaseAdapter):
             or _DEFAULT_BASE_URL
         ).rstrip("/")
         self._default_model = self.config.get("model", _DEFAULT_MODEL)
-        self._timeout_s = float(self.config.get("timeout_s", 60.0))
+        # First inference on CPU cold-loads the model into RAM and processes a
+        # tool-heavy prompt, which can exceed a minute for 3B-class models.
+        # Default generously (overridable via OLLAMA_TIMEOUT_S / config) so the
+        # first chat doesn't time out; warm calls return in a few seconds.
+        self._timeout_s = float(
+            os.environ.get("OLLAMA_TIMEOUT_S")
+            or self.config.get("timeout_s", 300.0)
+        )
         self._client = None
 
     def load_model(self) -> None:
@@ -279,6 +286,34 @@ class OllamaAdapter(BaseAdapter):
             # Prepend only if the caller didn't already include one.
             if not messages or messages[0].get("role") != "system":
                 messages.insert(0, {"role": "system", "content": system})
+
+        # Ollama's /api/chat wants assistant tool_calls' ``arguments`` as a
+        # JSON OBJECT, but OpenAI-style clients (and our own response
+        # normaliser, _normalise_tool_calls) carry it as a JSON STRING. When
+        # the caller re-submits a tool-call turn to continue the conversation,
+        # convert string args back to objects so Ollama doesn't 400 with
+        # "cannot unmarshal string into ToolCallFunctionArguments".
+        for msg in messages:
+            tool_calls = msg.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            rebuilt: List[Dict[str, Any]] = []
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                call = dict(call)
+                func = call.get("function")
+                if isinstance(func, dict):
+                    func = dict(func)
+                    args = func.get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            func["arguments"] = json.loads(args) if args.strip() else {}
+                        except (json.JSONDecodeError, ValueError):
+                            func["arguments"] = {}
+                    call["function"] = func
+                rebuilt.append(call)
+            msg["tool_calls"] = rebuilt
 
         return messages
 

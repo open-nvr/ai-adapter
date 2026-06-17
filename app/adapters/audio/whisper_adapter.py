@@ -48,7 +48,14 @@ class WhisperAdapter(BaseAdapter):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        self._model_size = self.config.get("model_size", "base")
+        # Env wins so deployments can pick a model without touching config.
+        # The ``.en`` variants (e.g. base.en) are English-only — faster and
+        # far less prone to foreign-language hallucination on noisy/quiet
+        # audio than the multilingual default.
+        self._model_size = (
+            os.environ.get("WHISPER_MODEL_SIZE")
+            or self.config.get("model_size", "base")
+        )
         self._requested_device = self.config.get("device", "auto")
         self._requested_compute_type = self.config.get("compute_type", "auto")
         self._device: Optional[str] = None
@@ -100,60 +107,94 @@ class WhisperAdapter(BaseAdapter):
                 f"WhisperAdapter supports {sorted(_SUPPORTED_TASKS)}, got: {task}"
             )
 
+        # Audio source: either a shared-mount URI (``audio.uri``) or
+        # inline base64 bytes. Inline support lets HTTP-only callers with
+        # no shared audio mount (e.g. the camera-agent voice loop) send
+        # the captured utterance directly. The bytes are expected to be a
+        # self-describing container (WAV/Opus/MP3/FLAC); faster-whisper
+        # reads them from a path, so we stage inline audio to a temp file.
         audio_block = input_data.get("audio") or {}
         uri = audio_block.get("uri") if isinstance(audio_block, dict) else None
-        if not uri:
-            raise ValueError("WhisperAdapter requires 'audio.uri' in input_data")
+        inline_b64 = input_data.get("audio_b64")
+        if not inline_b64 and isinstance(audio_block, dict):
+            inline_b64 = audio_block.get("b64")
 
-        audio_path = resolve_audio_uri(uri)
+        tmp_path: Optional[str] = None
+        if uri:
+            audio_path = str(resolve_audio_uri(uri))
+        elif inline_b64:
+            import base64
+            import tempfile
+
+            try:
+                audio_bytes = base64.b64decode(inline_b64)
+            except Exception as exc:
+                raise ValueError(f"WhisperAdapter: 'audio_b64' is not valid base64: {exc}")
+            if not audio_bytes:
+                raise ValueError("WhisperAdapter: 'audio_b64' decoded to empty bytes")
+            fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(audio_bytes)
+            audio_path = tmp_path
+        else:
+            raise ValueError(
+                "WhisperAdapter requires 'audio.uri' or inline 'audio_b64' in input_data"
+            )
 
         whisper_task = _WHISPER_MODE_BY_TASK[task]
         language = input_data.get("language")
         beam_size = int(input_data.get("beam_size", 5))
         vad_filter = bool(input_data.get("vad_filter", False))
 
-        start_time = time.time()
-        # faster-whisper returns (segments_generator, info); iterating segments
-        # is what actually runs inference — it is a lazy generator.
-        segments_iter, info = self.model.transcribe(
-            str(audio_path),
-            task=whisper_task,
-            language=language,
-            beam_size=beam_size,
-            vad_filter=vad_filter,
-        )
-
-        segments: List[Dict[str, Any]] = []
-        text_parts: List[str] = []
-        for seg in segments_iter:
-            seg_text = (seg.text or "").strip()
-            text_parts.append(seg_text)
-            segments.append(
-                {
-                    "start": float(seg.start),
-                    "end": float(seg.end),
-                    "text": seg_text,
-                    "avg_logprob": float(seg.avg_logprob) if seg.avg_logprob is not None else None,
-                    "no_speech_prob": float(seg.no_speech_prob) if seg.no_speech_prob is not None else None,
-                }
+        try:
+            start_time = time.time()
+            # faster-whisper returns (segments_generator, info); iterating segments
+            # is what actually runs inference — it is a lazy generator.
+            segments_iter, info = self.model.transcribe(
+                str(audio_path),
+                task=whisper_task,
+                language=language,
+                beam_size=beam_size,
+                vad_filter=vad_filter,
             )
 
-        full_text = " ".join(part for part in text_parts if part).strip()
+            segments: List[Dict[str, Any]] = []
+            text_parts: List[str] = []
+            for seg in segments_iter:
+                seg_text = (seg.text or "").strip()
+                text_parts.append(seg_text)
+                segments.append(
+                    {
+                        "start": float(seg.start),
+                        "end": float(seg.end),
+                        "text": seg_text,
+                        "avg_logprob": float(seg.avg_logprob) if seg.avg_logprob is not None else None,
+                        "no_speech_prob": float(seg.no_speech_prob) if seg.no_speech_prob is not None else None,
+                    }
+                )
 
-        return {
-            "task": task,
-            "text": full_text,
-            "segments": segments,
-            "language": "en" if whisper_task == "translate" else info.language,
-            "language_confidence": float(info.language_probability)
-            if info.language_probability is not None
-            else None,
-            "duration_seconds": float(info.duration),
-            "model": self._model_size,
-            "translated_to_english": whisper_task == "translate",
-            "executed_at": int(time.time() * 1000),
-            "latency_ms": int((time.time() - start_time) * 1000),
-        }
+            full_text = " ".join(part for part in text_parts if part).strip()
+
+            return {
+                "task": task,
+                "text": full_text,
+                "segments": segments,
+                "language": "en" if whisper_task == "translate" else info.language,
+                "language_confidence": float(info.language_probability)
+                if info.language_probability is not None
+                else None,
+                "duration_seconds": float(info.duration),
+                "model": self._model_size,
+                "translated_to_english": whisper_task == "translate",
+                "executed_at": int(time.time() * 1000),
+                "latency_ms": int((time.time() - start_time) * 1000),
+            }
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     @property
     def schema(self) -> Dict[str, Any]:
