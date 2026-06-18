@@ -38,7 +38,13 @@ on:
   # adapter Dockerfiles change rarely) and the alternative landmine
   # is not worth it.
   push:
-    branches: [main]
+    # Every branch auto-builds + pushes images tagged with the branch
+    # name (type=ref,event=branch) plus :sha-<short>, so a feature
+    # branch's adapter changes get pullable images without manually
+    # dispatching. :latest stays gated below to the default branch /
+    # release tags, so feature builds never clobber it.
+    branches:
+      - "**"
     tags:
       - "v*"
   pull_request:
