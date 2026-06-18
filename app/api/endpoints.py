@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi.responses import JSONResponse
 from typing import Dict, Any, List, Optional
 from app.api.auth import get_api_key
 
@@ -46,6 +47,35 @@ def health_check():
         "system_hardware": get_system_specs(),
         "adapter_details": adapter_health
     }
+
+@public_router.get("/ready")
+def readiness_check():
+    """Readiness probe — distinct from /health.
+
+    /health reports the HTTP server is up; /ready additionally reports
+    whether the enabled adapters' model weights are present on disk.
+    Container orchestration should gate dependents (e.g. the camera-agent)
+    on THIS so they don't start calling inference before the background
+    weight download has finished — the race that otherwise shows up as
+    "camera offline until the adapter is restarted".
+
+    Fail-open: if we can't introspect the weights, report ready so a
+    packaging change can't deadlock startup.
+    """
+    if not _global_router:
+        return JSONResponse({"status": "starting"}, status_code=503)
+    try:
+        from download_models import required_weights_status
+
+        ok, missing = required_weights_status()
+    except Exception:
+        ok, missing = True, []
+    if not ok:
+        return JSONResponse(
+            {"status": "not_ready", "missing_weights": missing}, status_code=503
+        )
+    return {"status": "ready"}
+
 
 @public_router.get("/capabilities")
 def capabilities():

@@ -40,7 +40,26 @@ class YOLOv8Adapter(BaseAdapter):
         import onnxruntime as ort  # optional dep: uv sync --extra yolo
 
         if not os.path.exists(self._model_path):
-            raise FileNotFoundError(f"YOLOv8 model not found at {self._model_path}")
+            # Self-heal: the background weight pre-download may not have
+            # finished when the first inference lands. Fetch on demand
+            # instead of erroring — otherwise the first request fails and
+            # the caller (camera-agent) reports the camera offline until
+            # the container is restarted.
+            logger.warning(
+                "YOLOv8 weights missing at %s — attempting on-demand download",
+                self._model_path,
+            )
+            try:
+                from download_models import ensure_adapter_weights
+
+                ensure_adapter_weights("yolov8_adapter", MODEL_WEIGHTS_DIR)
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.warning("YOLOv8 on-demand weight download failed: %s", exc)
+            if not os.path.exists(self._model_path):
+                raise FileNotFoundError(
+                    f"YOLOv8 model not found at {self._model_path} "
+                    "(on-demand download did not produce it)"
+                )
 
         self.session = ort.InferenceSession(
             self._model_path,

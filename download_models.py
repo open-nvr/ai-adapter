@@ -149,6 +149,53 @@ def _load_enabled_adapters() -> set[str]:
         return set(MODEL_REGISTRY.keys())
 
 
+def _weights_dir(model_weights_dir=None) -> Path:
+    return Path(model_weights_dir) if model_weights_dir else (Path(__file__).parent / "model_weights")
+
+
+def ensure_adapter_weights(adapter_name: str, model_weights_dir=None) -> bool:
+    """Ensure one adapter's weight files exist locally, downloading any that
+    are missing. Safe to call repeatedly (a no-op once files are present).
+
+    Used for self-healing at first inference: the background pre-download in
+    docker-entrypoint.sh may not have finished when the first request lands,
+    so adapters fetch their own weights on demand instead of erroring (which
+    otherwise surfaces to the user as "camera offline" until a restart).
+
+    Returns True if every required file is present afterwards.
+    """
+    entries = MODEL_REGISTRY.get(adapter_name, [])
+    if not entries:
+        return True
+    base = _weights_dir(model_weights_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        dest = base / entry["filename"]
+        if dest.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        url = entry["url"]
+        if url == "ultralytics_export":
+            _ultralytics_export(entry["filename"], dest)
+        else:
+            _download_file(url, dest)
+    return all((base / e["filename"]).exists() for e in entries)
+
+
+def required_weights_status(model_weights_dir=None) -> "tuple[bool, list[str]]":
+    """Readiness-probe helper: (all_present, missing_filenames) across the
+    weight files of the *enabled* adapters that need a manual download. The
+    /ready endpoint uses this so dependents wait until weights are actually
+    on disk, not merely until the HTTP server is up."""
+    base = _weights_dir(model_weights_dir)
+    missing: list[str] = []
+    for adapter in (_load_enabled_adapters() & set(MODEL_REGISTRY.keys())):
+        for entry in MODEL_REGISTRY[adapter]:
+            if not (base / entry["filename"]).exists():
+                missing.append(entry["filename"])
+    return (not missing, sorted(missing))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Download model weights for enabled OpenNVR AI adapters."
