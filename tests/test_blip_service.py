@@ -11,10 +11,18 @@ import pytest
 
 from opennvr_adapter_sdk import ErrorCategory, HardwareVerdict, ServiceError
 from tests._blip_service_fixtures import (  # noqa: F401
+    blip_app,
     blip_environment,
     install_fake_transformers,
     sample_jpeg,
 )
+
+
+def test_capabilities_declares_no_network_egress(blip_app):
+    """Issue #79: weights are baked into the image, so BLIP declares no
+    egress and can register under AI_SOVEREIGNTY=local_only."""
+    caps = blip_app.get("/capabilities").json()
+    assert caps["permissions"]["network_egress"] == []
 
 
 def _build_service(env, caption: str | None = None):

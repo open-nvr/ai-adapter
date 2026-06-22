@@ -35,11 +35,13 @@ curl -sS http://127.0.0.1:9006/infer \
 
 ## Operational notes
 
-- **First-run weights download.** The HuggingFace `transformers` library
-  fetches `Salesforce/blip-image-captioning-base` (~990 MB) on first
-  `load()`. Subsequent restarts read from the local HuggingFace cache.
-  Operators with strict sovereignty either pre-bake the model into the
-  image or run a private HuggingFace mirror.
+- **Weights are baked into the image.** `Salesforce/blip-image-captioning-base`
+  (~990 MB) is downloaded into `/root/.cache/huggingface` at *build* time, so
+  the published `ghcr.io/open-nvr/blip-adapter` image needs no network access
+  to caption — it declares no `network_egress` and registers under the secure
+  default `AI_SOVEREIGNTY=local_only` (issue #79). Building from a different
+  model id? Override `--build-arg BLIP_MODEL_ID=...`. The HF cache mount in the
+  run example below is only needed if you build *without* the baked weights.
 - **CPU is the default; GPU is opt-in.** The service uses
   `torch.cuda.is_available()` at load time — pass NVIDIA devices via the
   standard Docker `--gpus all` flag and torch picks them up. There are no
