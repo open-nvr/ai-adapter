@@ -39,6 +39,24 @@ RUN pip install --no-cache-dir \
         torch==2.9.1+cpu \
         torchvision==0.24.1+cpu
 
+# Pre-bake the BLIP weights into the image so the adapter runs with NO
+# network egress under AI_SOVEREIGNTY=local_only (issue #79). Without
+# this, the first /infer would download ~990 MB from huggingface.co at
+# runtime — which requires relaxing the sovereignty gate. Baking at
+# build time keeps the secure-by-default posture intact.
+ARG BLIP_MODEL_ID=Salesforce/blip-image-captioning-base
+ENV HF_HUB_DISABLE_TELEMETRY=1
+RUN python -c "from transformers import BlipProcessor, BlipForConditionalGeneration; \
+mid='${BLIP_MODEL_ID}'; BlipProcessor.from_pretrained(mid); BlipForConditionalGeneration.from_pretrained(mid)"
+
+# Pin the RUNTIME fully offline so from_pretrained() loads only from the
+# baked cache and never makes the default metadata/update check to
+# huggingface.co — which would otherwise contradict network_egress=[]
+# and stall in a network-isolated local_only deployment. Set AFTER the
+# bake above (the build needs the network; the running container does not).
+ENV TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_OFFLINE=1
+
 # Install the OpenNVR adapter SDK so ``adapters.blip.main`` can import
 # AdapterApp, BodyShape, etc.
 COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/

@@ -57,7 +57,9 @@ MODEL_REGISTRY: dict[str, list[dict]] = {
     ],
     # insightface_adapter downloads its weights automatically via the InsightFace
     # library (buffalo_l pack) on first inference — no manual download needed.
-    # blip_adapter and huggingface_adapter fetch from HuggingFace Hub on first use.
+    # huggingface_adapter fetches from HuggingFace Hub on first use.
+    # blip_adapter's weights are baked into its image at build time
+    # (adapters/blip/Dockerfile), so it needs no runtime download — issue #79.
 }
 
 

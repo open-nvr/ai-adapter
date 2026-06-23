@@ -56,10 +56,11 @@ _adapter_app = AdapterApp(
         # selection env vars (CUDA_VISIBLE_DEVICES, etc.) — the
         # service doesn't define adapter-specific device knobs.
         gpu=False,
-        # First-run model download from huggingface.co. Operators
-        # with strict sovereignty either pre-bake the model or
-        # operate a local HF mirror.
-        network_egress=["huggingface.co", "*.huggingface.co"],
+        # No runtime egress: the BLIP weights are baked into the image at
+        # build time (see Dockerfile), so the adapter loads them from the
+        # local HuggingFace cache and never reaches huggingface.co. This
+        # lets it register under AI_SOVEREIGNTY=local_only (issue #79).
+        network_egress=[],
         host_filesystem=[],
         shared_memory_paths=[],
         host_metadata=False,
