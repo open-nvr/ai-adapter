@@ -31,16 +31,25 @@ RUN pip install --no-cache-dir \
         pydantic==2.12.5 \
         httpx==0.28.1 \
         python-multipart==0.0.20 \
-        pillow==12.0.0 \
+        "pillow>=10.4,<11" \
         "moondream>=0.1,<1.0"
 
 # Bake the quantized model file into the image so the adapter runs offline under
 # AI_SOVEREIGNTY=local_only (no runtime egress). 0.5B int8 ~593 MiB by default.
 ARG MOONDREAM_MODEL_URL
 ARG MOONDREAM_MODEL_FILE=moondream-0_5b-int8.mf.gz
-RUN test -n "$MOONDREAM_MODEL_URL" || (echo "ERROR: set --build-arg MOONDREAM_MODEL_URL=<url to ${MOONDREAM_MODEL_FILE}>" >&2; exit 1) \
-    && mkdir -p /models \
-    && curl -fSL "$MOONDREAM_MODEL_URL" -o "/models/${MOONDREAM_MODEL_FILE}"
+# Bake the model when a URL is supplied (production / offline / local_only).
+# When it's not (e.g. the CI smoke build that builds every adapter without
+# args), build WITHOUT the model so the image still builds — the adapter then
+# reports unhealthy at runtime until a model is provided. Pass the URL for a
+# complete, offline-capable image.
+RUN mkdir -p /models \
+    && if [ -n "$MOONDREAM_MODEL_URL" ]; then \
+         echo "Baking model ${MOONDREAM_MODEL_FILE}…"; \
+         curl -fSL "$MOONDREAM_MODEL_URL" -o "/models/${MOONDREAM_MODEL_FILE}"; \
+       else \
+         echo "WARN: no MOONDREAM_MODEL_URL — image built WITHOUT a model; pass --build-arg MOONDREAM_MODEL_URL=<url to ${MOONDREAM_MODEL_FILE}> for an offline/local_only image." >&2; \
+       fi
 ENV OPENNVR_MOONDREAM_MODEL_PATH=/models/${MOONDREAM_MODEL_FILE}
 
 # OpenNVR adapter SDK + the adapter package.

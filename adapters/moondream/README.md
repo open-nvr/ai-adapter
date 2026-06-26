@@ -49,7 +49,11 @@ for more capable answers via `--build-arg MOONDREAM_MODEL_FILE=...`.
 ## Notes
 - The quantized model file is baked into the image (offline) so it runs under
   `AI_SOVEREIGNTY=local_only` with no runtime egress.
-- You must supply `--build-arg MOONDREAM_MODEL_URL=<url to the .mf.gz>` at build
-  time (get it from https://moondream.ai/p/models or the HuggingFace mirror).
+- For an offline / `local_only` image, supply `--build-arg
+  MOONDREAM_MODEL_URL=<url to the .mf.gz>` so the model is baked in (get the URL
+  from https://moondream.ai/p/models or the HuggingFace mirror). Without it the
+  image still builds (e.g. CI smoke) but has no model and reports unhealthy at
+  runtime until one is provided.
+- Pillow is pinned `<11` because the moondream package requires it.
 - **Not yet build-verified** — confirm the `moondream` package version and the
   model-file URL with one real `docker build` before publishing.
