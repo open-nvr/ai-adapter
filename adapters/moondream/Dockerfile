@@ -32,7 +32,7 @@ RUN pip install --no-cache-dir \
         httpx==0.28.1 \
         python-multipart==0.0.20 \
         "pillow>=10.4,<11" \
-        "moondream>=0.1,<1.0"
+        moondream==0.0.6
 
 # Bake the quantized model file into the image so the adapter runs offline under
 # AI_SOVEREIGNTY=local_only (no runtime egress). 0.5B int8 ~593 MiB by default.

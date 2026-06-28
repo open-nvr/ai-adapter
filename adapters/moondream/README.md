@@ -40,20 +40,29 @@ POST /api/v1/adapters/register  {"name": "moondream", "url": "http://moondream-a
 and set `caption_adapter: moondream` in the camera-agent config.
 
 ## Runtime
-Uses the official **`moondream` package with a quantized int8 model file**, not
-transformers — it's purpose-built for fast VQA on CPU/edge, so the image is small
-(no torch) and there's no remote-code / CPU-encoding fragility. Default model is
-**0.5B int8** (~593 MiB, fastest on limited hardware); use **2B int8** (~1.7 GiB)
-for more capable answers via `--build-arg MOONDREAM_MODEL_FILE=...`.
+Uses the **`moondream==0.0.6`** package — the **onnxruntime** build with a
+quantized int8 `.mf.gz` model file and **no torch**. (Pin matters: 0.1.x is
+cloud-only and rejects a local model; 0.2.x pulls torch/CUDA and won't build on
+CPU. 0.0.6 is the local-onnx version that works on CPU.) API: `encode_image()`
+then `caption()` / `query()`. Default model is **0.5B int8** (~593 MiB, fastest
+on limited hardware); use **2B int8** (~1.7 GiB) for more capable answers.
+
+## Providing the model (three ways, most-sovereign first)
+The **CI-published image is code-only** (CI doesn't pass a model URL). Supply the
+int8 `.mf.gz` (from https://moondream.ai/p/models or the HF mirror) by any of:
+
+1. **Bake at build** (offline / `local_only`, best): `--build-arg
+   MOONDREAM_MODEL_URL=<url>` → fully self-contained image.
+2. **Mount it** into the model volume at `OPENNVR_MOONDREAM_MODEL_PATH`
+   (default `/models/moondream-0_5b-int8.mf.gz`) — offline, works with the
+   code-only published image.
+3. **Runtime download** — set env `OPENNVR_MOONDREAM_MODEL_URL`; the adapter
+   downloads it **once** into the model path on first start (cached in the
+   volume). Makes the published image **pull-and-run** with no rebuild — but it's
+   a one-time network fetch, so use 1 or 2 for a strict `local_only` posture.
+   (Inference itself still has no egress.)
 
 ## Notes
-- The quantized model file is baked into the image (offline) so it runs under
-  `AI_SOVEREIGNTY=local_only` with no runtime egress.
-- For an offline / `local_only` image, supply `--build-arg
-  MOONDREAM_MODEL_URL=<url to the .mf.gz>` so the model is baked in (get the URL
-  from https://moondream.ai/p/models or the HuggingFace mirror). Without it the
-  image still builds (e.g. CI smoke) but has no model and reports unhealthy at
-  runtime until one is provided.
-- Pillow is pinned `<11` because the moondream package requires it.
-- **Not yet build-verified** — confirm the `moondream` package version and the
-  model-file URL with one real `docker build` before publishing.
+- Pillow is pinned `<11` (moondream requires it); runtime is `moondream==0.0.6`
+  (onnxruntime, no torch).
+- Confirm the model-file URL with one real run before relying on it.

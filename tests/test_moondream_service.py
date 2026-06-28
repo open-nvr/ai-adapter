@@ -23,11 +23,16 @@ def _jpeg() -> bytes:
 
 
 class _FakeModel:
-    """The moondream package API: query(image, q) → {answer}; caption(image,
-    length) → {caption}."""
-    def query(self, image, question):
+    """Mimics moondream 0.0.6: encode_image() first, then caption/query on the
+    ENCODED image; caption() takes no ``length`` kwarg (so the service's
+    try/except fallback is exercised)."""
+    def encode_image(self, image):
+        return ("ENC", image)
+    def query(self, enc, question):
+        assert enc[0] == "ENC", "query must receive the encoded image"
         return {"answer": f"answer to: {question}"}
-    def caption(self, image, length="short"):
+    def caption(self, enc):
+        assert enc[0] == "ENC", "caption must receive the encoded image"
         return {"caption": "a small test scene"}
 
 
@@ -73,6 +78,41 @@ def test_not_ready_raises_503():
     with pytest.raises(ServiceError) as ei:
         svc.infer({"__file__": _jpeg()})
     assert ei.value.http_status == 503
+
+
+def test_ensure_model_downloads_when_missing_and_url_set(monkeypatch, tmp_path):
+    import urllib.request
+    target = tmp_path / "m.mf.gz"
+    svc = MoondreamService(model_path=str(target))
+    monkeypatch.setenv("OPENNVR_MOONDREAM_MODEL_URL", "http://example/m.mf.gz")
+    seen = {}
+
+    def fake(url, dest):
+        seen["url"] = url
+        open(dest, "wb").write(b"MODEL")
+    monkeypatch.setattr(urllib.request, "urlretrieve", fake)
+    svc._ensure_model()
+    assert seen["url"] == "http://example/m.mf.gz"
+    assert target.exists()
+
+
+def test_ensure_model_skips_when_present(monkeypatch, tmp_path):
+    import urllib.request
+    target = tmp_path / "m.mf.gz"
+    target.write_bytes(b"already here")
+    svc = MoondreamService(model_path=str(target))
+    monkeypatch.setattr(urllib.request, "urlretrieve",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("no dl")))
+    svc._ensure_model()      # present → must not download
+
+
+def test_ensure_model_no_url_no_download(monkeypatch, tmp_path):
+    target = tmp_path / "missing.mf.gz"
+    monkeypatch.delenv("OPENNVR_MOONDREAM_MODEL_URL", raising=False)
+    monkeypatch.delenv("MOONDREAM_MODEL_URL", raising=False)
+    svc = MoondreamService(model_path=str(target))
+    svc._ensure_model()      # no url → no error, no file (md.vl fails later)
+    assert not target.exists()
 
 
 def test_adapter_declares_no_egress_apache_and_tasks():

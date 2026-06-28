@@ -80,6 +80,7 @@ class MoondreamService(AdapterService):
             try:
                 import moondream as md  # the official, CPU-optimised runtime
 
+                self._ensure_model()
                 logger.info("MoondreamService: loading %s", self._model_path)
                 self._model = md.vl(model=self._model_path)
                 self._fingerprint_cache = self._compute_fingerprint()
@@ -90,6 +91,32 @@ class MoondreamService(AdapterService):
                 self._load_state = HealthStatus.ERROR
                 self._load_error = str(exc)
                 logger.exception("MoondreamService failed to load %s", self._model_path)
+
+    def _ensure_model(self) -> None:
+        """Provision the model file if it isn't present. Three ways to supply it,
+        in order of sovereignty:
+          1. BAKED into the image at build (offline / local_only — best).
+          2. MOUNTED into the model volume (offline).
+          3. DOWNLOADED once at startup from OPENNVR_MOONDREAM_MODEL_URL — makes
+             the code-only CI image pull-and-run, but it's a one-time network
+             fetch (operator opt-in; NOT for a strict local_only posture).
+        Cached at the model path, so subsequent starts skip it."""
+        if os.path.exists(self._model_path):
+            return
+        url = (os.getenv("OPENNVR_MOONDREAM_MODEL_URL")
+               or os.getenv("MOONDREAM_MODEL_URL") or "").strip()
+        if not url:
+            return  # no source — md.vl() will fail with a clear "file not found"
+        import urllib.request
+        d = os.path.dirname(self._model_path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        logger.info("Moondream: model missing; downloading once from %s -> %s",
+                    url, self._model_path)
+        tmp = self._model_path + ".part"
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, self._model_path)
+        logger.info("Moondream: model downloaded.")
 
     def is_ready(self) -> bool:
         return self._load_state == HealthStatus.OK
@@ -170,10 +197,20 @@ class MoondreamService(AdapterService):
 
         started = time.monotonic()
         try:
+            # moondream 0.0.6 (onnxruntime, no torch): encode the image once,
+            # then caption/query the ENCODED image. Be defensive so a newer
+            # build that accepts the raw image still works.
+            enc = image
+            if hasattr(self._model, "encode_image"):
+                enc = self._model.encode_image(image)
             if is_vqa:
-                text = str(self._model.query(image, question)["answer"]).strip()
+                text = str(self._model.query(enc, question)["answer"]).strip()
             else:
-                text = str(self._model.caption(image, length="short")["caption"]).strip()
+                try:
+                    text = str(self._model.caption(enc, length="short")["caption"]).strip()
+                except TypeError:
+                    # 0.0.6 caption() takes no length kwarg.
+                    text = str(self._model.caption(enc)["caption"]).strip()
         except Exception as exc:
             logger.exception("Moondream inference failed")
             raise ServiceError(
