@@ -90,6 +90,12 @@ jobs:
           - { dir: insightface,    image: insightface-adapter,    port: 9005 }
           - { dir: blip,           image: blip-adapter,           port: 9006 }
           - { dir: bytetrack,      image: bytetrack-adapter,      port: 9007 }
+          # Moondream2 vision-language model — VQA + captioning (drop-in for the
+          # BLIP caption slot, but answers questions about the scene).
+          - { dir: moondream,      image: moondream-adapter,      port: 9008 }
+          # Combined Whisper+Piper+BLIP in one image (issue #82): three voice
+          # adapters, one container, same per-adapter /infer contract.
+          - { dir: voice-bundle,   image: voice-adapter,          port: 9006 }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
