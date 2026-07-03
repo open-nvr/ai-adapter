@@ -48,11 +48,17 @@ then `caption()` / `query()`. Default model is **0.5B int8** (~593 MiB, fastest
 on limited hardware); use **2B int8** (~1.7 GiB) for more capable answers.
 
 ## Providing the model (three ways, most-sovereign first)
-The **CI-published image is code-only** (CI doesn't pass a model URL). Supply the
-int8 `.mf.gz` (from https://moondream.ai/p/models or the HF mirror) by any of:
+The **published image ships the 0.5B int8 model baked in** (~593 MiB layer) —
+the Dockerfile defaults `MOONDREAM_MODEL_URL` to a revision-pinned,
+sha256-verified file, so `docker pull` gives a fully offline, `local_only`-clean
+adapter with zero runtime egress (issue #79 posture, same as BLIP). The
+download happens once in CI at build time, never on your box. To use a
+different model (e.g. the 2B) or a weightless dev image:
 
-1. **Bake at build** (offline / `local_only`, best): `--build-arg
-   MOONDREAM_MODEL_URL=<url>` → fully self-contained image.
+1. **Bake at build** (offline / `local_only`, best — the default): override
+   with `--build-arg MOONDREAM_MODEL_URL=<url> --build-arg
+   MOONDREAM_MODEL_SHA256=<sha256> --build-arg MOONDREAM_MODEL_FILE=<file>`,
+   or pass `MOONDREAM_MODEL_URL=""` for a code-only dev image.
 2. **Mount it** into the model volume at `OPENNVR_MOONDREAM_MODEL_PATH`
    (default `/models/moondream-0_5b-int8.mf.gz`) — offline, works with the
    code-only published image.
