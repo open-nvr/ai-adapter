@@ -104,6 +104,41 @@ There are two paths and the recommended one is the SDK. The standalone-container
 
 The legacy `app/` monolith ships HuggingFace and the original Ollama wrapper as in-process plugins via a `BaseAdapter` pattern that predates the contract. It stays supported for contributors extending that bundled server, but new adapters should target the SDK — a standalone container is contract-compliant out of the box, ships independently, and exposes only the wire-contract surface, which is what KAI-C actually depends on. Several of the shipped reference adapters in [`adapters/`](adapters/) currently delegate to legacy classes from `app/` as their backing implementation; a fully fresh adapter wouldn't carry that coupling, and the wire surface is the same either way. The full monolith authoring walkthrough is in [`docs/PLUGIN_DEVELOPMENT.md`](docs/PLUGIN_DEVELOPMENT.md).
 
+## Declaring permissions
+
+Your adapter's `/capabilities` card carries a `permissions` block — the host scopes your service needs (GPU device, network egress hosts, host filesystem paths, shared memory, host metadata). These are **authorization requests, not hardware requirements**: `gpu=True` means "may I be handed the GPU device", and any declared scope puts your adapter into a fail-closed `pending` state on registration — visible and health-polled, but refused on every inference path until an operator grants each scope from the OpenNVR UI. Whether the hardware is actually present is `/hardware/evaluation`'s job, not a permission. The full model — grantable keys, the approval lifecycle, the 60-second drift diff — is [§8 of the contract](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md#8-permission-declaration--sandbox-enforcement); this is the short version for authors.
+
+You declare permissions in the `AdapterApp` constructor. The shipped YOLOv8 adapter ([`adapters/yolov8/main.py`](adapters/yolov8/main.py)) is the reference:
+
+```python
+from opennvr_adapter_sdk import AdapterApp, Permissions
+
+_adapter_app = AdapterApp(
+    ...,
+    permissions=Permissions(
+        # §8 — GPU permission requires operator approval at KAI-C
+        # registration time.
+        gpu=True,
+        network_egress=[],
+        # advertise the weights *directory* (no trailing slash) —
+        # KAI-C / operator policy comparison is string-equality
+        # on this value.
+        host_filesystem=[MODEL_WEIGHTS_DIR],
+        shared_memory_paths=[],
+        host_metadata=False,
+    ),
+)
+```
+
+Four rules keep the operator's approval dialog honest and your adapter friction-free:
+
+1. **Declare build-accurately.** Describe what *this image* touches at runtime, not what the model family could use. If you ship separate CPU and GPU builds, the CPU build must declare `gpu=False`; only the GPU build declares `gpu=True`. Weights baked into the image at build time are **not** `host_filesystem` — only host bind-mounts are. Compare the two shipped references: YOLOv8 mounts its weights from the host and declares the path; BLIP bakes its weights and declares nothing.
+2. **Declare minimally.** Every scope is one operator decision at install time and one permanent line of audit surface. If a build change (bake the weights, cache at build time) removes a scope, remove it.
+3. **The empty set is the zero-friction default.** An adapter that declares no permissions auto-approves and serves the moment it registers — no dialog, no waiting. That's the target state for most local adapters.
+4. **Never declare egress you don't strictly need.** Under `local_only` sovereignty — the default posture for the deployments OpenNVR targets — any declared `network_egress` entry means your adapter is refused at registration outright. Cloud-proxy adapters should declare every host they call, explicitly, and expect to run only under `federated` / `cloud_allowed`.
+
+One more reason to get the declaration right the first time: KAI-C re-polls `/capabilities` every 60 seconds and treats a *newly appearing* permission as a tamper signal — the adapter flips back to `pending` and stops serving until an operator re-approves. Shipping an update that quietly widens your scope will take your users' deployments offline until they consent.
+
 ## Run the reference server
 
 If you want to run the bundled monolith end-to-end against a local OpenNVR:

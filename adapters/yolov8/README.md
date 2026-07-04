@@ -19,6 +19,10 @@ POST a JPEG/PNG frame (or open a WebSocket stream), get COCO-80 object detection
 
 **Shared-memory fast path** (§6.2) is deferred to a follow-up. Adapter advertises `supports_shared_memory: false`; clients that offer `frame_transport: "shared_memory"` see the ack downgrade to `"websocket"`.
 
+## Permissions
+
+This adapter declares two §8 permission scopes in its capability card: `gpu` (the image is CPU+GPU-capable; the declaration asks for the GPU *device*, and onnxruntime falls back to CPU when none is granted or present — see `/hardware/evaluation`) and `host_filesystem:<weights dir>` (the ONNX weights are bind-mounted from the host, not baked into the image). On registration with KAI-C it therefore starts **`pending`** and serves no inference until an operator grants both keys from the OpenNVR UI (or the startup-config auto-grant covers it). The declaration lives in [`main.py`](main.py) (`Permissions(...)`); authoring rules are in the repo [README](../../README.md#declaring-permissions) and the deep reference is [contract §8](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md#8-permission-declaration--sandbox-enforcement).
+
 ## Run locally
 
 ```bash
