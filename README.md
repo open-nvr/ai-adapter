@@ -116,14 +116,14 @@ from opennvr_adapter_sdk import AdapterApp, Permissions
 _adapter_app = AdapterApp(
     ...,
     permissions=Permissions(
-        # §8 — GPU permission requires operator approval at KAI-C
-        # registration time.
-        gpu=True,
+        # §8 — declare build-accurately: gpu=True (an operator-approval
+        # gate at KAI-C registration) only when this build can actually
+        # use CUDA. The stock CPU image therefore declares gpu=False.
+        gpu=_cuda_provider_available(),
         network_egress=[],
-        # advertise the weights *directory* (no trailing slash) —
-        # KAI-C / operator policy comparison is string-equality
-        # on this value.
-        host_filesystem=[MODEL_WEIGHTS_DIR],
+        # No host_filesystem entry: the weights come from a
+        # container-owned named volume, not a host bind-mount.
+        host_filesystem=[],
         shared_memory_paths=[],
         host_metadata=False,
     ),
@@ -132,7 +132,7 @@ _adapter_app = AdapterApp(
 
 Four rules keep the operator's approval dialog honest and your adapter friction-free:
 
-1. **Declare build-accurately.** Describe what *this image* touches at runtime, not what the model family could use. If you ship separate CPU and GPU builds, the CPU build must declare `gpu=False`; only the GPU build declares `gpu=True`. Weights baked into the image at build time are **not** `host_filesystem` — only host bind-mounts are. Compare the two shipped references: YOLOv8 mounts its weights from the host and declares the path; BLIP bakes its weights and declares nothing.
+1. **Declare build-accurately.** Describe what *this image* touches at runtime, not what the model family could use. If you ship separate CPU and GPU builds, the CPU build must declare `gpu=False`; only the GPU build declares `gpu=True` — YOLOv8 does this by checking the installed onnxruntime build for `CUDAExecutionProvider` at startup. Weights baked into the image at build time or supplied via a container-owned volume are **not** `host_filesystem` — only host bind-mounts are. Compare the shipped references: BLIP bakes its weights and YOLOv8 reads them from a named volume, so neither declares a path; declare `host_filesystem` only when your compose wiring genuinely bind-mounts a host directory into the container.
 2. **Declare minimally.** Every scope is one operator decision at install time and one permanent line of audit surface. If a build change (bake the weights, cache at build time) removes a scope, remove it.
 3. **The empty set is the zero-friction default.** An adapter that declares no permissions auto-approves and serves the moment it registers — no dialog, no waiting. That's the target state for most local adapters.
 4. **Never declare egress you don't strictly need.** Under `local_only` sovereignty — the default posture for the deployments OpenNVR targets — any declared `network_egress` entry means your adapter is refused at registration outright. Cloud-proxy adapters should declare every host they call, explicitly, and expect to run only under `federated` / `cloud_allowed`.

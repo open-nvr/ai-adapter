@@ -60,11 +60,34 @@ def test_capabilities_declares_streaming_support(yolov8_app):
     assert caps.endpoints.infer_stream.supports_shared_memory is False
 
 
-def test_capabilities_declares_gpu_permission_and_fair_queuing(yolov8_app):
+def test_capabilities_declares_build_accurate_permissions(yolov8_app):
+    """The fixture's fake onnxruntime is CPU-only (no
+    CUDAExecutionProvider), so this exercises the default CPU image:
+    gpu=False, no egress, and no host_filesystem — the weights come
+    from a container-owned volume (opennvr_yolov8_weights), not a
+    host bind-mount."""
     caps = CapabilitiesResponse.model_validate(yolov8_app.get("/capabilities").json())
-    assert caps.permissions.gpu is True
+    assert caps.permissions.gpu is False
     assert caps.permissions.network_egress == []
+    assert caps.permissions.host_filesystem == []
     assert caps.scheduling.fair_queuing.value == "per_camera"
+
+
+def test_capabilities_declares_gpu_when_cuda_provider_available(monkeypatch):
+    """A GPU build (onnxruntime-gpu) lists CUDAExecutionProvider in
+    get_available_providers(); the declaration must follow it."""
+    import sys
+    import types
+
+    import adapters.yolov8.main as main_module
+
+    fake_ort = types.ModuleType("onnxruntime")
+    fake_ort.get_available_providers = lambda: [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    assert main_module._cuda_provider_available() is True
 
 
 def test_capabilities_exposes_model_fingerprint(yolov8_app):
