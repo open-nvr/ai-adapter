@@ -22,7 +22,6 @@ Conformance check:
 from __future__ import annotations
 
 from adapters.yolov8.service import MAX_IMAGE_BYTES, YoloV8Service
-from app.config import MODEL_WEIGHTS_DIR
 from opennvr_adapter_sdk import (
     AdapterApp,
     BodyShape,
@@ -31,6 +30,27 @@ from opennvr_adapter_sdk import (
     Permissions,
     Scheduling,
 )
+
+
+def _cuda_provider_available() -> bool:
+    """True only when the installed onnxruntime build ships the CUDA
+    execution provider — i.e. a GPU image built with ``onnxruntime-gpu``.
+
+    Same signal family as ``YoloV8Service._detect_gpu_in_use()`` /
+    ``hardware_evaluation()`` (onnxruntime provider inspection), but
+    checked against ``get_available_providers()`` at declaration time
+    because the inference session doesn't exist yet. The default image
+    (adapters/yolov8/Dockerfile) pins the CPU-only ``onnxruntime``
+    wheel, which never lists CUDAExecutionProvider — so the CPU image
+    declares gpu=False and only a GPU build declares gpu=True.
+    """
+    try:
+        import onnxruntime as ort
+
+        return "CUDAExecutionProvider" in ort.get_available_providers()
+    except Exception:
+        return False
+
 
 _adapter_app = AdapterApp(
     # ``service_factory`` (lazy build at lifespan startup) instead of
@@ -47,14 +67,21 @@ _adapter_app = AdapterApp(
     body_shape=BodyShape.IMAGE,
     max_body_bytes=MAX_IMAGE_BYTES,
     permissions=Permissions(
-        # §8 — GPU permission requires operator approval at KAI-C
-        # registration time.
-        gpu=True,
+        # §8 — declare build-accurately: gpu=True (an operator-approval
+        # gate at KAI-C registration) only when this build can actually
+        # use CUDA. The stock CPU image therefore declares gpu=False
+        # and registers without a GPU-grant prompt.
+        gpu=_cuda_provider_available(),
         network_egress=[],
-        # advertise the weights *directory* (no
-        # trailing slash) — KAI-C / operator policy comparison is
-        # string-equality on this value.
-        host_filesystem=[MODEL_WEIGHTS_DIR],
+        # No host_filesystem entry: the weights are not a host
+        # bind-mount. In the OpenNVR stack (open-nvr/docker-compose.yml)
+        # the ``yolov8-adapter`` service mounts the container-owned
+        # named volume ``opennvr_yolov8_weights`` at /app/model_weights,
+        # populated by the ``yolov8-weights-init`` one-shot from the
+        # pre-baked ghcr.io/open-nvr/yolov8-weights image — no host
+        # path is ever exposed, so declaring one would only add a
+        # needless operator-approval scope (§8 "declare minimally").
+        host_filesystem=[],
         shared_memory_paths=[],
         host_metadata=False,
     ),

@@ -64,8 +64,8 @@ _adapter_app = AdapterApp(
         # the weights dir; KAI-C refuses if network_egress isn't
         # empty. Advertise the Whisper-specific subdir (matches the
         # WhisperService default ``download_root``) so KAI-C policy
-        # comparison stays narrow — don't widen to MODEL_WEIGHTS_DIR
-        # like YOLOv8 does (YOLOv8's weights live AT the root).
+        # comparison stays narrow — don't widen the scope to the whole
+        # MODEL_WEIGHTS_DIR root.
         host_filesystem=[os.path.join(MODEL_WEIGHTS_DIR, "whisper")],
         shared_memory_paths=[],
         host_metadata=False,

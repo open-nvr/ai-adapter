@@ -11,13 +11,17 @@ POST a JPEG/PNG frame (or open a WebSocket stream), get COCO-80 object detection
 | Endpoint | Status | Notes |
 |---|---|---|
 | `GET /health` | required | auth-exempt |
-| `GET /capabilities` | required | sha256 fingerprint, `tasks_advertised=["object_detection"]`, `gpu=true`, `fair_queuing=per_camera` |
+| `GET /capabilities` | required | sha256 fingerprint, `tasks_advertised=["object_detection"]`, `gpu` build-accurate (false on the CPU image), `fair_queuing=per_camera` |
 | `GET /hardware/evaluation` | required | reports GPU detection + onnxruntime providers |
 | `GET /metrics` | required | Prometheus exposition incl. `adapter_stream_connections_active` |
 | `POST /infer` | required | multipart (`frame` file) or JSON (`frame_b64`) |
 | `POST /infer/stream` (WS) | required | full §6 protocol — handshake → frame_meta + bytes → result loop |
 
 **Shared-memory fast path** (§6.2) is deferred to a follow-up. Adapter advertises `supports_shared_memory: false`; clients that offer `frame_transport: "shared_memory"` see the ack downgrade to `"websocket"`.
+
+## Permissions
+
+This adapter declares its §8 permission scopes **build-accurately**. `gpu` follows the installed onnxruntime build: the stock CPU image (which pins the CPU-only `onnxruntime` wheel) declares `gpu=false` and registers with KAI-C without a GPU-grant prompt; a GPU build shipping `onnxruntime-gpu` (where `CUDAExecutionProvider` is available) declares `gpu=true` and starts **`pending`** until an operator grants the scope from the OpenNVR UI (or the startup-config auto-grant covers it). No `host_filesystem` scope is declared: in the OpenNVR stack the ONNX weights live in the container-owned `opennvr_yolov8_weights` named volume (populated by the `yolov8-weights-init` one-shot from a pre-baked weights image), not a host bind-mount. Whether a GPU is actually present at runtime is `/hardware/evaluation`'s job, not a permission. The declaration lives in [`main.py`](main.py) (`Permissions(...)`); authoring rules are in the repo [README](../../README.md#declaring-permissions) and the deep reference is [contract §8](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md#8-permission-declaration--sandbox-enforcement).
 
 ## Run locally
 
