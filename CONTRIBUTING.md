@@ -349,7 +349,7 @@ docs(contributing): clarify Path A vs Path B
 
 ## Code of conduct
 
-We want this to stay a project people enjoy contributing to. The expectation is welcoming language and respectful disagreement; harassment, doxxing, and inflammatory off-topic posting are not part of that. Report violations to **contact@cryptovoip.in** — reports are confidential.
+We want this to stay a project people enjoy contributing to. The expectation is welcoming language and respectful disagreement; harassment, doxxing, and inflammatory off-topic posting are not part of that. Report violations to **contact@opennvr.org** — reports are confidential.
 
 ## License
 

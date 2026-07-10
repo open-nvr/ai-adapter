@@ -202,7 +202,7 @@ The reference server in this repo is **AGPLv3**. The SDK at [`opennvr_adapter_sd
 
 "OpenNVR" and the OpenNVR logo are trademarks of the project; an adapter may describe itself as "compatible with OpenNVR" but should not use the name as its own. See the [trademark policy](https://github.com/open-nvr/open-nvr/blob/main/TRADEMARK.md).
 
-For commercial licensing — closed-source adapters, proprietary redistribution, enterprise support — write to **[contact@cryptovoip.in](mailto:contact@cryptovoip.in)**.
+For commercial licensing — closed-source adapters, proprietary redistribution, enterprise support — write to **[contact@opennvr.org](mailto:contact@opennvr.org)**.
 
 ---
 
