@@ -7,7 +7,9 @@ changelog under [`opennvr_adapter_sdk/CHANGELOG.md`](opennvr_adapter_sdk/CHANGEL
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — targeting v0.1.0
+## [Unreleased]
+
+## [0.1.0] — 2026-07-14
 
 First public release of the reference adapter server. Aligned with the
 v0.1.0 cut of the [OpenNVR](https://github.com/open-nvr/open-nvr) NVR. The
@@ -152,4 +154,5 @@ permits.
 
 ---
 
-[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/...HEAD
+[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/open-nvr/ai-adapter/releases/tag/v0.1.0
