@@ -6,6 +6,8 @@
 
 ### Any model. Any framework. One governed contract.
 
+**Run YOLO, BLIP, InsightFace, an LLM, or your own model as a governed detector for self-hosted video surveillance — object detection, face recognition, licence plates and scene captioning, over HTTP or WebSocket, in Docker.**
+
 The pluggable inference layer for [OpenNVR™](https://github.com/open-nvr/open-nvr). Drop any model behind an HTTP or WebSocket endpoint and it becomes a first-class, *governed* capability — with end-to-end audit, fingerprint drift detection, and sovereignty enforcement that the underlying model never had to know about. Governance lives in the contract itself, not bolted on after: an adapter must declare what it touches (GPU, filesystem, network egress) before it can run, and an operator's sovereignty policy can refuse it at registration. That is what lets you run third-party — even proprietary or classified — AI on regulated, air-gapped sites and still answer "which model, which weights, on which frame, under whose authority?"
 
 [![CI](https://github.com/open-nvr/ai-adapter/actions/workflows/ci.yml/badge.svg)](https://github.com/open-nvr/ai-adapter/actions/workflows/ci.yml)
