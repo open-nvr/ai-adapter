@@ -283,6 +283,55 @@ class Cost(BaseModel):
     is_metered: bool = False
 
 
+class Accelerator(BaseModel):
+    """Which compute backend an object-detector adapter runs on.
+
+    Lets KAI-C's Tier-0 detect pipeline prefer accelerated detectors and record
+    the device actually in use. ``backend`` is a free string (not an enum) so a
+    newer adapter advertising a backend an older KAI-C doesn't know about does
+    not fail to parse — KAI-C treats unknown backends as opaque.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # cpu | openvino | edgetpu | onnx | tensorrt | rocm | rknn | hailo | coreml | ...
+    backend: str = Field(default="cpu", min_length=1)
+    device: str | None = Field(default=None)  # e.g. "GPU", "/dev/dri/renderD128", "0"
+
+
+class InputSpec(BaseModel):
+    """The tensor an object-detector expects.
+
+    KAI-C shapes region crops to this (crop → colour-convert → resize) so the
+    adapter stays layout-simple — the mirror of Frigate's model input config.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    layout: str = Field(default="nhwc")        # nhwc | nchw
+    dtype: str = Field(default="uint8")        # uint8 | float | float_denorm
+    pixel_format: str = Field(default="rgb")   # rgb | bgr | yuv
+
+
+class DetectorSpec(BaseModel):
+    """Contract v1.1 (optional): marks this adapter as an object detector the
+    Tier-0 pipeline can dispatch region crops to.
+
+    Absent for non-detector adapters (VLM / LLM / ASR), which are driven
+    on-demand rather than per-region. Adapters that omit it keep working; KAI-C
+    simply does not use them in the detect loop.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    input: InputSpec
+    accelerator: Accelerator = Field(default_factory=Accelerator)
+    labels: list[str] = Field(default_factory=list)  # class label map, index order
+    max_detections: int = Field(default=20, ge=1)
+
+
 class CapabilitiesResponse(BaseModel):
     """Top-level response shape for ``GET /capabilities``."""
 
@@ -298,6 +347,9 @@ class CapabilitiesResponse(BaseModel):
     permissions: Permissions = Field(default_factory=Permissions)
     scheduling: Scheduling
     cost: Cost = Field(default_factory=Cost)
+    # Contract v1.1 (optional): present only on object-detector adapters used by
+    # the Tier-0 detect pipeline; non-detector adapters omit it (defaults None).
+    detector: DetectorSpec | None = None
 
 
 # ── /hardware/evaluation ─────────────────────────────────────────────

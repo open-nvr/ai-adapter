@@ -51,9 +51,11 @@ from opennvr_adapter_sdk.service import AdapterService, ServiceError
 # DetectionResult, AsrResult, etc.) live in ``opennvr_adapter_sdk.contract``
 # — import from there when you need them.
 from opennvr_adapter_sdk.contract import (
+    Accelerator,
     AdapterInfo,
     CapabilitiesResponse,
     Cost,
+    DetectorSpec,
     EndpointsInfo,
     ErrorCategory,
     ErrorDetail,
@@ -65,6 +67,7 @@ from opennvr_adapter_sdk.contract import (
     HealthStatus,
     InferEndpointInfo,
     InferResponse,
+    InputSpec,
     ModelInfo,
     Permissions,
     Scheduling,
@@ -81,9 +84,11 @@ __all__ = [
     "ServiceError",
     "__version__",
     # contract types
+    "Accelerator",
     "AdapterInfo",
     "CapabilitiesResponse",
     "Cost",
+    "DetectorSpec",
     "EndpointsInfo",
     "ErrorCategory",
     "ErrorDetail",
@@ -95,6 +100,7 @@ __all__ = [
     "HealthStatus",
     "InferEndpointInfo",
     "InferResponse",
+    "InputSpec",
     "ModelInfo",
     "Permissions",
     "Scheduling",
