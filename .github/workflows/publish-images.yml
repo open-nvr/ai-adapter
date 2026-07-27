@@ -38,7 +38,15 @@ on:
   # adapter Dockerfiles change rarely) and the alternative landmine
   # is not worth it.
   push:
-    branches: [main]
+    # Every branch push publishes images tagged :<branch> + :sha-<short>
+    # (matching open-nvr's publish-images.yml policy), so a feature
+    # branch's adapters are pullable for integration testing without a
+    # merge to main — e.g. the camera-agent-lite compose can pin
+    # ADAPTER_TAG=camera-agent-lite. The :latest tag stays gated below
+    # to the default branch / release tags, so branch builds never
+    # clobber the release tags.
+    branches:
+      - "**"
     tags:
       - "v*"
   pull_request:
