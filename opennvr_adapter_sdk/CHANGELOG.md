@@ -4,6 +4,19 @@ All notable changes to `opennvr-adapter-sdk` are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the SDK uses semantic versioning aligned with the AI Adapter Contract major version (SDK v1.x targets contract v1).
 
+## [1.1.0] — 2026-07
+
+### Added
+
+- `opennvr_adapter_sdk.model_fetch.ensure_model_file(path, url, *, label,
+  logger)` — first-boot model download for adapters whose weights ship
+  outside the image (whisper-adapter pattern, now shared). Stdlib-only
+  (urllib); streams to `<path>.part` and renames on success so a killed
+  container never leaves truncated weights; a present file always wins so
+  offline / sovereignty-strict installs that pre-populate the weights
+  volume never trigger egress. Adopted by the llamacpp, whispercpp,
+  pipertts, and smolvlm adapters.
+
 ## [1.0.0] — 2026-05
 
 First public release. Extracted from the three reference adapters
