@@ -38,7 +38,15 @@ on:
   # adapter Dockerfiles change rarely) and the alternative landmine
   # is not worth it.
   push:
-    branches: [main]
+    # Every branch push publishes images tagged :<branch> + :sha-<short>
+    # (matching open-nvr's publish-images.yml policy), so a feature
+    # branch's adapters are pullable for integration testing without a
+    # merge to main — e.g. the camera-agent-lite compose can pin
+    # ADAPTER_TAG=camera-agent-lite. The :latest tag stays gated below
+    # to the default branch / release tags, so branch builds never
+    # clobber the release tags.
+    branches:
+      - "**"
     tags:
       - "v*"
   pull_request:
@@ -96,6 +104,14 @@ jobs:
           # Combined Whisper+Piper+BLIP in one image (issue #82): three voice
           # adapters, one container, same per-adapter /infer contract.
           - { dir: voice-bundle,   image: voice-adapter,          port: 9006 }
+          # The camera-agent-lite native-runtime stack (llama.cpp family,
+          # torch-free). Weights are NOT baked in — each adapter downloads
+          # its model from HuggingFace on first boot into its weights
+          # volume (whisper-adapter precedent), so the images stay small.
+          - { dir: pipertts,       image: pipertts-adapter,       port: 9012 }
+          - { dir: whispercpp,     image: whispercpp-adapter,     port: 9013 }
+          - { dir: llamacpp,       image: llamacpp-adapter,       port: 9014 }
+          - { dir: smolvlm,        image: smolvlm-adapter,        port: 9016 }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
