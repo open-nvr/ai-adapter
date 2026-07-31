@@ -9,6 +9,38 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-07-31
+
+Aligned with the v0.1.1 cut of the OpenNVR NVR — this release supplies
+the adapter set behind the new `camera-agent-lite` example.
+
+### Added
+
+- **Four new adapters for camera-agent-lite** — `llamacpp` (LLM via
+  llama.cpp), `whispercpp` (speech-to-text), `pipertts` (text-to-speech),
+  and `smolvlm` (vision). All four download their models on first boot
+  via the SDK 1.1.0 `ensure_model_file` helper (a pre-populated weights
+  volume always wins, so offline installs never trigger egress) and are
+  in the GHCR publish matrix.
+- **AI Adapter Contract v1.1 (optional detector spec)** — adapters can
+  now declare their accelerator and expected input.
+- SDK 1.1.0 — see
+  [`opennvr_adapter_sdk/CHANGELOG.md`](opennvr_adapter_sdk/CHANGELOG.md).
+
+### Changed
+
+- CI publishes adapter images from every branch push
+  (`:<branch>` + `:sha-<short>` tags), not just release tags.
+
+### Fixed
+
+- SDK `__version__` now matches `pyproject.toml` (1.1.0), unblocking the
+  release version check.
+
+### Documentation
+
+- README opening section rewritten for search discoverability.
+
 ## [0.1.0] — 2026-07-14
 
 First public release of the reference adapter server. Aligned with the
@@ -154,5 +186,6 @@ permits.
 
 ---
 
-[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/open-nvr/ai-adapter/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/open-nvr/ai-adapter/releases/tag/v0.1.0
