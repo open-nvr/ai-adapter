@@ -5,7 +5,7 @@ name = "opennvr-ai-adapter"
 # per-adapter GHCR images built on each `v*` tag. The standalone SDK under
 # opennvr_adapter_sdk/ versions independently (1.x = AI Adapter Contract v1)
 # and IS published to PyPI, off `sdk-v*` tags.
-version = "0.1.1"
+version = "0.1.3"
 description = "Clean Architecture AI Adapter for OpenNVR"
 requires-python = ">=3.11, <3.13"
 

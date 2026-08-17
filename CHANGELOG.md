@@ -9,6 +9,43 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-08-17
+
+ARM64 release. Adapter images are now `linux/amd64` + `linux/arm64`
+manifest lists, fixing the Apple Silicon / Raspberry Pi 5 install
+failure where a fresh OpenNVR `docker compose pull` aborted with
+``no matching manifest for linux/arm64/v8`` on the first adapter image
+it reached. (No 0.1.2 was ever tagged; this release follows 0.1.1.)
+
+### Added
+
+- **linux/arm64 images for 11 of 13 adapters** — `yolov8`, `piper`,
+  `pipertts`, `whisper`, `whispercpp`, `fast-plate-ocr`, `insightface`,
+  `blip`, `bytetrack`, `moondream`, and `voice` now publish multi-arch
+  manifest lists. Every pinned dependency was verified to resolve to a
+  pre-built ``manylinux*_aarch64`` wheel (no source builds under QEMU).
+  `llamacpp` and `smolvlm` remain amd64-only: they derive from
+  ``ghcr.io/ggml-org/llama.cpp:server``, which publishes no arm64
+  manifest upstream (ggml-org/llama.cpp#19177).
+- ``platforms`` is now a per-adapter field on the publish matrix, so
+  arch support is declared next to the adapter it belongs to.
+
+### Fixed
+
+- **blip / voice-bundle arm64 builds** — both pinned
+  ``torch==2.9.1+cpu`` from ``download.pytorch.org/whl/cpu``, an index
+  with no aarch64 ``+cpu`` wheel (pytorch/pytorch#136275). The
+  Dockerfiles now branch on ``TARGETARCH``: arm64 installs PyPI's plain
+  ``torch==2.9.1`` aarch64 wheel, which is already CPU-only (all CUDA
+  deps carry ``platform_machine == "x86_64"`` markers). The amd64 path
+  is unchanged.
+
+### Documentation
+
+- README: supported-architecture matrix and the maintainer rule that a
+  dependency bump must keep aarch64 wheel coverage, since a regression
+  only surfaces as an arm64 build timing out under QEMU.
+
 ## [0.1.1] — 2026-07-31
 
 Aligned with the v0.1.1 cut of the OpenNVR NVR — this release supplies
