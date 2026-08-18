@@ -29,6 +29,11 @@ it reached. (No 0.1.2 was ever tagged; this release follows 0.1.1.)
   manifest upstream (ggml-org/llama.cpp#19177).
 - ``platforms`` is now a per-adapter field on the publish matrix, so
   arch support is declared next to the adapter it belongs to.
+- **SDK release-alignment guard** — a ``v*`` release run now fails if
+  the SDK version pinned in the tree is not on PyPI (the gap v0.1.1
+  shipped with: tree said 1.1.0, PyPI had only 1.0.0). Version numbers
+  stay decoupled (SDK tracks the contract major); the guard aligns the
+  *release*, not the number. See ``opennvr_adapter_sdk/RELEASING.md``.
 
 ### Fixed
 
