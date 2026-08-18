@@ -33,11 +33,34 @@ RUN pip install --no-cache-dir \
         httpx==0.28.1 \
         python-multipart==0.0.20 \
         pillow==12.0.0 \
-        transformers==5.0.0 \
-    && pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.9.1+cpu \
-        torchvision==0.24.1+cpu
+        transformers==5.0.0
+
+# TARGETARCH is set automatically by BuildKit to the arch being built
+# ("amd64" / "arm64"). It is needed because the torch pin is not
+# arch-portable:
+#
+#   * linux/amd64 — download.pytorch.org/whl/cpu carries a CPU-only
+#     build tagged with the ``+cpu`` local version, which is what keeps
+#     the ~2 GB CUDA wheel out of the image.
+#   * linux/arm64 — that index has no ``+cpu`` aarch64 wheel
+#     (pytorch/pytorch#136275 is the open request for one), so pinning
+#     ``torch==2.9.1+cpu`` there fails to resolve and the arm64 build
+#     dies. PyPI's plain ``torch==2.9.1`` manylinux_2_28_aarch64 wheel
+#     IS the CPU build — there is no CUDA variant for generic aarch64
+#     — so it is the correct equivalent, not a fallback.
+#
+# Same upstream version either way; only the index and the local
+# version suffix differ. Bump both arms together.
+ARG TARGETARCH
+RUN set -eux; \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        pip install --no-cache-dir torch==2.9.1 torchvision==0.24.1; \
+    else \
+        pip install --no-cache-dir \
+            --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.9.1+cpu \
+            torchvision==0.24.1+cpu; \
+    fi
 
 # Pre-bake the BLIP weights into the image so the adapter runs with NO
 # network egress under AI_SOVEREIGNTY=local_only (issue #79). Without

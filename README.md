@@ -184,6 +184,32 @@ WebSocket streaming (`/infer/stream`) is part of the contract and supported by t
 
 Contributions in any of these areas are explicitly welcome and tracked in the [discussions](https://github.com/open-nvr/ai-adapter/discussions). Safety and security: weapon detection, fire and smoke detection, fall detection (pose-based), PPE compliance (hard hat, vest, harness). Access and identity: license-plate recognition variants for non-Latin scripts, uniform and ID-badge detection, gait recognition. Analytics: crowd density, queue length, dwell-time heatmaps, vehicle classification. Audio: glass-break and gunshot detection, aggression detection, speaker diarisation. Conversational agents: function-calling LLM adapters, RAG-over-events, on-call escalation flows. Animals and wildlife: pet and livestock detection, wildlife and bird-species ID. Edge optimisation: TensorRT, OpenVINO, and CoreML variants for Jetson, NUC, and Apple Silicon. Have a different idea? Open a [discussion](https://github.com/open-nvr/ai-adapter/discussions) before you start coding and we'll help scope it.
 
+## Supported architectures
+
+Published images are `linux/amd64` + `linux/arm64` manifest lists, so an
+Apple Silicon Mac or a Raspberry Pi 5 pulls a native image with no
+`--platform` flag and no emulation.
+
+| Adapter images | amd64 | arm64 |
+|---|:---:|:---:|
+| `yolov8`, `piper`, `pipertts`, `whisper`, `whispercpp`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice` | ✓ | ✓ |
+| `llamacpp`, `smolvlm` | ✓ | — |
+
+`llamacpp-adapter` and `smolvlm-adapter` build `FROM
+ghcr.io/ggml-org/llama.cpp:server`, and upstream publishes no
+`linux/arm64` manifest for it ([ggml-org/llama.cpp#19177](https://github.com/ggml-org/llama.cpp/issues/19177)).
+Until that is restored, ARM operators building those two locally need
+their own `llama-server` binary.
+
+Because an image with no matching platform makes `docker compose pull`
+abort the **whole** stack — not just that service — a single amd64-only
+adapter is enough to break an entire OpenNVR install on ARM. If you add
+an adapter, set `platforms` on its matrix entry in
+[`publish-images.yml`](.github/workflows/publish-images.yml), and when
+you bump a dependency pin, confirm the new version still ships a
+`manylinux*aarch64` wheel — otherwise the arm64 leg silently falls back
+to compiling from source under QEMU and times out.
+
 ## Docker
 
 ```bash

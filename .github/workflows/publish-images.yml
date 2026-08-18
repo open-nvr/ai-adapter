@@ -20,12 +20,37 @@
 #   - Tag matching ``v*``                          → build + push with
 #     :<version>, :latest, :sha-<short> tags. The release path.
 #
-# Architecture: linux/amd64 only for v0.1. linux/arm64 is on the v0.2
-# roadmap — several adapters pull in heavy native wheels (onnxruntime,
-# faster-whisper → PyAV) whose arm64 wheel coverage is uneven and
-# would force a build-from-source fallback that inflates publish time
-# and risks intermittent failures. Pi users build locally for now;
-# documented in the Tier 0 README.
+# Architecture: per-adapter, declared as ``platforms`` on each matrix
+# entry rather than once for the whole job — the constraint is a
+# property of an adapter's dependency graph, not of the workflow.
+#
+# An amd64-only manifest list is not a soft limitation for ARM
+# operators: `docker compose pull` aborts the ENTIRE stack with a bare
+# "no matching manifest for linux/arm64/v8" the moment it reaches such
+# an image, so one amd64-only adapter takes down the whole OpenNVR
+# install on an Apple Silicon Mac or a Pi 5.
+#
+# The earlier "arm64 wheel coverage is uneven" note no longer holds.
+# Every pinned dependency across these adapters now publishes
+# manylinux aarch64 wheels — onnxruntime, opencv-python-headless,
+# numpy, scipy, pydantic-core, pillow, tokenizers, ctranslate2, av
+# (faster-whisper's PyAV), piper-phonemize, pywhispercpp — so no
+# adapter falls back to a source build on the arm64 leg. Verified
+# against the PyPI file lists for the exact pinned versions; re-check
+# when bumping a pin, because a regression there is invisible until
+# an arm64 build starts compiling and times out.
+#
+# The two exceptions are llamacpp and smolvlm, which derive FROM
+# ghcr.io/ggml-org/llama.cpp:server. Upstream does not publish a
+# linux/arm64 manifest for that image (ggml-org/llama.cpp#19177 —
+# arm64 was built at one point and then disabled), so those two stay
+# amd64-only until upstream restores it or we vendor our own
+# llama-server build. Flip their ``platforms`` value when that lands.
+#
+# The arm64 leg builds under QEMU on the amd64 runner. That is
+# acceptable here because every adapter installs pre-built wheels
+# rather than compiling: the emulated work is pip unpacking archives,
+# not gcc.
 
 name: publish-images
 
@@ -74,6 +99,58 @@ permissions:
   contents: read
 
 jobs:
+  # ── Release-alignment guard ─────────────────────────────────────
+  # Policy: a repo release (``v*`` tag) must not ship while the SDK
+  # version pinned in the tree is unpublished on PyPI. The SDK has its
+  # own contract-aligned version line (sdk-v1.x ↔ contract v1) and its
+  # own release tag (``sdk-v*``) — the numbers are decoupled BY DESIGN
+  # (PyPI already has 1.0.0; renumbering to match repo versions would
+  # sort as a downgrade and pip would never install it). What must stay
+  # aligned is the RELEASE, not the number: if adapters in this release
+  # rely on SDK X.Y.Z, an external author following the same pattern
+  # must be able to ``pip install opennvr-adapter-sdk==X.Y.Z``.
+  #
+  # This is exactly the gap v0.1.1 shipped with: the tree said SDK
+  # 1.1.0 (ensure_model_file, used by four adapters) but only 1.0.0
+  # ever reached PyPI, so the in-repo images worked while the
+  # documented external path ImportError'd. This job makes that state
+  # fail the release run. Fix is one command:
+  #     git tag sdk-vX.Y.Z && git push origin sdk-vX.Y.Z
+  # (publish-sdk.yml does the rest), then re-run this workflow.
+  #
+  # Deliberately NOT a ``needs:`` gate on the image builds — images
+  # install the SDK from the repo checkout, not PyPI, so they are
+  # correct either way. A red job on the release run is the signal;
+  # blocking image publication would just couple two failure domains.
+  verify-sdk-on-pypi:
+    name: sdk-release-alignment
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: SDK version in tree must exist on PyPI
+        run: |
+          set -euo pipefail
+          version=$(python3 - <<'PY'
+          import re, pathlib
+          text = pathlib.Path("opennvr_adapter_sdk/pyproject.toml").read_text()
+          m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.M)
+          print(m.group(1))
+          PY
+          )
+          echo "SDK version pinned in tree: $version"
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://pypi.org/pypi/opennvr-adapter-sdk/${version}/json")
+          if [ "$code" = "200" ]; then
+            echo "opennvr-adapter-sdk ${version} is on PyPI — release is aligned."
+          else
+            echo "::error::opennvr-adapter-sdk ${version} is NOT on PyPI (HTTP ${code})." \
+                 "Push the SDK release first: git tag sdk-v${version} && git push origin sdk-v${version}" >&2
+            exit 1
+          fi
+
   build-and-push:
     name: ${{ matrix.adapter.image }}
     runs-on: ubuntu-latest
@@ -91,30 +168,39 @@ jobs:
           # repo name — hyphenated even when ``dir`` uses an underscore
           # (fast_plate_ocr → fast-plate-ocr-adapter), matching the
           # Docker / CLI convention community users expect.
-          - { dir: yolov8,         image: yolov8-adapter,         port: 9002 }
-          - { dir: piper,          image: piper-adapter,          port: 9001 }
-          - { dir: whisper,        image: whisper-adapter,        port: 9003 }
-          - { dir: fast_plate_ocr, image: fast-plate-ocr-adapter, port: 9004 }
-          - { dir: insightface,    image: insightface-adapter,    port: 9005 }
-          - { dir: blip,           image: blip-adapter,           port: 9006 }
-          - { dir: bytetrack,      image: bytetrack-adapter,      port: 9007 }
+          - { dir: yolov8,         image: yolov8-adapter,         port: 9002, platforms: "linux/amd64,linux/arm64" }
+          - { dir: piper,          image: piper-adapter,          port: 9001, platforms: "linux/amd64,linux/arm64" }
+          - { dir: whisper,        image: whisper-adapter,        port: 9003, platforms: "linux/amd64,linux/arm64" }
+          - { dir: fast_plate_ocr, image: fast-plate-ocr-adapter, port: 9004, platforms: "linux/amd64,linux/arm64" }
+          - { dir: insightface,    image: insightface-adapter,    port: 9005, platforms: "linux/amd64,linux/arm64" }
+          - { dir: blip,           image: blip-adapter,           port: 9006, platforms: "linux/amd64,linux/arm64" }
+          - { dir: bytetrack,      image: bytetrack-adapter,      port: 9007, platforms: "linux/amd64,linux/arm64" }
           # Moondream2 vision-language model — VQA + captioning (drop-in for the
           # BLIP caption slot, but answers questions about the scene).
-          - { dir: moondream,      image: moondream-adapter,      port: 9008 }
+          - { dir: moondream,      image: moondream-adapter,      port: 9008, platforms: "linux/amd64,linux/arm64" }
           # Combined Whisper+Piper+BLIP in one image (issue #82): three voice
           # adapters, one container, same per-adapter /infer contract.
-          - { dir: voice-bundle,   image: voice-adapter,          port: 9006 }
+          - { dir: voice-bundle,   image: voice-adapter,          port: 9006, platforms: "linux/amd64,linux/arm64" }
           # The camera-agent-lite native-runtime stack (llama.cpp family,
           # torch-free). Weights are NOT baked in — each adapter downloads
           # its model from HuggingFace on first boot into its weights
           # volume (whisper-adapter precedent), so the images stay small.
-          - { dir: pipertts,       image: pipertts-adapter,       port: 9012 }
-          - { dir: whispercpp,     image: whispercpp-adapter,     port: 9013 }
-          - { dir: llamacpp,       image: llamacpp-adapter,       port: 9014 }
-          - { dir: smolvlm,        image: smolvlm-adapter,        port: 9016 }
+          - { dir: pipertts,       image: pipertts-adapter,       port: 9012, platforms: "linux/amd64,linux/arm64" }
+          - { dir: whispercpp,     image: whispercpp-adapter,     port: 9013, platforms: "linux/amd64,linux/arm64" }
+          - { dir: llamacpp,       image: llamacpp-adapter,       port: 9014, platforms: "linux/amd64" }  # ggml-org/llama.cpp#19177
+          - { dir: smolvlm,        image: smolvlm-adapter,        port: 9016, platforms: "linux/amd64" }  # ggml-org/llama.cpp#19177
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Registers binfmt_misc handlers so the amd64 runner can execute
+      # arm64 binaries inside the build. Cheap (a few seconds) and a
+      # no-op for the two adapters that stay amd64-only, so it is not
+      # worth conditioning on the matrix entry.
+      - name: Set up QEMU (cross-arch emulation for the arm64 leg)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -167,7 +253,12 @@ jobs:
           # COPY from app/, opennvr_adapter_sdk/, and adapters/<name>/.
           context: .
           file: adapters/${{ matrix.adapter.dir }}/Dockerfile
-          platforms: linux/amd64
+          # PR builds are pinned to linux/amd64 regardless of the matrix
+          # entry: the smoke step below needs ``load: true``, and the
+          # local docker daemon cannot hold a multi-platform image (nor
+          # could it `docker run` the arm64 half). Push builds use the
+          # adapter's declared platforms and publish a manifest list.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || matrix.adapter.platforms }}
           # PR builds: --load to local daemon for the smoke layer
           # below; main + tag builds: --push to GHCR.
           push: ${{ github.event_name != 'pull_request' }}

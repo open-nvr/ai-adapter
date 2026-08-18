@@ -2,6 +2,16 @@
 
 This is the runbook for cutting a new release of the SDK to PyPI. The release is "push a tag" — everything else is automated by [`.github/workflows/publish-sdk.yml`](../.github/workflows/publish-sdk.yml).
 
+**Release-alignment rule:** every repo release (`v*` tag) requires the SDK
+version pinned in the tree to already be on PyPI. `publish-images.yml` enforces
+this (`sdk-release-alignment` job) — a `v*` tag whose SDK version is
+unpublished fails the release run until you push the matching `sdk-vX.Y.Z`
+tag. In practice: **if a release cycle touched `opennvr_adapter_sdk/`, push
+the `sdk-v*` tag first, then the repo `v*` tag.** The version NUMBERS stay
+decoupled on purpose — the SDK tracks the Adapter Contract major (sdk-v1.x ↔
+contract v1), and PyPI versions can never be renumbered backwards to match
+repo versions.
+
 ## One-time setup (maintainer-only, do this once per project)
 
 The publish workflow uses [PyPI trusted publishers](https://docs.pypi.org/trusted-publishers/) (OIDC) so we never store a PyPI API token in the repo or in GitHub secrets. PyPI is configured to trust a specific workflow on a specific repo, and GitHub Actions mints a short-lived OIDC token at job runtime that PyPI accepts in lieu of a token.
