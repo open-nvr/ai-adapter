@@ -192,7 +192,7 @@ Apple Silicon Mac or a Raspberry Pi 5 pulls a native image with no
 
 | Adapter images | amd64 | arm64 |
 |---|:---:|:---:|
-| `yolov8`, `piper`, `pipertts`, `whisper`, `whispercpp`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice` | ✓ | ✓ |
+| `yolov8`, `piper`, `pipertts`, `whisper`, `whispercpp`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm` | ✓ | ✓ |
 | `llamacpp`, `smolvlm` | ✓ | — |
 
 `llamacpp-adapter` and `smolvlm-adapter` build `FROM
