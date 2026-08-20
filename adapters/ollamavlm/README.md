@@ -49,6 +49,9 @@ docker run --rm -p 9018:9018 \
   -e OPENNVR_ADAPTER_TOKEN=secret \
   --add-host host.docker.internal:host-gateway \
   ghcr.io/open-nvr/ollamavlm-adapter:latest
+# NOTE: per contract §3.5, non-file fields travel in the JSON 'params'
+# form field — a bare -F question=... is ignored by the SDK parser.
 curl -H "Authorization: Bearer secret" -F frame=@street.jpg \
-  -F 'question=what is the person wearing?' http://localhost:9018/infer
+  -F 'params={"question":"what is the person wearing?"}' \
+  http://localhost:9018/infer
 ```
