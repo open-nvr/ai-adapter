@@ -189,6 +189,11 @@ jobs:
           - { dir: whispercpp,     image: whispercpp-adapter,     port: 9013, platforms: "linux/amd64,linux/arm64" }
           - { dir: llamacpp,       image: llamacpp-adapter,       port: 9014, platforms: "linux/amd64" }  # ggml-org/llama.cpp#19177
           - { dir: smolvlm,        image: smolvlm-adapter,        port: 9016, platforms: "linux/amd64" }  # ggml-org/llama.cpp#19177
+          # Ollama-proxy VLM (no weights, no torch — ~80 MB): visual_qa /
+          # scene_caption forwarded to an Ollama endpoint, host GPU when
+          # that endpoint is the host (Metal on macOS). Lazy-ready, so the
+          # PR smoke passes without a live Ollama behind it.
+          - { dir: ollamavlm,      image: ollamavlm-adapter,      port: 9018, platforms: "linux/amd64,linux/arm64" }
     steps:
       - name: Checkout
         uses: actions/checkout@v4

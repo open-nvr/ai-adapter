@@ -9,6 +9,21 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`ollamavlm` adapter** — contract-v1 visual_qa / scene_caption served
+  by proxying to an Ollama endpoint (``OPENNVR_OLLAMA_VLM_URL``, default
+  ``http://host.docker.internal:11434``; model
+  ``OPENNVR_OLLAMA_VLM_MODEL``, default ``moondream``). Drop-in for the
+  camera-agent's ``CAPTION_ADAPTER`` slot. Motivation: on macOS/Windows
+  the Docker VM has no GPU access, so in-container VQA is CPU-only —
+  pointing this adapter at a host-side Ollama gets Metal/GPU inference
+  while every call stays inside the audited Adapter Contract, and model
+  management collapses to ``ollama pull``. Lazy-ready by design (an
+  unreachable endpoint is a transient per-infer error, not a boot
+  failure), auto-pulls a missing model via Ollama's own API, ~80 MB
+  image with no weights and no ML deps.
+
 ## [0.1.3] — 2026-08-17
 
 ARM64 release. Adapter images are now `linux/amd64` + `linux/arm64`
