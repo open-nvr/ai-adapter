@@ -40,12 +40,10 @@
 # when bumping a pin, because a regression there is invisible until
 # an arm64 build starts compiling and times out.
 #
-# The two exceptions are llamacpp and smolvlm, which derive FROM
-# ghcr.io/ggml-org/llama.cpp:server. Upstream does not publish a
-# linux/arm64 manifest for that image (ggml-org/llama.cpp#19177 —
-# arm64 was built at one point and then disabled), so those two stay
-# amd64-only until upstream restores it or we vendor our own
-# llama-server build. Flip their ``platforms`` value when that lands.
+# (The old exceptions — llamacpp and smolvlm, amd64-only because they
+# derived from ghcr.io/ggml-org/llama.cpp:server which publishes no
+# arm64 manifest, ggml-org/llama.cpp#19177 — were retired along with
+# the camera-agent-lite stack; every remaining adapter is multi-arch.)
 #
 # The arm64 leg builds under QEMU on the amd64 runner. That is
 # acceptable here because every adapter installs pre-built wheels
@@ -185,10 +183,6 @@ jobs:
           # torch-free). Weights are NOT baked in — each adapter downloads
           # its model from HuggingFace on first boot into its weights
           # volume (whisper-adapter precedent), so the images stay small.
-          - { dir: pipertts,       image: pipertts-adapter,       port: 9012, platforms: "linux/amd64,linux/arm64" }
-          - { dir: whispercpp,     image: whispercpp-adapter,     port: 9013, platforms: "linux/amd64,linux/arm64" }
-          - { dir: llamacpp,       image: llamacpp-adapter,       port: 9014, platforms: "linux/amd64" }  # ggml-org/llama.cpp#19177
-          - { dir: smolvlm,        image: smolvlm-adapter,        port: 9016, platforms: "linux/amd64" }  # ggml-org/llama.cpp#19177
           # Ollama-proxy VLM (no weights, no torch — ~80 MB): visual_qa /
           # scene_caption forwarded to an Ollama endpoint, host GPU when
           # that endpoint is the host (Metal on macOS). Lazy-ready, so the
