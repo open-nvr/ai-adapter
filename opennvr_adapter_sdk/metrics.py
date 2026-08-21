@@ -68,6 +68,9 @@ class Metrics:
         self._stream_active: int = 0
         self._inflight: int = 0
         self._queue_depth: int = 0
+        # Adapter-defined series (see register_counter / register_histogram).
+        self._custom_counters: dict[str, dict] = {}
+        self._custom_hists: dict[str, dict] = {}
 
         # Pre-seed all outcomes at 0 (task="") so Prometheus sees them
         # even before the first request.
@@ -103,6 +106,83 @@ class Metrics:
                     hist["buckets"][ub] += 1
             hist["inf"] += 1
             hist["sum"] += latency_seconds
+            hist["count"] += 1
+
+    # ── Adapter-defined (domain) metrics ───────────────────────────
+    #
+    # Each model family has its own "is it healthy AND efficient" numbers —
+    # detections per class for a detector, audio realtime-factor for
+    # STT/TTS, generated volume for a captioner, upstream latency for a
+    # proxy. Adapters register those series ONCE (typically in load()) and
+    # then increment/observe them; the SDK renders them next to the
+    # standard set so one scrape answers everything. Same discipline as the
+    # ``task`` label: names are fixed at registration, and any counter
+    # label is a CLOSED value set ("other" catches the rest) — nothing a
+    # client sends can mint unbounded series.
+
+    def register_counter(
+        self, name: str, help_text: str, *,
+        label_key: str | None = None,
+        allowed_values: tuple[str, ...] | list[str] = (),
+    ) -> None:
+        """Register a custom counter. ``name`` must start with ``adapter_``.
+        With ``label_key``, series are split by that one label whose values
+        are limited to ``allowed_values`` (+ automatic "other")."""
+        if not name.startswith("adapter_"):
+            raise ValueError(f"custom metric {name!r} must start with 'adapter_'")
+        with self._lock:
+            if name in self._custom_counters:
+                return                      # idempotent: load() retries must not reset counts
+            self._custom_counters[name] = {
+                "help": help_text,
+                "label_key": label_key,
+                "allowed": frozenset(str(v) for v in allowed_values),
+                "values": defaultdict(float),   # label value ("" if none) → count
+            }
+
+    def inc_counter(
+        self, name: str, value: float = 1.0, label_value: str | None = None,
+    ) -> None:
+        with self._lock:
+            reg = self._custom_counters.get(name)
+            if reg is None:
+                raise ValueError(f"custom counter {name!r} was never registered")
+            key = ""
+            if reg["label_key"] is not None:
+                key = str(label_value or "")
+                if key and key not in reg["allowed"]:
+                    key = "other"
+            reg["values"][key] += value
+
+    def register_histogram(
+        self, name: str, help_text: str, *,
+        buckets: tuple[float, ...] | list[float],
+    ) -> None:
+        """Register a custom (label-free) histogram with explicit buckets."""
+        if not name.startswith("adapter_"):
+            raise ValueError(f"custom metric {name!r} must start with 'adapter_'")
+        ubs = tuple(sorted(float(b) for b in buckets))
+        if not ubs:
+            raise ValueError(f"custom histogram {name!r} needs at least one bucket")
+        with self._lock:
+            if name in self._custom_hists:
+                return                      # idempotent: load() retries must not reset counts
+            self._custom_hists[name] = {
+                "help": help_text,
+                "buckets": {ub: 0 for ub in ubs},
+                "ubs": ubs, "inf": 0, "sum": 0.0, "count": 0,
+            }
+
+    def observe(self, name: str, value: float) -> None:
+        with self._lock:
+            hist = self._custom_hists.get(name)
+            if hist is None:
+                raise ValueError(f"custom histogram {name!r} was never registered")
+            for ub in hist["ubs"]:
+                if value <= ub:
+                    hist["buckets"][ub] += 1
+            hist["inf"] += 1
+            hist["sum"] += value
             hist["count"] += 1
 
     def set_model_info(self, **labels: str | None) -> None:
@@ -203,5 +283,25 @@ class Metrics:
             lines.append("# HELP adapter_queue_depth Requests waiting for the model.")
             lines.append("# TYPE adapter_queue_depth gauge")
             lines.append(f"adapter_queue_depth {self._queue_depth}")
+
+            # Adapter-defined series, in registration order.
+            for name, reg in self._custom_counters.items():
+                lines.append(f"# HELP {name} {reg['help']}")
+                lines.append(f"# TYPE {name} counter")
+                if reg["label_key"] is None:
+                    lines.append(f"{name} {reg['values'].get('', 0)}")
+                else:
+                    for lv in sorted(reg["values"]):
+                        lines.append(
+                            f'{name}{{{reg["label_key"]}="{self._esc(lv)}"}} {reg["values"][lv]}'
+                        )
+            for name, hist in self._custom_hists.items():
+                lines.append(f"# HELP {name} {hist['help']}")
+                lines.append(f"# TYPE {name} histogram")
+                for ub in hist["ubs"]:
+                    lines.append(f'{name}_bucket{{le="{ub}"}} {hist["buckets"][ub]}')
+                lines.append(f'{name}_bucket{{le="+Inf"}} {hist["inf"]}')
+                lines.append(f"{name}_sum {hist['sum']}")
+                lines.append(f"{name}_count {hist['count']}")
 
             return "\n".join(lines) + "\n"

@@ -75,6 +75,14 @@ class PiperService(AdapterService):
         with self._lock:
             if self._load_state == HealthStatus.OK:
                 return
+            # Domain metrics (registration is idempotent in the SDK).
+            self.metrics.register_counter(
+                "adapter_audio_seconds_total",
+                "Seconds of speech audio synthesized.")
+            self.metrics.register_histogram(
+                "adapter_realtime_factor",
+                "Compute-seconds per audio-second (RTF); >1 = slower than playback.",
+                buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0))
             try:
                 self._adapter.ensure_model_loaded()
                 self._fingerprint_cache = self._compute_fingerprint(self._default_voice)
@@ -216,6 +224,21 @@ class PiperService(AdapterService):
             audio_b64 = _read_audio_inline(result, self._adapter)
             if audio_b64 is not None:
                 result["audio_b64"] = audio_b64
+
+        # Domain metrics: synthesized audio volume + realtime factor. RTF is
+        # the TTS efficiency number — compute-seconds per audio-second; >1
+        # means speech generation is slower than playback, so voice replies
+        # lag behind the conversation on this hardware.
+        try:
+            duration_s = float(result.get("duration_seconds") or 0.0)
+            latency_s = float(result.get("latency_ms", 0)) / 1000.0
+            if duration_s > 0:
+                self.metrics.inc_counter("adapter_audio_seconds_total", duration_s)
+                if latency_s > 0:
+                    self.metrics.observe(
+                        "adapter_realtime_factor", latency_s / duration_s)
+        except Exception:  # pragma: no cover - metrics must never break infer
+            logger.debug("piper domain metrics recording failed", exc_info=True)
 
         return InferResponse(
             model_name=self._default_voice,

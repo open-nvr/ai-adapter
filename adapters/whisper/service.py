@@ -120,6 +120,14 @@ class WhisperService(AdapterService):
         """Eagerly load the Whisper model. Idempotent."""
         if self._load_state == HealthStatus.OK:
             return
+        # Domain metrics (idempotent guard above keeps this once-only).
+        self.metrics.register_counter(
+            "adapter_audio_seconds_total",
+            "Seconds of input audio transcribed.")
+        self.metrics.register_histogram(
+            "adapter_realtime_factor",
+            "Compute-seconds per audio-second (RTF); >1 = slower than realtime.",
+            buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0))
         try:
             self._adapter.ensure_model_loaded()
             self._fingerprint_cache = self._compute_fingerprint()
@@ -318,6 +326,18 @@ class WhisperService(AdapterService):
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
         result_body = self._shape_asr_result(raw)
+        # Domain metrics: audio volume + realtime factor. RTF is the STT
+        # efficiency number end users care about — compute-seconds per
+        # audio-second; >1.0 means transcription can't keep up with speech
+        # on this hardware.
+        try:
+            duration_s = float(result_body.get("duration_seconds") or 0.0)
+            if duration_s > 0:
+                self.metrics.inc_counter("adapter_audio_seconds_total", duration_s)
+                self.metrics.observe(
+                    "adapter_realtime_factor", (inference_ms / 1000.0) / duration_s)
+        except Exception:  # pragma: no cover - metrics must never break infer
+            logger.debug("whisper domain metrics recording failed", exc_info=True)
         return InferResponse(
             model_name=f"whisper-{self._model_size}",
             model_version=self._adapter_model_version(),

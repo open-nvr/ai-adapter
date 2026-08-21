@@ -72,3 +72,49 @@ def test_untasked_calls_keep_the_preseeded_empty_task_series():
     assert 'adapter_infer_total{outcome="ok",task=""} 1' in body
     # all outcomes pre-seeded at 0 on task="" so dashboards see the axes
     assert 'adapter_infer_total{outcome="refused",task=""} 0' in body
+
+
+# ── Adapter-defined (domain) metrics ───────────────────────────────
+
+def test_custom_counter_with_closed_label_set():
+    m = Metrics()
+    m.register_counter("adapter_detections_total", "Objects by class.",
+                       label_key="label", allowed_values=("person", "car"))
+    m.inc_counter("adapter_detections_total", label_value="person")
+    m.inc_counter("adapter_detections_total", 2, label_value="person")
+    m.inc_counter("adapter_detections_total", label_value="kite")   # not allowed
+    body = m.render()
+    assert 'adapter_detections_total{label="person"} 3' in body
+    assert 'adapter_detections_total{label="other"} 1' in body
+    assert "kite" not in body
+
+
+def test_custom_counter_registration_is_idempotent():
+    m = Metrics()
+    m.register_counter("adapter_audio_seconds_total", "Audio.")
+    m.inc_counter("adapter_audio_seconds_total", 4.5)
+    m.register_counter("adapter_audio_seconds_total", "Audio.")   # load() retry
+    assert "adapter_audio_seconds_total 4.5" in m.render()
+
+
+def test_custom_histogram_renders_buckets_sum_count():
+    m = Metrics()
+    m.register_histogram("adapter_realtime_factor", "RTF.", buckets=(0.5, 1.0, 2.0))
+    m.observe("adapter_realtime_factor", 0.4)
+    m.observe("adapter_realtime_factor", 1.5)
+    body = m.render()
+    assert 'adapter_realtime_factor_bucket{le="0.5"} 1' in body
+    assert 'adapter_realtime_factor_bucket{le="2.0"} 2' in body
+    assert 'adapter_realtime_factor_bucket{le="+Inf"} 2' in body
+    assert "adapter_realtime_factor_count 2" in body
+
+
+def test_custom_metrics_reject_bad_names_and_unregistered_use():
+    import pytest
+    m = Metrics()
+    with pytest.raises(ValueError):
+        m.register_counter("detections_total", "no prefix")
+    with pytest.raises(ValueError):
+        m.inc_counter("adapter_never_registered")
+    with pytest.raises(ValueError):
+        m.observe("adapter_never_registered", 1.0)

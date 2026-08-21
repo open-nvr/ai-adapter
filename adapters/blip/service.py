@@ -93,6 +93,10 @@ class BlipService(AdapterService):
         with self._lock:
             if self._load_state == HealthStatus.OK:
                 return
+            # Domain metrics (registration is idempotent in the SDK).
+            self.metrics.register_counter(
+                "adapter_generated_chars_total",
+                "Characters of caption text generated.")
             try:
                 # Lazy imports — keeps adapter discovery fast and
                 # avoids forcing transformers/torch into discovery-
@@ -255,6 +259,10 @@ class BlipService(AdapterService):
                 retry_after_ms=1000,
             ) from exc
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        try:
+            self.metrics.inc_counter("adapter_generated_chars_total", len(caption or ""))
+        except Exception:  # pragma: no cover - metrics must never break infer
+            pass
 
         return InferResponse(
             model_name=self._model_id,

@@ -77,6 +77,10 @@ class MoondreamService(AdapterService):
         with self._lock:
             if self._load_state == HealthStatus.OK:
                 return
+            # Domain metrics (registration is idempotent in the SDK).
+            self.metrics.register_counter(
+                "adapter_generated_chars_total",
+                "Characters of caption/answer text generated.")
             try:
                 import moondream as md  # the official, CPU-optimised runtime
 
@@ -229,6 +233,10 @@ class MoondreamService(AdapterService):
             result["question"] = question
         else:
             result["caption"] = text
+        try:
+            self.metrics.inc_counter("adapter_generated_chars_total", len(text or ""))
+        except Exception:  # pragma: no cover - metrics must never break infer
+            pass
         return InferResponse(
             model_name=os.path.basename(self._model_path),
             model_version=f"moondream/{os.path.basename(self._model_path)}",

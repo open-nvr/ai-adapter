@@ -110,6 +110,12 @@ class InsightFaceService(AdapterService):
         with self._lock:
             if self._load_state == HealthStatus.OK:
                 return
+            # Domain metrics (registration is idempotent in the SDK).
+            self.metrics.register_counter(
+                "adapter_faces_total",
+                "Faces processed, by pipeline stage.",
+                label_key="stage",
+                allowed_values=("detected", "recognized", "unrecognized"))
             try:
                 # Lazy import per the project's "no heavy imports at
                 # discovery time" convention.
@@ -270,6 +276,19 @@ class InsightFaceService(AdapterService):
             result = _build_recognition_result(faces, self._face_db, threshold)
 
         result["model_pack"] = self._model_pack
+        try:
+            self.metrics.inc_counter(
+                "adapter_faces_total", len(faces), label_value="detected")
+            if task == "face_recognition" and faces:
+                # Recognition answers for the single best face per request.
+                if result.get("recognized"):
+                    self.metrics.inc_counter(
+                        "adapter_faces_total", 1, label_value="recognized")
+                else:
+                    self.metrics.inc_counter(
+                        "adapter_faces_total", 1, label_value="unrecognized")
+        except Exception:  # pragma: no cover - metrics must never break infer
+            pass
 
         return InferResponse(
             model_name=self._model_pack,

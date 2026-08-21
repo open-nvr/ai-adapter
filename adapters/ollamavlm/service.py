@@ -192,6 +192,11 @@ class OllamaVlmService(AdapterService):
         started = time.monotonic()
         text = self._generate(prompt, image_bytes)
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        try:
+            self.metrics.observe("adapter_upstream_latency_seconds", elapsed_ms / 1000.0)
+            self.metrics.inc_counter("adapter_generated_chars_total", len(text or ""))
+        except Exception:  # pragma: no cover - metrics must never break infer
+            pass
 
         result: dict[str, Any] = {
             "task": "visual_qa" if is_vqa else "scene_caption",

@@ -167,9 +167,19 @@ class AdapterService(ABC):
 
     @property
     def metrics(self) -> "Metrics":
-        """Shortcut for ``self.app.metrics`` — what streaming handlers
-        use to record per-frame inflight + outcome counters."""
-        return self.app.metrics
+        """The metrics registry: the owning ``AdapterApp``'s when attached
+        (production — one registry, one /metrics), or a private standalone
+        registry otherwise. The fallback exists so domain instrumentation
+        (register_counter in load(), inc_counter in infer()) never crashes
+        a service driven directly in unit tests without an AdapterApp."""
+        app = getattr(self, "_app", None)
+        if app is not None:
+            return app.metrics
+        fallback = getattr(self, "_fallback_metrics", None)
+        if fallback is None:
+            from opennvr_adapter_sdk.metrics import Metrics as _Metrics
+            fallback = self._fallback_metrics = _Metrics()
+        return fallback
 
 
 # ── ServiceError ───────────────────────────────────────────────────
