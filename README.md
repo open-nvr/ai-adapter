@@ -192,14 +192,14 @@ Apple Silicon Mac or a Raspberry Pi 5 pulls a native image with no
 
 | Adapter images | amd64 | arm64 |
 |---|:---:|:---:|
-| `yolov8`, `piper`, `pipertts`, `whisper`, `whispercpp`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm` | ✓ | ✓ |
-| `llamacpp`, `smolvlm` | ✓ | — |
+| `yolov8`, `piper`, `whisper`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm` | ✓ | ✓ |
 
-`llamacpp-adapter` and `smolvlm-adapter` build `FROM
-ghcr.io/ggml-org/llama.cpp:server`, and upstream publishes no
-`linux/arm64` manifest for it ([ggml-org/llama.cpp#19177](https://github.com/ggml-org/llama.cpp/issues/19177)).
-Until that is restored, ARM operators building those two locally need
-their own `llama-server` binary.
+(The former amd64-only pair — `llamacpp` and `smolvlm`, blocked on
+[ggml-org/llama.cpp#19177](https://github.com/ggml-org/llama.cpp/issues/19177) —
+was retired together with OpenNVR's camera-agent-lite stack, along with
+`whispercpp` and `pipertts`; the `whisper` and `piper` adapters cover
+STT/TTS, and Ollama covers the llama.cpp runtime via `ollamavlm` and the
+agent's host-Ollama path.)
 
 Because an image with no matching platform makes `docker compose pull`
 abort the **whole** stack — not just that service — a single amd64-only
