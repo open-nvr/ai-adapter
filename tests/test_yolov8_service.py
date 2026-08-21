@@ -576,14 +576,17 @@ def test_stream_records_real_latency_and_ok_outcome(yolov8_app, sample_jpeg):
 
 
 def _parse_outcome_count(prometheus_body: str, outcome: str) -> int:
+    # Sum across ``task`` label values — the counter is (outcome, task) now.
+    total = 0
     for line in prometheus_body.splitlines():
-        if line.startswith(f'adapter_infer_total{{outcome="{outcome}"}}'):
-            return int(line.rsplit(" ", 1)[1])
-    return 0
+        if line.startswith(f'adapter_infer_total{{outcome="{outcome}"'):
+            total += int(line.rsplit(" ", 1)[1])
+    return total
 
 
 def _parse_latency_count(prometheus_body: str) -> int:
+    total = 0
     for line in prometheus_body.splitlines():
         if line.startswith("adapter_infer_latency_seconds_count"):
-            return int(line.rsplit(" ", 1)[1])
-    return 0
+            total += int(line.rsplit(" ", 1)[1])
+    return total

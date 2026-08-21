@@ -197,7 +197,13 @@ class AdapterApp:
         self._supported_contract_versions = list(supported_contract_versions)
         self._started_at_dt = datetime.now(timezone.utc)
         self._started_at_mono = time.monotonic()
-        self._metrics = Metrics(latency_buckets_seconds=latency_buckets_seconds)
+        # tasks_advertised is the CLOSED task-label set for metrics — task
+        # strings arrive in client payloads, so anything unadvertised is
+        # folded into "other" (cardinality guard, see Metrics).
+        self._metrics = Metrics(
+            latency_buckets_seconds=latency_buckets_seconds,
+            known_tasks=tuple(self._tasks_advertised),
+        )
 
         self._input_content_types = self._compute_input_content_types(extra_input_content_types)
 
@@ -250,6 +256,7 @@ class AdapterApp:
             self._service.attach_app(self)
             self._service.load()
             self._metrics.set_model_loaded(self._service.is_ready())
+            self._refresh_model_info_metric()
             try:
                 yield
             finally:
@@ -323,6 +330,26 @@ class AdapterApp:
 
     # ── /health, /capabilities builders ────────────────────────────
 
+    def _refresh_model_info_metric(self) -> None:
+        """Publish the model's identity as ``adapter_model_info`` labels.
+
+        Called at lifespan startup and on every /capabilities build (KAI-C
+        polls that every 60 s), so the exported fingerprint tracks §11.3
+        drift the same way the capabilities payload does. Best-effort: an
+        adapter whose model_info() raises mid-load just skips the refresh."""
+        try:
+            info = self._service.model_info()
+        except Exception:  # pragma: no cover - defensive
+            return
+        self._metrics.set_model_info(
+            adapter=self._name,
+            adapter_version=self._version,
+            model=info.name,
+            model_version=info.version,
+            framework=info.framework,
+            fingerprint=info.fingerprint,
+        )
+
     def _build_health(self) -> HealthResponse:
         info = self._service.model_info()
         if self._service.is_ready():
@@ -342,6 +369,9 @@ class AdapterApp:
         )
 
     def _build_capabilities(self) -> CapabilitiesResponse:
+        # KAI-C polls /capabilities every 60 s — piggyback the metrics
+        # identity refresh so fingerprint drift shows on /metrics too.
+        self._refresh_model_info_metric()
         infer = InferEndpointInfo(
             supported=True,
             input_content_types=list(self._input_content_types),
@@ -402,13 +432,18 @@ class AdapterApp:
                 )
             return self._transport_error("malformed_input", message)
 
+        # Task label for the infer metrics. Client-supplied, but Metrics
+        # folds anything not in tasks_advertised into "other" (closed set).
+        task = str(payload.get("task") or "")
+
         self._metrics.inc_inflight()
         started = time.monotonic()
         try:
             result = self._service.infer(payload)
         except ServiceError as exc:
             latency = time.monotonic() - started
-            self._metrics.record_infer(_outcome_for_category(exc.category), latency)
+            self._metrics.record_infer(
+                _outcome_for_category(exc.category), latency, task=task)
             logger.info(
                 "infer failed adapter=%s correlation_id=%s category=%s code=%s latency_ms=%d",
                 self._name, correlation_id, exc.category.value, exc.code,
@@ -422,7 +457,7 @@ class AdapterApp:
             self._metrics.dec_inflight()
 
         latency = time.monotonic() - started
-        self._metrics.record_infer("ok", latency)
+        self._metrics.record_infer("ok", latency, task=task)
         logger.info(
             "infer ok adapter=%s correlation_id=%s latency_ms=%d",
             self._name, correlation_id, int(latency * 1000),
