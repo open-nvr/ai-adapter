@@ -4,6 +4,34 @@ All notable changes to `opennvr-adapter-sdk` are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the SDK uses semantic versioning aligned with the AI Adapter Contract major version (SDK v1.x targets contract v1).
 
+## [1.2.0] — 2026-08
+
+### Added
+
+- **Model identity + per-task labels on `/metrics`** (observability slice 1).
+  `adapter_model_info{adapter, adapter_version, model, model_version,
+  framework, fingerprint} 1` exports the model's identity as an info-metric,
+  populated from the service's existing `model_info()` at lifespan startup
+  and refreshed on every `/capabilities` build — so §11.3 fingerprint drift
+  is visible on `/metrics` too, and a latency regression can be correlated
+  with a weights change from one scrape. `adapter_infer_total` and
+  `adapter_infer_latency_seconds` gain a `task` label (task per request,
+  from the payload). The task label set is **closed**: only
+  `tasks_advertised` values become series; anything else folds into
+  `"other"` (task strings are client-controlled — an open set would let any
+  client mint unbounded series), and `task=""` covers unattributed calls
+  (stream frames, transport errors). No adapter changes required — every
+  SDK adapter gets all of this by rebuilding against 1.2.0.
+
+### Changed
+
+- `Metrics(known_tasks=...)` constructor parameter and
+  `record_infer(..., task="")` keyword (both optional — existing callers
+  are unaffected). Exposition format: the infer counter and latency
+  histogram series now always carry the `task` label; consumers matching
+  exact series strings should match on the metric-name prefix and sum
+  across labels.
+
 ## [1.1.0] — 2026-07
 
 ### Added
