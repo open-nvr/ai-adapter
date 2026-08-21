@@ -89,6 +89,15 @@ class YoloV8Service(AdapterService):
         """Eagerly load the ONNX weights. Idempotent."""
         if self._load_state == HealthStatus.OK:
             return
+        # Domain metrics: per-class output volume — THE false-positive
+        # diagnostic (a wall of wires minting "kite" detections shows up
+        # here long before anyone reads logs). Label set = the model's own
+        # classes, so cardinality is bounded by the weights, not the input.
+        from adapters.yolov8.coco_classes import COCO_CLASSES
+        self.metrics.register_counter(
+            "adapter_detections_total",
+            "Objects detected, by class label.",
+            label_key="label", allowed_values=COCO_CLASSES)
         try:
             self._adapter.ensure_model_loaded()
             self._fingerprint_cache = self._compute_fingerprint()
@@ -441,6 +450,12 @@ class YoloV8Service(AdapterService):
         detection_result = self._shape_detections(
             raw_predictions, width, height, classes_filter=params.get("classes")
         )
+        try:
+            for item in detection_result.detections:
+                self.metrics.inc_counter(
+                    "adapter_detections_total", label_value=item.label)
+        except Exception:  # pragma: no cover - metrics must never break infer
+            logger.debug("yolov8 domain metrics recording failed", exc_info=True)
         return InferResponse(
             model_name="yolov8n",
             model_version=self._adapter_model_version(),

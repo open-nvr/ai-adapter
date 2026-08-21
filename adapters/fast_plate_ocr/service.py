@@ -96,6 +96,12 @@ class FastPlateOcrService(AdapterService):
         with self._lock:
             if self._load_state == HealthStatus.OK:
                 return
+            # Domain metrics (registration is idempotent in the SDK).
+            self.metrics.register_counter(
+                "adapter_plate_reads_total",
+                "Plate OCR reads, by whether they met the confidence floor.",
+                label_key="result",
+                allowed_values=("accepted", "below_threshold"))
             try:
                 # Import inside ``load()`` per the project's
                 # "lazy heavy imports" convention — keeps adapter
@@ -294,6 +300,12 @@ class FastPlateOcrService(AdapterService):
         # candidate it has, marked with a status flag so the caller
         # can decide whether to drop the alert.
         accepted = overall_conf >= threshold
+        try:
+            self.metrics.inc_counter(
+                "adapter_plate_reads_total",
+                label_value="accepted" if accepted else "below_threshold")
+        except Exception:  # pragma: no cover - metrics must never break infer
+            pass
 
         return InferResponse(
             model_name=self._model_id,

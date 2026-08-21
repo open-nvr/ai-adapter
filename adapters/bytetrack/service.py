@@ -127,6 +127,11 @@ class ByteTrackService(AdapterService):
         happens here, not on the request path."""
         if self._load_state == HealthStatus.OK:
             return
+        # Domain metrics (registration is idempotent in the SDK).
+        self.metrics.register_counter(
+            "adapter_tracked_objects_total",
+            "Detections run through the tracker, by whether a track id was assigned.",
+            label_key="result", allowed_values=("tracked", "untracked"))
         try:
             import supervision as sv  # type: ignore
 
@@ -386,6 +391,15 @@ class ByteTrackService(AdapterService):
             if frame_dims
             else None,
         )
+        try:
+            tracked = sum(1 for it in items if it.track_id is not None)
+            self.metrics.inc_counter(
+                "adapter_tracked_objects_total", tracked, label_value="tracked")
+            self.metrics.inc_counter(
+                "adapter_tracked_objects_total", len(items) - tracked,
+                label_value="untracked")
+        except Exception:  # pragma: no cover - metrics must never break infer
+            pass
 
         inference_ms = int((time.monotonic() - start) * 1000)
         return InferResponse(
