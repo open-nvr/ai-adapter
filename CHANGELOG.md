@@ -9,6 +9,8 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-08-24
+
 ### Added
 
 - **`ollamavlm` adapter** — contract-v1 visual_qa / scene_caption served
@@ -23,6 +25,28 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unreachable endpoint is a transient per-infer error, not a boot
   failure), auto-pulls a missing model via Ollama's own API, ~80 MB
   image with no weights and no ML deps.
+- **Model identity + per-task + domain metrics on `/metrics`** (SDK
+  1.2.0, wired into every published adapter).
+  `adapter_model_info{adapter, adapter_version, model, model_version,
+  framework, fingerprint} 1` exports the served model's identity, so
+  §11.3 fingerprint drift is visible from one scrape and a latency
+  regression can be correlated with a weights change.
+  `adapter_infer_total` / `adapter_infer_latency_seconds` gain a
+  closed-set `task` label, and adapters register model-specific domain
+  metrics (detection counts, plate-read confidence, …) through
+  `load()`-time registration.
+
+### Removed
+
+- **The camera-agent-lite adapters** (`llamacpp`, `smolvlm`,
+  `whispercpp`, `pipertts`) — companion to open-nvr's camera-agent-lite
+  removal. llamacpp/smolvlm were amd64-only (blocked upstream on
+  ggml-org/llama.cpp#19177 — the ARM audience lite targeted could never
+  run them natively), and whispercpp/pipertts duplicated the `whisper`
+  and `piper` adapters. STT/TTS stay covered by whisper/piper; the
+  llama.cpp runtime stays covered through Ollama (`ollamavlm` + the
+  agent's host-Ollama path). Every remaining published adapter image is
+  multi-arch.
 
 ## [0.1.3] — 2026-08-17
 
@@ -243,6 +267,8 @@ permits.
 
 ---
 
-[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/open-nvr/ai-adapter/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/open-nvr/ai-adapter/compare/v0.1.1...v0.1.3
 [0.1.1]: https://github.com/open-nvr/ai-adapter/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/open-nvr/ai-adapter/releases/tag/v0.1.0
