@@ -164,7 +164,12 @@ tts = [
 # tests/_fast_plate_ocr_service_fixtures.py so they exercise the
 # wrapper logic without touching real fast-plate-ocr code.
 lpr = [
-    "fast-plate-ocr>=1.1.0",
+    # The [onnx] extra is REQUIRED: since 1.x, onnxruntime is optional
+    # upstream ("pip install 'fast-plate-ocr[onnx]'" per its own error
+    # message) — without it LicensePlateRecognizer raises
+    # ModuleNotFoundError at load() and every inference 503s. Found in
+    # the field: the published adapter image could never read a plate.
+    "fast-plate-ocr[onnx]>=1.1.0",
 ]
 
 # PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
