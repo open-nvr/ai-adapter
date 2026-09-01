@@ -151,7 +151,7 @@ def test_infer_returns_plate_text_and_characters(
     assert resp.result["plate_text"] == "ABC1234"
     assert resp.result["confidence"] == pytest.approx(0.93, rel=1e-3)
     assert resp.result["accepted"] is True
-    assert resp.result["min_confidence_applied"] == pytest.approx(0.30)
+    assert resp.result["min_confidence_applied"] == pytest.approx(0.45)
     assert len(resp.result["characters"]) == len("ABC1234")
     assert all("char" in c and "confidence" in c for c in resp.result["characters"])
     assert resp.result["model_id"] == "cct-xs-v1-global-model"
@@ -304,11 +304,36 @@ def test_parse_recognizer_output_handles_list_of_tuples(
 
 
 def test_parse_recognizer_output_handles_bare_string():
+    """A shape with NO confidence information parses as UNTRUSTED
+    (0.0), never as certain. The old behaviour defaulted to 1.0 —
+    which, combined with fast-plate-ocr 1.1.0 reporting ``char_probs``
+    instead of ``.confidence``, stamped every production read as fully
+    confident and made the acceptance floor inert (the field garbage
+    '1023'/'C046' all shipped as accepted reads)."""
     from adapters.fast_plate_ocr.service import _parse_recognizer_output
 
     text, chars, conf = _parse_recognizer_output("DEF456")
     assert text == "DEF456"
-    assert conf == pytest.approx(1.0)
+    assert conf == pytest.approx(0.0)
+
+
+def test_parse_recognizer_output_real_110_shape_uses_min_char_prob():
+    """The REAL fast-plate-ocr 1.1.0 return shape: PlatePrediction
+    with ``plate`` + ``char_probs`` and NO ``.confidence``. Overall
+    confidence must be the MIN of the per-character probabilities —
+    a read is only as trustworthy as its shakiest character (measured:
+    clean reads min ~0.999, hallucinations min ~0.08)."""
+    from adapters.fast_plate_ocr.service import _parse_recognizer_output
+
+    class _PlatePrediction:
+        plate = "AB123CD"
+        char_probs = [0.999, 0.98, 0.997, 0.35, 0.99, 0.995, 0.999]
+
+    text, chars, conf = _parse_recognizer_output([_PlatePrediction()])
+    assert text == "AB123CD"
+    assert conf == pytest.approx(0.35)          # the weakest character
+    assert chars[3] == {"char": "2", "confidence": 0.35}
+    assert chars[0]["confidence"] == pytest.approx(0.999)
 
 
 def test_parse_recognizer_output_strips_whitespace():
@@ -367,10 +392,11 @@ def test_parse_recognizer_output_handles_parallel_arrays_shape():
 
 
 def test_detected_plate_is_cropped_before_ocr(
-    fast_plate_ocr_environment, sample_jpeg,
+    fast_plate_ocr_environment, sample_jpeg, monkeypatch,
 ):
     det_cls = fast_plate_ocr_environment["fake_detector_cls"]
     det_cls.next_detections = [(0.8, (16, 8, 48, 24))]
+    monkeypatch.setenv("OPENNVR_LPR_MIN_PLATE_PX", "8")  # toy 64x32 frame
     svc = _build_service(fast_plate_ocr_environment)
     svc.load()
     fake_cls = fast_plate_ocr_environment["fake_recognizer_cls"]
@@ -387,7 +413,7 @@ def test_detected_plate_is_cropped_before_ocr(
     assert det["box"] == [16, 8, 48, 24]
     assert det["confidence"] == 0.8
     # Localized read keeps the caller's floor.
-    assert resp.result["min_confidence_applied"] == 0.30
+    assert resp.result["min_confidence_applied"] == 0.45
 
 
 def test_no_detection_raises_the_floor(
@@ -439,7 +465,7 @@ def test_detector_disabled_keeps_callers_floor(
     svc.load()
     resp = svc.infer({"__file__": sample_jpeg})
     assert resp.result["plate_detection"]["attempted"] is False
-    assert resp.result["min_confidence_applied"] == 0.30
+    assert resp.result["min_confidence_applied"] == 0.45
     assert resp.result["accepted"] is True
 
 
@@ -461,11 +487,12 @@ def test_detector_load_failure_degrades_not_dies(
 
 
 def test_edge_detection_box_clamps_to_frame(
-    fast_plate_ocr_environment, sample_jpeg,
+    fast_plate_ocr_environment, sample_jpeg, monkeypatch,
 ):
     """A detection at the frame corner must clamp, not crash or wrap."""
     det_cls = fast_plate_ocr_environment["fake_detector_cls"]
     det_cls.next_detections = [(0.9, (0, 0, 20, 10))]
+    monkeypatch.setenv("OPENNVR_LPR_MIN_PLATE_PX", "8")  # toy 64x32 frame
     svc = _build_service(fast_plate_ocr_environment)
     svc.load()
     fake_cls = fast_plate_ocr_environment["fake_recognizer_cls"]

@@ -57,7 +57,12 @@ logger = logging.getLogger(__name__)
 # the smallest and most general; operators can override via the
 # ``OPENNVR_LPR_MODEL`` env var without code changes.
 DEFAULT_MODEL_ID: str = "cct-xs-v1-global-model"
-DEFAULT_MIN_CONFIDENCE: float = 0.30
+# Overall confidence is the MIN per-character probability (see
+# _parse_recognizer_output): clean reads score ~0.99, misreads and
+# hallucinations cluster under ~0.45. Tunable per-install via
+# OPENNVR_LPR_MIN_CONFIDENCE — raise for fewer false reads, lower for
+# fewer misses.
+DEFAULT_MIN_CONFIDENCE: float = 0.45
 
 # Plate LOCALIZATION stage (field fix: the platform sends whole-VEHICLE
 # crops, but fast-plate-ocr is a pure OCR model that reads whatever it
@@ -80,6 +85,12 @@ _CROP_MARGIN_Y: float = 0.20
 #: real plate crop reads at ~0.99 and sails through; scene noise
 #: almost never reaches 0.75.
 DEFAULT_UNLOCALIZED_MIN_CONFIDENCE: float = 0.75
+#: Minimum localized-plate width (px) worth OCRing. Below this the
+#: characters are a few pixels tall and the model guesses — a distant
+#: car should produce NO read, not a wrong one (a wrong read is a
+#: false "unknown vehicle" alarm downstream). Overridable via
+#: OPENNVR_LPR_MIN_PLATE_PX.
+DEFAULT_MIN_PLATE_PX: int = 40
 
 # Maximum image bytes per call. A typical plate crop is well under
 # 100 KB; the 2 MB cap protects against an upstream pipeline shipping
@@ -98,7 +109,11 @@ class FastPlateOcrService(AdapterService):
         self._model_id: str = model_id or os.getenv(
             "OPENNVR_LPR_MODEL", DEFAULT_MODEL_ID
         )
-        self._min_confidence: float = float(min_confidence)
+        try:
+            self._min_confidence: float = float(os.getenv(
+                "OPENNVR_LPR_MIN_CONFIDENCE", "") or min_confidence)
+        except ValueError:
+            self._min_confidence = float(min_confidence)
         # Localization config. OPENNVR_LPR_DETECTOR="" disables the
         # detection stage entirely (pure-OCR, the pre-1.1 behaviour).
         self._detector_id: str = os.getenv(
@@ -115,6 +130,11 @@ class FastPlateOcrService(AdapterService):
                 or DEFAULT_UNLOCALIZED_MIN_CONFIDENCE)
         except ValueError:
             self._unlocalized_floor = DEFAULT_UNLOCALIZED_MIN_CONFIDENCE
+        try:
+            self._min_plate_px: int = int(os.getenv(
+                "OPENNVR_LPR_MIN_PLATE_PX", "") or DEFAULT_MIN_PLATE_PX)
+        except ValueError:
+            self._min_plate_px = DEFAULT_MIN_PLATE_PX
         self._detector: Any | None = None
         # True when a CONFIGURED detector failed to load — degraded
         # mode keeps the raised unlocalized floor (we cannot vouch for
@@ -390,6 +410,38 @@ class FastPlateOcrService(AdapterService):
                     best = (conf, det.bounding_box)
             if best is not None:
                 conf, box = best
+                bw = int(box.x2) - int(box.x1)
+                if bw < self._min_plate_px:
+                    # Plate localized but too small to read honestly:
+                    # return a clean non-read instead of a guess.
+                    detection_info.update(
+                        found=True,
+                        confidence=round(conf, 4),
+                        box=[int(box.x1), int(box.y1),
+                             int(box.x2), int(box.y2)],
+                        too_small=True,
+                        min_plate_px=self._min_plate_px,
+                    )
+                    try:
+                        self.metrics.inc_counter(
+                            "adapter_plate_reads_total",
+                            label_value="below_threshold")
+                    except Exception:  # pragma: no cover
+                        pass
+                    return InferResponse(
+                        model_name=self._model_id,
+                        model_version=f"fast-plate-ocr/{self._model_id}",
+                        inference_ms=0,
+                        result={
+                            "plate_text": "",
+                            "confidence": 0.0,
+                            "characters": [],
+                            "accepted": False,
+                            "min_confidence_applied": threshold,
+                            "model_id": self._model_id,
+                            "plate_detection": detection_info,
+                        },
+                    )
                 crop = _crop_with_margin(image_array, box)
                 if crop is not None:
                     ocr_input = crop
@@ -495,8 +547,10 @@ def _parse_recognizer_output(raw: Any) -> tuple[str, list[dict[str, Any]], float
     shapes across versions; we accept all of them and produce the
     same wire shape regardless:
 
-    * v2 ``PlatePrediction`` object with ``.plate`` + ``.confidence``
-      attributes (current upstream default).
+    * ``PlatePrediction`` object with ``.plate`` + ``.char_probs``
+      (fast-plate-ocr 1.1.0, the shipped version — overall confidence
+      is the MIN of the per-character probabilities) or ``.plate`` +
+      ``.confidence`` (other versions/forks).
     * Bare string ``"ABC1234"``.
     * Tuple ``("ABC1234", 0.93)``.
     * List of any of the above (batch).
@@ -535,18 +589,41 @@ def _parse_recognizer_output(raw: Any) -> tuple[str, list[dict[str, Any]], float
 
     # Pull text + confidence off the (now-unwrapped) first prediction.
     # Most-specific dispatch first; the str case is a catch-all.
+    char_confs: list[float] | None = None
     plate_attr = getattr(first, "plate", None)
     if plate_attr is not None:
-        # v2 PlatePrediction-style: attributes ``plate`` + ``confidence``.
+        # PlatePrediction-style object. fast-plate-ocr 1.1.0's REAL
+        # shape carries ``char_probs`` (per-character probabilities),
+        # NOT ``.confidence`` — the old branch here defaulted a missing
+        # ``.confidence`` to 1.0, which stamped EVERY production read
+        # as fully confident: the acceptance floor was inert, garbage
+        # like "1023" shipped as an accepted read, and raising the
+        # floor changed nothing. Aggregate as MIN of the per-character
+        # probabilities: a plate read is only as trustworthy as its
+        # least certain character (measured: a clean read mins ~0.999,
+        # a hallucination mins ~0.08 — mean would blur that apart).
         text = str(plate_attr)
         if overall is None:
-            attr_conf = getattr(first, "confidence", None)
-            overall = float(attr_conf) if attr_conf is not None else 1.0
+            probs = getattr(first, "char_probs", None)
+            if probs is not None:
+                try:
+                    char_confs = [float(p) for p in list(probs)]
+                except (TypeError, ValueError):
+                    char_confs = None
+            if char_confs:
+                overall = min(char_confs)
+            else:
+                attr_conf = getattr(first, "confidence", None)
+                # No per-char probs AND no confidence attribute →
+                # treat as UNTRUSTED (0.0), never as certain (1.0):
+                # an unknown-confidence read must not outrank the
+                # acceptance floor.
+                overall = float(attr_conf) if attr_conf is not None else 0.0
     elif isinstance(first, dict):
         # Dict-shape prediction (some forks).
         text = str(first.get("plate") or first.get("text") or "")
         if overall is None:
-            overall = float(first.get("confidence", 1.0) or 1.0)
+            overall = float(first.get("confidence") or 0.0)
     elif isinstance(first, (list, tuple)) and len(first) >= 2:
         text = str(first[0])
         if overall is None:
@@ -554,16 +631,22 @@ def _parse_recognizer_output(raw: Any) -> tuple[str, list[dict[str, Any]], float
     elif isinstance(first, str):
         text = first
         if overall is None:
-            overall = 1.0
+            overall = 0.0   # bare string = confidence unknown = untrusted
     else:
         text = str(first)
         if overall is None:
-            overall = 1.0
+            overall = 0.0
 
     text = text.strip()
-    characters = [
-        {"char": ch, "confidence": round(overall, 4)} for ch in text
-    ]
+    if char_confs and len(char_confs) >= len(text):
+        characters = [
+            {"char": ch, "confidence": round(char_confs[i], 4)}
+            for i, ch in enumerate(text)
+        ]
+    else:
+        characters = [
+            {"char": ch, "confidence": round(overall, 4)} for ch in text
+        ]
     return text, characters, overall
 
 
