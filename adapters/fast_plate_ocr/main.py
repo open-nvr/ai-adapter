@@ -38,7 +38,7 @@ _adapter_app = AdapterApp(
     # __enter__ take effect.
     service_factory=FastPlateOcrService,
     name="fast-plate-ocr",
-    version="1.0.0",
+    version="1.1.0",
     vendor="open-nvr",
     license="AGPL-3.0",
     model_card_url="https://github.com/ankandrew/fast-plate-ocr",

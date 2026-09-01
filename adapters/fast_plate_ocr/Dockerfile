@@ -30,8 +30,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Versions track pyproject.toml exactly. fast-plate-ocr brings its
-# own onnxruntime so we don't pin it here.
+# Versions track pyproject.toml exactly. NOTE: onnxruntime is an
+# OPTIONAL extra of fast-plate-ocr 1.x ("[onnx]") — NOT a hard dep as
+# an earlier comment here claimed. Installing without the extra
+# produced an image whose model could never load: every /infer
+# answered 503 while /health stayed green enough for Docker, so a
+# whole deployment ran plate-blind with no build-time signal. The
+# import check below makes that a build FAILURE instead.
 #
 # fast-plate-ocr is pinned to >=1.1.0 because 2.x doesn't exist on
 # PyPI — latest published is 1.1.0 (verified via the PyPI JSON
@@ -45,7 +50,15 @@ RUN pip install --no-cache-dir \
         pydantic==2.12.5 \
         httpx==0.28.1 \
         python-multipart==0.0.20 \
-        "fast-plate-ocr>=1.1.0"
+        "fast-plate-ocr[onnx]>=1.1.0" \
+        "open-image-models[onnx]>=0.6.0"
+
+# Build-time guard: importing LicensePlateRecognizer pulls onnxruntime
+# (and cv2/numpy) — if any runtime dependency is missing, the BUILD
+# fails here rather than the first plate read failing in production.
+# Import only; the ~3 MB model still downloads on first load() so the
+# image stays weights-free.
+RUN python -c "from fast_plate_ocr import LicensePlateRecognizer; from open_image_models import create_detector; import onnxruntime, cv2, numpy"
 
 COPY adapters/fast_plate_ocr/  ./adapters/fast_plate_ocr/
 

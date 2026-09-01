@@ -72,6 +72,53 @@ def install_fake_fast_plate_ocr(model_file_path: Path | None = None):
     return _FakeLicensePlateRecognizer
 
 
+def install_fake_open_image_models():
+    """Inject a stub ``open_image_models`` providing ``create_detector``.
+
+    The fake detector's class-level ``next_detections`` is a list of
+    ``(confidence, (x1, y1, x2, y2))`` tuples tests can set before an
+    /infer call. Default: one high-confidence detection covering the
+    WHOLE test frame — margins clamp, so the OCR input equals the full
+    image and every pre-localization test keeps its exact expectations
+    (caller's floor, (32, 64, 3) ndarray) while still exercising the
+    detection-found code path.
+
+    Set ``raise_on_create = True`` to simulate a detector that cannot
+    load (the degraded mode)."""
+
+    class _FakeBox:
+        def __init__(self, x1, y1, x2, y2):
+            self.x1, self.y1, self.x2, self.y2 = x1, y1, x2, y2
+
+    class _FakeDetection:
+        def __init__(self, conf, box):
+            self.label = "License Plate"
+            self.confidence = conf
+            self.bounding_box = _FakeBox(*box)
+
+    class _FakeDetector:
+        next_detections: list = [(0.9, (0, 0, 64, 32))]
+        last_predict_input = None
+        last_create_kwargs: dict = {}
+        raise_on_create = False
+
+        def predict(self, image):
+            _FakeDetector.last_predict_input = image
+            return [_FakeDetection(c, b)
+                    for c, b in _FakeDetector.next_detections]
+
+    def create_detector(model, **kwargs):
+        _FakeDetector.last_create_kwargs = {"model": model, **kwargs}
+        if _FakeDetector.raise_on_create:
+            raise RuntimeError("fake detector load failure")
+        return _FakeDetector()
+
+    module = types.ModuleType("open_image_models")
+    module.create_detector = create_detector
+    sys.modules["open_image_models"] = module
+    return _FakeDetector
+
+
 def _tiny_jpeg_bytes() -> bytes:
     """Generate a real-decodable JPEG via Pillow.
 
@@ -103,10 +150,16 @@ def fast_plate_ocr_environment(tmp_path: Path):
     model_file.write_bytes(b"FAKE-FAST-PLATE-OCR-ONNX-" * 200)
 
     fake_cls = install_fake_fast_plate_ocr(model_file)
+    fake_detector_cls = install_fake_open_image_models()
+    # Reset class-level knobs so test order can't leak state.
+    fake_detector_cls.next_detections = [(0.9, (0, 0, 64, 32))]
+    fake_detector_cls.raise_on_create = False
+    fake_detector_cls.last_predict_input = None
 
     return {
         "model_file": model_file,
         "fake_recognizer_cls": fake_cls,
+        "fake_detector_cls": fake_detector_cls,
         "sample_jpeg": _tiny_jpeg_bytes(),
     }
 
