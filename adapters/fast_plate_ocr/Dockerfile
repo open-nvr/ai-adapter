@@ -50,14 +50,15 @@ RUN pip install --no-cache-dir \
         pydantic==2.12.5 \
         httpx==0.28.1 \
         python-multipart==0.0.20 \
-        "fast-plate-ocr[onnx]>=1.1.0"
+        "fast-plate-ocr[onnx]>=1.1.0" \
+        "open-image-models[onnx]>=0.6.0"
 
 # Build-time guard: importing LicensePlateRecognizer pulls onnxruntime
 # (and cv2/numpy) — if any runtime dependency is missing, the BUILD
 # fails here rather than the first plate read failing in production.
 # Import only; the ~3 MB model still downloads on first load() so the
 # image stays weights-free.
-RUN python -c "from fast_plate_ocr import LicensePlateRecognizer; import onnxruntime, cv2, numpy"
+RUN python -c "from fast_plate_ocr import LicensePlateRecognizer; from open_image_models import create_detector; import onnxruntime, cv2, numpy"
 
 COPY adapters/fast_plate_ocr/  ./adapters/fast_plate_ocr/
 

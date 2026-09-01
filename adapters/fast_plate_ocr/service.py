@@ -59,6 +59,28 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_ID: str = "cct-xs-v1-global-model"
 DEFAULT_MIN_CONFIDENCE: float = 0.30
 
+# Plate LOCALIZATION stage (field fix: the platform sends whole-VEHICLE
+# crops, but fast-plate-ocr is a pure OCR model that reads whatever it
+# is pointed at — on an uncropped vehicle it hallucinates character
+# shapes; the first production read was a garbage "1023" off a van
+# whose plate was not even legible). ``open-image-models`` (same
+# author, same ONNX/CPU footprint, ~7 MB weights downloaded on first
+# load) localizes the plate first; OCR then runs on the crop, which
+# takes a 15%-confidence hallucination to a >99% exact read.
+DEFAULT_DETECTOR_ID: str = "yolo-v9-t-384-license-plate-end2end"
+DEFAULT_DETECT_CONFIDENCE: float = 0.35
+#: Margin added around the detected plate box before OCR (fraction of
+#: box size per side) — a sliver of context helps the OCR model.
+_CROP_MARGIN_X: float = 0.10
+_CROP_MARGIN_Y: float = 0.20
+#: When NO plate is localized we still OCR the whole image — a tight
+#: plate crop (the original documented contract) may legitimately not
+#: re-detect — but at a RAISED confidence floor, because whole-image
+#: OCR of a scene is exactly the garbage generator described above. A
+#: real plate crop reads at ~0.99 and sails through; scene noise
+#: almost never reaches 0.75.
+DEFAULT_UNLOCALIZED_MIN_CONFIDENCE: float = 0.75
+
 # Maximum image bytes per call. A typical plate crop is well under
 # 100 KB; the 2 MB cap protects against an upstream pipeline shipping
 # a full uncropped frame by mistake.
@@ -77,6 +99,29 @@ class FastPlateOcrService(AdapterService):
             "OPENNVR_LPR_MODEL", DEFAULT_MODEL_ID
         )
         self._min_confidence: float = float(min_confidence)
+        # Localization config. OPENNVR_LPR_DETECTOR="" disables the
+        # detection stage entirely (pure-OCR, the pre-1.1 behaviour).
+        self._detector_id: str = os.getenv(
+            "OPENNVR_LPR_DETECTOR", DEFAULT_DETECTOR_ID
+        ).strip()
+        try:
+            self._detect_confidence: float = float(os.getenv(
+                "OPENNVR_LPR_DETECT_CONF", "") or DEFAULT_DETECT_CONFIDENCE)
+        except ValueError:
+            self._detect_confidence = DEFAULT_DETECT_CONFIDENCE
+        try:
+            self._unlocalized_floor: float = float(os.getenv(
+                "OPENNVR_LPR_UNLOCALIZED_MIN_CONFIDENCE", "")
+                or DEFAULT_UNLOCALIZED_MIN_CONFIDENCE)
+        except ValueError:
+            self._unlocalized_floor = DEFAULT_UNLOCALIZED_MIN_CONFIDENCE
+        self._detector: Any | None = None
+        # True when a CONFIGURED detector failed to load — degraded
+        # mode keeps the raised unlocalized floor (we cannot vouch for
+        # inputs). Explicitly disabling via OPENNVR_LPR_DETECTOR=""
+        # is different: the operator asserts they send tight crops,
+        # so the caller's floor applies unchanged.
+        self._detection_degraded: bool = False
         # Recognizer is built lazily inside ``load()`` so module
         # import does not trigger an ONNX-weights download.
         self._recognizer: Any | None = None
@@ -117,6 +162,38 @@ class FastPlateOcrService(AdapterService):
                     "FastPlateOcrService ready: model=%s fingerprint=%s",
                     self._model_id, self._fingerprint_cache,
                 )
+                # Localization stage — an ENHANCER, never a gate: if
+                # the detector cannot load, the adapter stays healthy
+                # and runs pure OCR (with the raised unlocalized
+                # floor), and the WARN below is the operator signal.
+                if self._detector_id:
+                    try:
+                        from open_image_models import create_detector
+
+                        self._detector = create_detector(
+                            self._detector_id,
+                            conf_thresh=self._detect_confidence,
+                        )
+                        logger.info(
+                            "plate localization ready: detector=%s "
+                            "conf>=%.2f", self._detector_id,
+                            self._detect_confidence,
+                        )
+                    except Exception:
+                        self._detector = None
+                        self._detection_degraded = True
+                        logger.warning(
+                            "plate detector %s failed to load — running "
+                            "OCR-only. Whole-image reads use the raised "
+                            "%.2f confidence floor; expect misses on "
+                            "vehicle crops until this is fixed.",
+                            self._detector_id, self._unlocalized_floor,
+                            exc_info=True,
+                        )
+                else:
+                    logger.info(
+                        "plate localization disabled via "
+                        "OPENNVR_LPR_DETECTOR=\"\" — pure-OCR mode")
             except Exception as exc:
                 self._load_state = HealthStatus.ERROR
                 self._load_error = str(exc)
@@ -181,7 +258,13 @@ class FastPlateOcrService(AdapterService):
         )
 
     def infer(self, payload: dict[str, Any]) -> InferResponse:
-        """Run OCR on a single plate crop.
+        """Read a license plate from an image.
+
+        Accepts EITHER a tight plate crop (the original contract) or a
+        whole vehicle / scene image: a localization stage finds the
+        plate first and OCR runs on the crop. When no plate is
+        localized, the whole image is OCR'd at a raised confidence
+        floor (see DEFAULT_UNLOCALIZED_MIN_CONFIDENCE).
 
         ``payload['__file__']`` holds the raw image bytes
         (multipart upload or base64-decoded JSON). Result shape:
@@ -277,10 +360,53 @@ class FastPlateOcrService(AdapterService):
                 http_status=400,
             ) from exc
 
+        # ── Plate localization (the vehicle-crop fix) ──────────────
+        # Detected: OCR the plate crop at the caller's floor.
+        # Not detected (or detector off/failed): OCR the whole image,
+        # but at the RAISED unlocalized floor — a genuine tight plate
+        # crop still passes (~0.99), scene hallucinations don't.
+        detection_info: dict[str, Any] = {
+            "attempted": self._detector is not None,
+            "found": False,
+            "confidence": None,
+            "box": None,
+            "model_id": self._detector_id if self._detector else None,
+        }
+        ocr_input = image_array
+        effective_threshold = threshold
+        if self._detector is not None:
+            try:
+                candidates = self._detector.predict(image_array)
+            except Exception:
+                logger.exception("plate detector failed; falling back "
+                                 "to whole-image OCR")
+                candidates = []
+            best = None
+            for det in candidates or []:
+                conf = float(getattr(det, "confidence", 0.0) or 0.0)
+                if conf < self._detect_confidence:
+                    continue
+                if best is None or conf > best[0]:
+                    best = (conf, det.bounding_box)
+            if best is not None:
+                conf, box = best
+                crop = _crop_with_margin(image_array, box)
+                if crop is not None:
+                    ocr_input = crop
+                    detection_info.update(
+                        found=True,
+                        confidence=round(conf, 4),
+                        box=[int(box.x1), int(box.y1),
+                             int(box.x2), int(box.y2)],
+                    )
+        if not detection_info["found"] and (
+                detection_info["attempted"] or self._detection_degraded):
+            effective_threshold = max(threshold, self._unlocalized_floor)
+
         started = time.monotonic()
         try:
             raw = self._recognizer.run(  # type: ignore[union-attr]
-                image_array, return_confidence=True
+                ocr_input, return_confidence=True
             )
         except Exception as exc:
             logger.exception("fast-plate-ocr inference failed")
@@ -299,7 +425,7 @@ class FastPlateOcrService(AdapterService):
         # Apply the confidence floor — adapter returns the best
         # candidate it has, marked with a status flag so the caller
         # can decide whether to drop the alert.
-        accepted = overall_conf >= threshold
+        accepted = overall_conf >= effective_threshold
         try:
             self.metrics.inc_counter(
                 "adapter_plate_reads_total",
@@ -316,8 +442,12 @@ class FastPlateOcrService(AdapterService):
                 "confidence": round(overall_conf, 4),
                 "characters": characters,
                 "accepted": accepted,
-                "min_confidence_applied": threshold,
+                "min_confidence_applied": effective_threshold,
                 "model_id": self._model_id,
+                # Additive (v1.1): how the input was localized. found=
+                # False + a low read means "no plate visible here", not
+                # a broken adapter — consumers can tell the difference.
+                "plate_detection": detection_info,
             },
         )
 
@@ -452,6 +582,25 @@ def _recognizer_model_path(recognizer: Any) -> str | None:
 
 
 # ── Image decoding ─────────────────────────────────────────────────
+
+
+def _crop_with_margin(image, box) -> Any | None:
+    """Crop the detected plate box plus a small context margin,
+    clamped to the frame. Returns None for a degenerate box (zero
+    area after clamping) so the caller falls back to whole-image OCR
+    rather than feeding the OCR an empty array."""
+    h, w = image.shape[:2]
+    bw = max(0, int(box.x2) - int(box.x1))
+    bh = max(0, int(box.y2) - int(box.y1))
+    mx = int(bw * _CROP_MARGIN_X)
+    my = int(bh * _CROP_MARGIN_Y)
+    x1 = max(0, int(box.x1) - mx)
+    y1 = max(0, int(box.y1) - my)
+    x2 = min(w, int(box.x2) + mx)
+    y2 = min(h, int(box.y2) + my)
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        return None
+    return image[y1:y2, x1:x2]
 
 
 class _ImageDecodeError(Exception):

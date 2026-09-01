@@ -355,3 +355,123 @@ def test_parse_recognizer_output_handles_parallel_arrays_shape():
     text, _, conf = _parse_recognizer_output((["BBB-111", "CCC-222"], [0.66, 0.55]))
     assert text == "BBB-111"
     assert conf == pytest.approx(0.66)
+
+
+# ── Plate localization (v1.1 — the vehicle-crop fix) ─────────────────
+#
+# Field failure: the platform sends whole-VEHICLE crops, and pure OCR
+# on those hallucinates ("1023" off a van with an illegible plate)
+# while visible plates go unread. The detector stage crops the plate
+# first; when nothing is found, whole-image OCR runs at a RAISED floor
+# so scene noise can't pass as a read.
+
+
+def test_detected_plate_is_cropped_before_ocr(
+    fast_plate_ocr_environment, sample_jpeg,
+):
+    det_cls = fast_plate_ocr_environment["fake_detector_cls"]
+    det_cls.next_detections = [(0.8, (16, 8, 48, 24))]
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    fake_cls = fast_plate_ocr_environment["fake_recognizer_cls"]
+    fake_cls.last_run_source = None
+
+    resp = svc.infer({"__file__": sample_jpeg})
+
+    received = fake_cls.last_run_source
+    # box 32x16 + margins (10% x → 3px, 20% y → 3px) = 38x22 crop
+    assert received.shape == (22, 38, 3), (
+        f"OCR must run on the plate crop, got {received.shape}")
+    det = resp.result["plate_detection"]
+    assert det["found"] is True
+    assert det["box"] == [16, 8, 48, 24]
+    assert det["confidence"] == 0.8
+    # Localized read keeps the caller's floor.
+    assert resp.result["min_confidence_applied"] == 0.30
+
+
+def test_no_detection_raises_the_floor(
+    fast_plate_ocr_environment, sample_jpeg,
+):
+    """No plate localized → whole-image OCR at the raised floor: a
+    0.93 'read' passes (a genuine tight crop), a 0.5 one — the
+    hallucination band — does not, even though it clears the default
+    0.30 caller floor."""
+    det_cls = fast_plate_ocr_environment["fake_detector_cls"]
+    det_cls.next_detections = []
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    fake_cls = fast_plate_ocr_environment["fake_recognizer_cls"]
+
+    fake_cls.next_output = ("ABC1234", 0.93)
+    resp = svc.infer({"__file__": sample_jpeg})
+    assert resp.result["min_confidence_applied"] == 0.75
+    assert resp.result["accepted"] is True
+    assert resp.result["plate_detection"]["found"] is False
+    assert resp.result["plate_detection"]["attempted"] is True
+
+    fake_cls.next_output = ("1023", 0.5)     # the exact field garbage
+    resp = svc.infer({"__file__": sample_jpeg})
+    assert resp.result["accepted"] is False
+    fake_cls.next_output = ("ABC1234", 0.93)  # restore for other tests
+
+
+def test_detection_below_confidence_is_ignored(
+    fast_plate_ocr_environment, sample_jpeg,
+):
+    det_cls = fast_plate_ocr_environment["fake_detector_cls"]
+    det_cls.next_detections = [(0.10, (16, 8, 48, 24))]  # under 0.35
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    resp = svc.infer({"__file__": sample_jpeg})
+    assert resp.result["plate_detection"]["found"] is False
+    assert resp.result["min_confidence_applied"] == 0.75
+
+
+def test_detector_disabled_keeps_callers_floor(
+    fast_plate_ocr_environment, sample_jpeg, monkeypatch,
+):
+    """OPENNVR_LPR_DETECTOR='' is an explicit operator assertion that
+    inputs are tight plate crops — pure-OCR mode with the caller's
+    floor, exactly the pre-1.1 behaviour."""
+    monkeypatch.setenv("OPENNVR_LPR_DETECTOR", "")
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    resp = svc.infer({"__file__": sample_jpeg})
+    assert resp.result["plate_detection"]["attempted"] is False
+    assert resp.result["min_confidence_applied"] == 0.30
+    assert resp.result["accepted"] is True
+
+
+def test_detector_load_failure_degrades_not_dies(
+    fast_plate_ocr_environment, sample_jpeg,
+):
+    """A configured detector that cannot load must NOT take the
+    adapter down (OCR is the core; detection is an enhancer) — but
+    degraded mode keeps the raised floor, because nobody vouched for
+    the inputs being crops."""
+    det_cls = fast_plate_ocr_environment["fake_detector_cls"]
+    det_cls.raise_on_create = True
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    assert svc.is_ready() is True
+    resp = svc.infer({"__file__": sample_jpeg})
+    assert resp.result["plate_detection"]["attempted"] is False
+    assert resp.result["min_confidence_applied"] == 0.75
+
+
+def test_edge_detection_box_clamps_to_frame(
+    fast_plate_ocr_environment, sample_jpeg,
+):
+    """A detection at the frame corner must clamp, not crash or wrap."""
+    det_cls = fast_plate_ocr_environment["fake_detector_cls"]
+    det_cls.next_detections = [(0.9, (0, 0, 20, 10))]
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    fake_cls = fast_plate_ocr_environment["fake_recognizer_cls"]
+    fake_cls.last_run_source = None
+    resp = svc.infer({"__file__": sample_jpeg})
+    received = fake_cls.last_run_source
+    # margins: mx=2, my=2 → x1,y1 clamp at 0; x2=22, y2=12
+    assert received.shape == (12, 22, 3)
+    assert resp.result["plate_detection"]["found"] is True

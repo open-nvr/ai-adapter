@@ -170,6 +170,10 @@ lpr = [
     # ModuleNotFoundError at load() and every inference 503s. Found in
     # the field: the published adapter image could never read a plate.
     "fast-plate-ocr[onnx]>=1.1.0",
+    # Plate LOCALIZATION (same author, ONNX/CPU): the platform sends
+    # whole-vehicle crops, and OCR without a detection stage
+    # hallucinates on them — see adapters/fast_plate_ocr/service.py.
+    "open-image-models[onnx]>=0.6.0",
 ]
 
 # PyTorch CPU-only — required by yolo11 and blip on CPU-only machines
