@@ -412,6 +412,11 @@ def test_detected_plate_is_cropped_before_ocr(
     assert det["found"] is True
     assert det["box"] == [16, 8, 48, 24]
     assert det["confidence"] == 0.8
+    # The box's frame of reference travels WITH the box: consumers
+    # rejecting clipped (partial) reads must never have to guess which
+    # image the coordinates are measured in (open-nvr#378). The sample
+    # frame is 64x32 -> [width, height].
+    assert det["image_size"] == [64, 32]
     # Localized read keeps the caller's floor.
     assert resp.result["min_confidence_applied"] == 0.45
 
