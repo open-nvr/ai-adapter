@@ -390,6 +390,13 @@ class FastPlateOcrService(AdapterService):
             "found": False,
             "confidence": None,
             "box": None,
+            # The image the box (if any) is measured in — width, height
+            # of exactly what the caller sent. Consumers rejecting
+            # CLIPPED (partial) reads need the box AND the frame it was
+            # measured in; shipping both together means the geometry can
+            # never be judged against the wrong image (open-nvr#378).
+            "image_size": [int(image_array.shape[1]),
+                           int(image_array.shape[0])],
             "model_id": self._detector_id if self._detector else None,
         }
         ocr_input = image_array
