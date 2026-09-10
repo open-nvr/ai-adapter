@@ -9,6 +9,77 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-09-10
+
+The LPR adapter goes from unusable to correct. Everything below is the
+same plate-reading path, fixed in four steps — packaging, localization,
+confidence and the box's frame of reference. `opennvr-adapter-sdk` is
+unchanged at 1.2.0 (already on PyPI); it is versioned by its own API
+contract, not by this repo's release number.
+
+### Fixed
+
+- **The shipped LPR image could never read a plate.** `fast-plate-ocr`
+  was installed without its `[onnx]` extra, so the runtime the model
+  needs was absent from the published image — every read failed on a
+  machine that was otherwise correctly configured.
+- **LPR confidence was ALWAYS 1.0**, which made every precision floor in
+  the adapter inert. The output parser expected a `.confidence`
+  attribute, but `fast-plate-ocr` 1.1.0 (the shipped version) reports
+  `char_probs` and has no `.confidence` — so `getattr` defaulted every
+  production read to certainty: garbage like `'1023'` shipped as
+  accepted, and raising the floor changed nothing. Confidence is now the
+  **minimum** per-character probability (a read is only as trustworthy as
+  its shakiest character); measured on the real models, a clean crop
+  scores 0.997, noise-scene garbage 0.071 and a tiny-crop hallucination
+  0.384 — min separates them where mean would blur them together. An
+  unrecognised confidence shape now parses as UNTRUSTED (0.0) rather than
+  1.0, so a read whose confidence cannot be seen can never outrank the
+  floor. The unit tests missed this for a release because the stub
+  returned `(text, conf)` tuples that parse fine — classic
+  stub-blindness; the regression test now uses the real 1.1.0 shape and
+  is sabotage-verified against the old behaviour.
+
+### Added
+
+- **Plate LOCALIZATION before OCR** — the missing middle stage.
+  `fast-plate-ocr` is a pure OCR model expecting a single plate crop, but
+  the platform's enrichment path sends the whole-VEHICLE best-frame crop;
+  pointed at an entire vehicle it reads whatever character-like texture it
+  finds, so nearly everything landed under the floor (silent misses) and
+  the occasional hallucination landed over it (false reads). The adapter
+  now localizes the plate with `open-image-models` (same author as the OCR
+  model, same ONNX/CPU footprint, ~7 MB weights cached the same way) and
+  OCRs the crop plus a small context margin. Measured end to end on a
+  synthetic scene: whole-image OCR read `'L330'` at ~15% per-character
+  confidence; detect → crop → OCR read the exact plate at 99.9%.
+  Additive and fail-soft — a plate that isn't found falls back to
+  whole-image OCR at a raised floor (default 0.75), a detector that fails
+  to load never takes the adapter down (OCR is the core, detection the
+  enhancer), and `OPENNVR_LPR_DETECTOR=""` selects explicit pure-OCR mode
+  for callers who assert they send crops. Results gain
+  `plate_detection {attempted, found, confidence, box, model_id}`.
+- **Tiny-plate guard.** A localized plate narrower than
+  `OPENNVR_LPR_MIN_PLATE_PX` (default 40) returns a clean non-read
+  (`accepted=false`, `plate_detection.too_small`) instead of OCRing pixel
+  soup — a distant car should produce nothing, not a wrong plate that
+  fires a false unknown-vehicle alarm downstream.
+- **`plate_detection.image_size`** — the box's frame of reference travels
+  with the box. Consumers rejecting clipped (partial) reads judge the
+  plate box against the image it was measured in (open-nvr#378), and
+  multi-frame OCR sends candidate crops whose size differs from the
+  visit's evidence frame, so a consumer guessing the denominator measures
+  in the wrong image. The adapter knows exactly what it OCR'd — the
+  `[width, height]` of the caller's bytes — so it now says so, and no
+  consumer has to parse a JPEG header or guess.
+
+### Changed
+
+- **LPR precision floors are env-tunable**, so operators dial precision
+  against recall without a rebuild: `OPENNVR_LPR_MIN_CONFIDENCE`
+  (default raised 0.30 → 0.45 under min-character scoring) and
+  `OPENNVR_LPR_MIN_PLATE_PX` (default 40).
+
 ## [0.1.4] — 2026-08-24
 
 ### Added
