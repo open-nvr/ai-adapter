@@ -1,0 +1,36 @@
+# Copyright (c) 2026 __ADAPTER_NAME__ authors
+# SPDX-License-Identifier: __LICENSE__
+
+[project]
+name = "__ADAPTER_ID__"
+version = "1.0.0"
+description = "__ADAPTER_NAME__ — an OpenNVR AI adapter."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "__LICENSE__" }
+
+dependencies = [
+    "__SDK_REQUIREMENT__",
+    "uvicorn[standard]>=0.30,<1.0",
+    # TODO: add your model runtime — onnxruntime, torch, transformers…
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    # The /infer multipart route is what KAI-C uses; without this the
+    # SDK still serves the base64 JSON route, but your tests cannot
+    # exercise the one that matters.
+    "python-multipart>=0.0.18",
+]
+
+[project.scripts]
+__ADAPTER_MODULE__ = "__ADAPTER_MODULE__:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["__ADAPTER_MODULE__"]

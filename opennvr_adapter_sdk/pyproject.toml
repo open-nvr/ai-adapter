@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opennvr-adapter-sdk"
-version = "1.2.0"
+version = "1.3.0"
 description = "Boilerplate-free SDK for writing AI Adapter Contract v1 services for OpenNVR."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -67,6 +67,12 @@ dependencies = [
     "python-multipart>=0.0.18",
 ]
 
+[project.scripts]
+# The tools a model developer needs: scaffold, run, check, publish the
+# spec. Previously a shell script in the ai-adapter repo and an
+# unpackaged conformance kit — neither reachable from PyPI.
+opennvr-adapter = "opennvr_adapter_sdk.scaffold:main"
+
 [project.optional-dependencies]
 # Bring uvicorn yourself in production; we recommend it but won't
 # force the choice (Hypercorn, Daphne, etc., also work).
@@ -75,7 +81,12 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",
+    # Asserts the generated documents really are OpenAPI 3.1.
+    "openapi-spec-validator>=0.7",
+    "pyyaml>=6.0",
 ]
+# `opennvr-adapter spec --yaml`, for a docs site or a client generator.
+yaml = ["pyyaml>=6.0"]
 
 [project.urls]
 Homepage = "https://github.com/open-nvr/ai-adapter"
@@ -91,8 +102,19 @@ Changelog = "https://github.com/open-nvr/ai-adapter/blob/main/opennvr_adapter_sd
 # basename. ``package-dir`` flips the root from the default
 # "src layout" to "this dir is the package."
 [tool.setuptools]
-packages = ["opennvr_adapter_sdk"]
+packages = [
+    "opennvr_adapter_sdk",
+    # The conformance kit ships with the SDK: the tool that tells a
+    # model developer their adapter will be accepted has to be
+    # installable by the model developer.
+    "opennvr_adapter_sdk.conformance",
+]
 package-dir = { "opennvr_adapter_sdk" = "." }
 
 [tool.setuptools.package-data]
-opennvr_adapter_sdk = ["README.md", "LICENSE", "CHANGELOG.md", "RELEASING.md"]
+opennvr_adapter_sdk = [
+    "README.md", "LICENSE", "CHANGELOG.md", "RELEASING.md",
+    # `opennvr-adapter new` scaffolds from these.
+    "templates/adapter/*",
+    "templates/adapter/tests/*",
+]

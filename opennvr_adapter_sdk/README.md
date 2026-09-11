@@ -1,8 +1,11 @@
 # opennvr-adapter-sdk
 
-The boilerplate-free way to write an [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md) service.
+Publish a model on [OpenNVR](https://opennvr.org). An adapter wraps a
+model and answers the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md),
+so any deployment can route work to it and any app can ask for its task
+by name.
 
-A minimal adapter is around thirty lines of FastAPI. The SDK gives you `AdapterService` — the ABC every adapter implements with four abstract methods — and `AdapterApp`, the builder that wraps your service in a FastAPI app with the six mandatory endpoints, auth, correlation-ID propagation, Prometheus metrics, and multipart plus JSON body parsing. `ServiceError` is the typed failure envelope from §7 of the contract. Every contract Pydantic type is re-exported from the package root, so adapter authors get one import line.
+**Apache-2.0** — your adapter is yours, under any licence you choose.
 
 ## Install
 
@@ -12,7 +15,82 @@ uv add opennvr-adapter-sdk
 uv add 'opennvr-adapter-sdk[serve]'
 ```
 
-If you're not on [uv](https://docs.astral.sh/uv/) yet, `pip install opennvr-adapter-sdk` works the same — the package is a single wheel with FastAPI, Pydantic, and python-multipart as its only runtime dependencies. We recommend `uv` because adapter projects tend to grow heavy ML deps fast, and `uv sync` keeps resolve time and the lockfile manageable as they do.
+`pip install opennvr-adapter-sdk` works the same. We recommend
+[uv](https://docs.astral.sh/uv/) because adapter projects grow heavy ML
+dependencies fast.
+
+## A whole adapter
+
+```python
+from opennvr_adapter_sdk import Adapter
+
+adapter = Adapter(
+    "fall-detection",
+    version="1.0.0",
+    vendor="ACME",
+    license="Apache-2.0",
+    tasks=["object_detection"],
+    framework="onnxruntime",
+    weights="models/fall.onnx",
+)
+
+@adapter.load()
+def load():
+    import onnxruntime as ort
+    return ort.InferenceSession(adapter.weights)
+
+@adapter.on_image()
+def detect(call):
+    boxes = call.model.run(None, {"images": preprocess(call.image)})
+    return [call.detection("fallen", score, x, y, w, h)
+            for score, (x, y, w, h) in boxes]
+
+app = adapter.app          # uvicorn my_model:app
+```
+
+That is a complete, conformant adapter. The SDK derives what the
+contract needs and you would otherwise hand-write: the **fingerprint**
+from the weights file (and never null — KAI-C silently skips drift
+detection on a null one), **health** from the loader, the **hardware
+verdict**, the **modalities** and **body shape** from which handler you
+registered, and the **error taxonomy** — a `ValueError` becomes a 400 so
+KAI-C does not retry a bad frame, anything else a 500, and `Overloaded`
+a 503 with a retry hint.
+
+## The tools
+
+```bash
+opennvr-adapter new my-model     # a runnable adapter project + tests
+cd my-model
+opennvr-adapter dev              # drive it in-process — no Docker, no stack
+opennvr-adapter validate .       # the full conformance run
+opennvr-adapter spec             # its OpenAPI 3.1 document
+opennvr-adapter conform URL      # check a running adapter
+```
+
+`validate` is the one that matters: it runs the same checks KAI-C will,
+in-process, so a green run means a deployment will accept your adapter.
+
+## What your adapter publishes about itself
+
+| Endpoint | |
+|---|---|
+| `GET /health` | Liveness and model-load state. |
+| `GET /capabilities` | Identity, model info, fingerprint, tasks, permissions. |
+| `GET /hardware/evaluation` | Whether this host can run the model well. |
+| `GET /metrics` | Prometheus exposition. |
+| `POST /infer` | One inference. |
+| `GET /openapi.json` | **OpenAPI 3.1**, every response typed — Swagger UI at `/docs`. |
+| `GET /asyncapi.json` | **AsyncAPI 3.0** — the `/infer/stream` protocol. |
+
+Both specs are generated from the contract types the adapter actually
+returns, so they cannot drift from it.
+
+## …or the classes underneath
+
+`Adapter` compiles to `AdapterService` + `AdapterApp`. Use them directly
+when a model outgrows the decorators — the process, the endpoints, the
+metrics and the specs are identical.
 
 ## The minimum viable adapter
 

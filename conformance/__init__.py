@@ -1,15 +1,19 @@
 """
-opennvr-adapter-conformance — point at any adapter URL and check whether
-it conforms to the AI Adapter Contract v1.
+opennvr-adapter-conformance — moved into the SDK.
 
-The full spec is ``open-nvr/docs/AI_ADAPTER_CONTRACT.md``. Wire shapes
-are validated against the Pydantic models in
-``ai-adapter/app/interfaces/contract.py``.
+The implementation now lives in :mod:`opennvr_adapter_sdk.conformance`
+so that it ships in the wheel: a third-party model developer who has
+only ``pip install opennvr-adapter-sdk`` can check their own adapter,
+which was the whole point of having a conformance kit.
 
-Usage:
-    python -m conformance http://localhost:9001
-    python -m conformance http://localhost:9001 --token <bearer>
+This module stays as a re-export so `python -m conformance`, this
+repository's tests, and every README that names it keep working.
 """
-from conformance.runner import ConformanceRunner, CheckOutcome, CheckResult
+from opennvr_adapter_sdk.conformance import (
+    CheckOutcome,
+    CheckResult,
+    ConformanceReport,
+    ConformanceRunner,
+)
 
-__all__ = ["ConformanceRunner", "CheckOutcome", "CheckResult"]
+__all__ = ["ConformanceRunner", "ConformanceReport", "CheckOutcome", "CheckResult"]
