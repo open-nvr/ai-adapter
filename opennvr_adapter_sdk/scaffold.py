@@ -16,6 +16,7 @@ a directory inside someone else's repository.
     opennvr-adapter validate .        # the full conformance run
     opennvr-adapter spec              # its OpenAPI 3.1 document
     opennvr-adapter conform URL       # check a running adapter
+    opennvr-adapter listing . --image ghcr.io/you/my-model:1.0.0
 """
 from __future__ import annotations
 
@@ -172,6 +173,16 @@ def main(argv: list[str] | None = None) -> int:
     conform.add_argument("--json", action="store_true")
     conform.add_argument("--no-colour", action="store_true")
 
+    listing = sub.add_parser(
+        "listing", help="print the adapters-index entry that makes it installable")
+    listing.add_argument("path", nargs="?", default=".", help="the adapter directory")
+    listing.add_argument("--image", required=True,
+                         help="the published image, e.g. ghcr.io/you/x:1.0.0")
+    listing.add_argument("--source", default="", help="repository URL")
+    listing.add_argument("--docs-url", default="", help="README or docs URL")
+    listing.add_argument("--contact", default="", help="how operators reach you")
+    listing.add_argument("-o", "--output", default=None, help="write to this file")
+
     spec = sub.add_parser("spec", help="print the adapter's OpenAPI / AsyncAPI")
     spec.add_argument("path", nargs="?", default=".", help="the adapter directory")
     spec.add_argument("--format", choices=("openapi", "asyncapi"),
@@ -223,6 +234,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.no_colour:
             forwarded.append("--no-colour")
         return conform_main(forwarded)
+
+    if args.command == "listing":
+        from opennvr_adapter_sdk.listing import run_listing
+
+        return run_listing(Path(args.path), image=args.image, source=args.source,
+                           docs_url=args.docs_url, contact=args.contact,
+                           output=args.output)
 
     if args.command == "spec":
         from opennvr_adapter_sdk.speccmd import run_spec

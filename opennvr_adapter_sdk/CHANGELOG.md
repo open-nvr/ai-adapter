@@ -5,7 +5,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the SDK uses semantic versioning aligned with the AI Adapter Contract major version (SDK v1.x targets contract v1).
 
 
-## [Unreleased]
+## [1.3.0] — 2026-09-11
 
 ### Added
 
@@ -39,6 +39,17 @@ the SDK uses semantic versioning aligned with the AI Adapter Contract major vers
   their adapter will be accepted was unreachable by anyone who had
   merely installed the SDK. The repo-root `conformance` package remains
   as a re-export.
+- **A cookbook** — nine runnable files, one per class, imported and
+  exercised by the test suite so an example that names something the
+  SDK no longer exports breaks in CI.
+- **A published reference** at `opennvr.org/adapters`
+  (mkdocs-material + mkdocstrings, `make sdk-site`), and
+  `API_TIERS` — the thirty exports now have a documented front door,
+  with `__all__` assembled from the tiers so the two cannot drift.
+- **`opennvr-adapter listing`** — generates the `adapters_index.yml`
+  entry that makes an adapter installable, from its own
+  `/capabilities`, so a listing cannot claim a task it does not
+  advertise. See open-nvr's `docs/CONTRIBUTING_ADAPTERS.md`.
 
 ## [1.2.0] — 2026-08
 

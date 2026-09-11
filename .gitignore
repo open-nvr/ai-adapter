@@ -91,3 +91,5 @@ cython_debug/
 .onnx/
 # InsightFace model weights (too large for GitHub)
 model_weights/insightface/
+site/
+docs_src/.cache/
