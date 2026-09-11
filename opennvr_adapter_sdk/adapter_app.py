@@ -53,8 +53,10 @@ from opennvr_adapter_sdk.contract import (
     ErrorDetail,
     FailureEnvelope,
     FairQueuing,
+    HardwareEvaluationResponse,
     HealthResponse,
     InferEndpointInfo,
+    InferResponse,
     Permissions,
     Scheduling,
     StreamCloseCode,
@@ -262,10 +264,19 @@ class AdapterApp:
             finally:
                 self._metrics.set_model_loaded(False)
 
+        from opennvr_adapter_sdk.openapi import TAGS, describe
+
+        info = describe(
+            self._name, self._version, vendor=self._vendor,
+            tasks=tuple(self._tasks_advertised),
+            supports_stream=self._supports_stream,
+            license_name=self._license,
+        )
         app = FastAPI(
-            title=f"{self._name} adapter",
+            title=info["title"],
             version=self._version,
-            description=f"AI Adapter Contract v1 service: {self._name}",
+            description=info["description"],
+            openapi_tags=[dict(tag) for tag in TAGS],
             lifespan=lifespan,
         )
         app.add_middleware(
@@ -277,33 +288,168 @@ class AdapterApp:
         )
         app.add_middleware(AuthAndCorrelationMiddleware)
         self._register_routes(app)
+        self._customise_openapi(app)
         return app
 
+    def _customise_openapi(self, app: FastAPI) -> None:
+        """Add what FastAPI cannot infer from the routes: the bearer
+        scheme the auth middleware enforces, applied to the endpoints
+        that actually require it, plus the contract's own metadata.
+
+        Done by wrapping ``app.openapi`` rather than editing routes so
+        the security declaration stays in one place and cannot drift
+        from :mod:`~.auth`, which is what enforces it."""
+        from opennvr_adapter_sdk.openapi import SECURITY_SCHEMES, describe
+
+        base = app.openapi
+        #: /health and /metrics stay open so an operator can scrape an
+        #: adapter that is failing to load (see AuthAndCorrelationMiddleware).
+        open_paths = {"/health", "/metrics"}
+
+        def openapi() -> dict:
+            if app.openapi_schema:
+                return app.openapi_schema
+            schema = base()
+            components = schema.setdefault("components", {})
+            components.setdefault("securitySchemes", {}).update(SECURITY_SCHEMES)
+            for path, operations in schema.get("paths", {}).items():
+                if path in open_paths:
+                    continue
+                for operation in operations.values():
+                    if isinstance(operation, dict):
+                        operation.setdefault("security", [{"bearerAuth": []}])
+            info = describe(
+                self._name, self._version, vendor=self._vendor,
+                tasks=tuple(self._tasks_advertised),
+                supports_stream=self._supports_stream,
+                license_name=self._license,
+            )
+            for key in ("license", "contact", "x-opennvr-contract-version",
+                        "x-opennvr-tasks"):
+                if key in info:
+                    schema["info"][key] = info[key]
+            app.openapi_schema = schema
+            return schema
+
+        app.openapi = openapi  # type: ignore[method-assign]
+
     def _register_routes(self, app: FastAPI) -> None:
-        @app.get("/health")
+        # Every route declares the contract type it returns. Handlers
+        # still return a Response, so FastAPI documents the schema
+        # without re-validating the payload — the spec gets richer, the
+        # hot path does not get slower. Before this, the generated
+        # document had six paths and zero schemas, which reads as
+        # complete and tells a client generator nothing.
+        from opennvr_adapter_sdk.openapi import (
+            adapter_asyncapi, error_responses, infer_request_body,
+        )
+
+        @app.get(
+            "/health",
+            response_model=HealthResponse,
+            summary="Liveness and model-load state",
+            description=(
+                "KAI-C polls this to decide whether the adapter may take "
+                "traffic. Unauthenticated on purpose, so an operator can "
+                "scrape an adapter that is failing to load."
+            ),
+            tags=["contract"],
+            responses=error_responses(503),
+        )
         def health() -> Response:
             return JSONResponse(content=self._build_health().model_dump(mode="json"))
 
-        @app.get("/capabilities")
+        @app.get(
+            "/capabilities",
+            response_model=CapabilitiesResponse,
+            summary="What this adapter is and what it can do",
+            description=(
+                "Identity, model info and fingerprint, the tasks advertised, "
+                "accelerator and cost hints, and the endpoints on offer. "
+                "KAI-C re-reads this every 60s; a changed `model.fingerprint` "
+                "is what drift detection keys on (§11.3)."
+            ),
+            tags=["contract"],
+            responses=error_responses(401, 503),
+        )
         def capabilities() -> Response:
             return JSONResponse(content=self._build_capabilities().model_dump(mode="json"))
 
-        @app.get("/hardware/evaluation")
+        @app.get(
+            "/hardware/evaluation",
+            response_model=HardwareEvaluationResponse,
+            summary="Can this host actually run the model well?",
+            description=(
+                "A verdict (`ok` / `warn` / `blocked`) with reasoning and "
+                "adapter-specific diagnostics, rendered verbatim on the "
+                "operator's hardware dashboard."
+            ),
+            tags=["contract"],
+            responses=error_responses(401, 503),
+        )
         def hardware_evaluation() -> Response:
             return JSONResponse(
                 content=self._service.hardware_evaluation().model_dump(mode="json")
             )
 
-        @app.get("/metrics")
+        @app.get(
+            "/metrics",
+            summary="Prometheus exposition",
+            description=(
+                "The §3.4 baseline metrics: in-flight calls, inference "
+                "latency and outcome per task, model-loaded gauge, and the "
+                "`adapter_model_info` identity labels."
+            ),
+            tags=["observability"],
+            response_class=PlainTextResponse,
+            responses={200: {
+                "description": "Prometheus text exposition format.",
+                "content": {"text/plain": {"schema": {"type": "string"}}},
+            }},
+        )
         def metrics_endpoint() -> Response:
             return PlainTextResponse(
                 content=self._metrics.render(),
                 media_type="text/plain; version=0.0.4",
             )
 
-        @app.post("/infer")
+        @app.post(
+            "/infer",
+            response_model=InferResponse,
+            summary="Run one inference",
+            description=(
+                "The single-shot inference entry point. The body shape is "
+                f"this adapter's `{self._body_shape.value}` — see the request "
+                "body below. Errors carry the §7 failure envelope, with the "
+                "category in `error.category` and whether a retry is worth "
+                "trying in `error.transient`."
+            ),
+            tags=["inference"],
+            openapi_extra=infer_request_body(
+                self._body_shape, max_bytes=self._max_body_bytes),
+            responses=error_responses(),
+        )
         async def infer(request: Request) -> Response:
             return await self._handle_infer(request)
+
+        @app.get(
+            "/asyncapi.json",
+            summary="The streaming protocol, as AsyncAPI 3.0",
+            description=(
+                "OpenAPI cannot describe a WebSocket, so the `/infer/stream` "
+                "protocol is published here instead — generated from the same "
+                "contract types the session actually exchanges."
+            ),
+            tags=["observability"],
+            responses={200: {"description": "An AsyncAPI 3.0 document."}},
+        )
+        def asyncapi_document() -> Response:
+            return JSONResponse(content=adapter_asyncapi(
+                self._name, self._version,
+                supports_stream=self._supports_stream,
+                tasks=tuple(self._tasks_advertised),
+                license_name=self._license,
+            ))
 
         # WebSocket — only if the adapter declares streaming support.
         if self._supports_stream:
@@ -311,8 +457,24 @@ class AdapterApp:
             async def infer_stream(websocket: WebSocket) -> None:
                 await self._handle_stream(websocket)
         else:
-            @app.get("/infer/stream")
-            @app.post("/infer/stream")
+            @app.get(
+                "/infer/stream",
+                summary="Streaming is not supported by this adapter",
+                description=(
+                    "This adapter advertises no streaming endpoint, so both "
+                    "verbs answer 501 with the §7 envelope. Use POST /infer."
+                ),
+                tags=["inference"],
+                responses={501: {"model": FailureEnvelope,
+                                 "description": "`not_supported`."}},
+            )
+            @app.post(
+                "/infer/stream",
+                summary="Streaming is not supported by this adapter",
+                tags=["inference"],
+                responses={501: {"model": FailureEnvelope,
+                                 "description": "`not_supported`."}},
+            )
             def infer_stream_probe() -> Response:
                 envelope = FailureEnvelope(
                     error=ErrorDetail(
