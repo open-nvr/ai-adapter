@@ -4,6 +4,42 @@ All notable changes to `opennvr-adapter-sdk` are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the SDK uses semantic versioning aligned with the AI Adapter Contract major version (SDK v1.x targets contract v1).
 
+
+## [Unreleased]
+
+### Added
+
+- **`Adapter` — the front door.** Declare the model, decorate the loader
+  and the inference handler; the SDK derives the fingerprint (from the
+  weights file, and never null), health, the hardware verdict, the
+  modalities, the body shape and the error taxonomy. The scaffolded
+  service was 218 lines of TODO before wrapping a single model. It
+  compiles to an ordinary `AdapterService`, so existing adapters are
+  untouched.
+- **A real OpenAPI 3.1 document.** `AdapterApp` was always FastAPI, so
+  `/openapi.json` always existed — and documented nothing: every route
+  returned a bare `JSONResponse`, leaving six paths, zero schemas and
+  zero components. Now every response is typed from the contract models,
+  `/infer`'s request body is described for the adapter's own
+  `BodyShape`, every error status carries the §7 failure envelope,
+  `/metrics` is declared as Prometheus text, and bearer auth is declared
+  where the middleware enforces it. 0 schemas → 22.
+- **AsyncAPI 3.0 at `/asyncapi.json`** for `/infer/stream`, which
+  OpenAPI cannot express — all ten §6 message types, generated from the
+  contract models the session exchanges.
+- **`opennvr-adapter`, a packaged CLI**: `new` scaffolds a STANDALONE
+  adapter project (the old `scaffold.sh` wrote into the ai-adapter
+  repository's own `adapters/` directory), `dev` drives the adapter
+  in-process with no stack, `validate` runs the full conformance suite
+  against a directory, `conform` against a running adapter, and `spec`
+  emits either document.
+- **The conformance kit ships in the wheel** as
+  `opennvr_adapter_sdk.conformance`. It previously lived only in the
+  ai-adapter repository, so the one tool that tells a model developer
+  their adapter will be accepted was unreachable by anyone who had
+  merely installed the SDK. The repo-root `conformance` package remains
+  as a re-export.
+
 ## [1.2.0] — 2026-08
 
 ### Added
