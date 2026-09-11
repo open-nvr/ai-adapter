@@ -52,6 +52,42 @@ TINY_JPEG = base64.b64decode(
     "oADAMBAAIRAxEAPwD+f+iiigD/2Q=="
 )
 
+#: A valid 8 kHz mono 16-bit WAV holding 100 samples of silence — the
+#: audio equivalent of TINY_JPEG, so a Whisper-shaped adapter gets a
+#: decodable body instead of an image field it never declared.
+TINY_WAV = (
+    b"RIFF" + (36 + 200).to_bytes(4, "little") + b"WAVEfmt "
+    + (16).to_bytes(4, "little")
+    + (1).to_bytes(2, "little")       # PCM
+    + (1).to_bytes(2, "little")       # mono
+    + (8000).to_bytes(4, "little")    # sample rate
+    + (16000).to_bytes(4, "little")   # byte rate
+    + (2).to_bytes(2, "little")       # block align
+    + (16).to_bytes(2, "little")      # bits per sample
+    + b"data" + (200).to_bytes(4, "little") + b"\x00" * 200
+)
+
+#: ``/infer`` JSON field per declared body shape. TEXT adapters take no
+#: binary body at all.
+_B64_FIELD: dict[str, str | None] = {
+    "text": None,
+    "image": "frame_b64",
+    "audio": "audio_b64",
+    "generic": "data_b64",
+}
+
+_SAMPLE_BODY: dict[str, bytes] = {
+    "image": TINY_JPEG,
+    "audio": TINY_WAV,
+    "generic": b"opennvr-adapter-dev",
+}
+
+_SAMPLE_LABEL: dict[str, str] = {
+    "image": "built-in 1x1 JPEG",
+    "audio": "built-in silent WAV",
+    "generic": "built-in 19-byte payload",
+}
+
 _OK = "ok"
 _BAD = "FAIL"
 
@@ -86,8 +122,6 @@ def run_dev(
     name, version, tasks = identity(module)
     print(f"opennvr-adapter dev — {name} {version}")
 
-    body = TINY_JPEG if image is None else Path(image).expanduser().read_bytes()
-    source = "built-in 1x1 JPEG" if image is None else Path(image).name
     failures = 0
 
     started = time.monotonic()
@@ -130,11 +164,38 @@ def run_dev(
         _line("GET", "/metrics", _OK if metrics.status_code == 200 else _BAD,
               f"{len(metrics.text.splitlines())} lines")
 
+        shape = str(getattr(
+            getattr(app, "state", None), "opennvr_body_shape", "image"))
+        shape = getattr(shape, "value", shape).rsplit(".", 1)[-1].lower()
+        if shape not in _B64_FIELD:
+            shape = "image"
+        field = _B64_FIELD[shape]
+
         request: dict[str, Any] = dict(params or {})
         request["camera_id"] = camera_id
         if task or tasks:
             request["task"] = task or tasks[0]
-        request["frame_b64"] = base64.b64encode(body).decode()
+
+        if field is None:
+            # A text adapter takes no binary body at all. Give it
+            # something to say, or the run reports a successful call
+            # that inferred on an empty string.
+            if not any(k in request for k in ("text", "prompt", "input")):
+                request["text"] = "Conformance check: hello, world."
+                source = "built-in prompt"
+            else:
+                source = "your text param"
+            if image is not None:
+                print("  note: --image is ignored; this adapter declares no "
+                      "binary body.")
+        elif image is not None:
+            body = Path(image).expanduser().read_bytes()
+            source = Path(image).name
+            request[field] = base64.b64encode(body).decode()
+        else:
+            body = _SAMPLE_BODY[shape]
+            source = _SAMPLE_LABEL[shape]
+            request[field] = base64.b64encode(body).decode()
 
         for attempt in range(max(1, repeat)):
             response = client.post("/infer", json=request)
@@ -184,4 +245,4 @@ def _describe(result: dict[str, Any]) -> None:
     print(f"        result: {rendered}")
 
 
-__all__ = ["run_dev", "TINY_JPEG"]
+__all__ = ["run_dev", "TINY_JPEG", "TINY_WAV"]

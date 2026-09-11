@@ -18,6 +18,7 @@ from opennvr_adapter_sdk.contract import (
     ErrorDetail,
     FailureEnvelope,
     HardwareEvaluationResponse,
+    HealthStatus,
     InferResponse,
     ModelInfo,
 )
@@ -67,6 +68,18 @@ class AdapterService(ABC):
     @abstractmethod
     def is_ready(self) -> bool:
         """True iff the model is loaded and inference is possible."""
+
+    def health_status(self) -> HealthStatus | None:
+        """Optional: report LOADING vs ERROR, not just "not ready".
+
+        ``is_ready()`` is a bool, so an adapter whose model FAILED to
+        load looked identical to one still loading — ``/health`` said
+        ``loading`` forever, Docker's healthcheck passed, and the
+        conformance run went green on a dead adapter. Override this (or
+        use the :class:`~.facade.Adapter` facade, which does) to answer
+        honestly; returning ``None`` keeps the old bool-derived
+        behaviour."""
+        return None
 
     @abstractmethod
     def fingerprint(self) -> str | None:

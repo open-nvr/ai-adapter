@@ -265,10 +265,32 @@ class ConformanceRunner:
                 detail=f"Body does not validate as HealthResponse: {exc}",
                 latency_ms=latency_ms,
             )
+        # A conformance run must not go green on a dead adapter. `error`
+        # means the adapter is up but broken; `loading` after startup is
+        # indistinguishable from a load that failed on an adapter that
+        # does not implement `health_status()`, so neither is a pass.
+        status = str(response.json().get("status") or "")
+        if status == "error":
+            return self._record(
+                "health",
+                CheckOutcome.FAIL,
+                detail="status=error — the adapter is running but cannot serve "
+                       "inference; /hardware/evaluation carries the reason.",
+                latency_ms=latency_ms,
+            )
+        if status == "loading":
+            return self._record(
+                "health",
+                CheckOutcome.WARN,
+                detail="status=loading — the model is not ready, so the checks "
+                       "below exercise an adapter that cannot infer. Re-run "
+                       "once it reports ok.",
+                latency_ms=latency_ms,
+            )
         return self._record(
             "health",
             CheckOutcome.PASS,
-            detail=f"status={response.json().get('status')}",
+            detail=f"status={status}",
             latency_ms=latency_ms,
         )
 
@@ -655,6 +677,15 @@ class ConformanceRunner:
         for task in caps.tasks_advertised:
             if task in self.SAMPLE_INFER_PAYLOADS:
                 return self.SAMPLE_INFER_PAYLOADS[task]
+        # An adapter serving a task with no registered sample used to
+        # skip /infer with a WARN and still finish green — the one
+        # endpoint that matters went unexercised. Fall back to a payload
+        # derived from the declared modalities so there is always a call.
+        modalities = list(caps.model.modalities_in or [])
+        if "text" in modalities:
+            return {"text": "Conformance check: hello, world."}
+        if not modalities or "json" in modalities or "data" in modalities:
+            return {"task": caps.tasks_advertised[0]} if caps.tasks_advertised else {}
         return None
 
     def _sample_stream_frame_for(self, caps: CapabilitiesResponse) -> bytes | None:

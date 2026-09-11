@@ -10,10 +10,15 @@ the operator is told is broken.
 
 | You raise | Becomes |
 |---|---|
-| `ValueError`, `KeyError`, `TypeError` | 400 `transport_error`, not retried |
+| `ValueError`, `KeyError` | 400 `transport_error`, not retried |
 | `Overloaded(retry_after_ms=…)` | 503 `overloaded`, retried after the hint |
-| anything else | 500 `model_error` |
+| anything else, `TypeError` included | 500 `model_error`, logged with a traceback |
 | `ServiceError(...)` | passed through exactly as you wrote it |
+
+`TypeError` is deliberately on the `model_error` side. It almost always
+means the handler itself is wrong — a `None` where a number was expected,
+a bad call signature — and blaming the caller for that hid real bugs
+behind a 400 with no traceback anywhere.
 
 So the common cases need no error handling at all:
 

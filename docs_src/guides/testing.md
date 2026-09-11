@@ -39,5 +39,14 @@ opennvr-adapter validate .      # the conformance run
 opennvr-adapter spec            # the OpenAPI document you will publish
 ```
 
+`dev` picks its sample body from the handler you registered — a JPEG for
+`@on_image`, a WAV for `@on_audio`, a plain JSON body for `@on_text` —
+so an audio or text adapter is exercised through the field it actually
+declares. `--image PATH` substitutes your own file.
+
+`validate` FAILs when `/health` reports `error` and WARNs when it reports
+`loading`, so a conformance run cannot go green on an adapter that never
+loaded.
+
 Full example:
 [`07_testing_and_conformance.py`](https://github.com/open-nvr/ai-adapter/blob/main/cookbook/07_testing_and_conformance.py).

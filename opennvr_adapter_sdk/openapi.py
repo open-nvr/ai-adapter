@@ -264,10 +264,15 @@ def adapter_asyncapi(
         key: _message(key, model)
         for key, model in {**_CLIENT_MESSAGES, **_ADAPTER_MESSAGES}.items()
     }
-    schemas = {
-        model.__name__: _schema(model)
-        for model in {**_CLIENT_MESSAGES, **_ADAPTER_MESSAGES}.values()
-    }
+    schemas: dict[str, Any] = {}
+    for model in {**_CLIENT_MESSAGES, **_ADAPTER_MESSAGES}.values():
+        body, defs = _schema(model)
+        schemas[model.__name__] = body
+        # Nested models (FrameTransport, StreamCloseCode, …) are emitted
+        # by Pydantic under ``$defs``. Dropping them left the refs that
+        # point at them dangling, so the document did not resolve.
+        for ref_name, ref_schema in defs.items():
+            schemas.setdefault(ref_name, ref_schema)
 
     doc: dict[str, Any] = {
         "asyncapi": "3.0.0",
@@ -361,14 +366,15 @@ def _message(key: str, model: Any) -> dict[str, Any]:
     }
 
 
-def _schema(model: Any) -> dict[str, Any]:
-    """A Pydantic model as a self-contained JSON Schema.
+def _schema(model: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A Pydantic model as ``(schema, nested_definitions)``.
 
-    ``$defs`` are inlined into the document's own schema map rather than
-    left as local refs, so each message payload resolves on its own."""
+    Pydantic collects every nested model under ``$defs``; the caller
+    lifts those into the document's own ``components.schemas`` so the
+    ``$ref``s in the returned schema resolve."""
     schema = model.model_json_schema(ref_template="#/components/schemas/{model}")
-    schema.pop("$defs", None)
-    return schema
+    defs = schema.pop("$defs", {}) or {}
+    return schema, defs
 
 
 def contract_openapi_extras(*, name: str, version: str, vendor: str = "",

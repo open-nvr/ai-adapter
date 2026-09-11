@@ -37,8 +37,12 @@ def detect(call):
     return [call.detection("fallen", score, x, y, w, h)
             for score, (x, y, w, h) in boxes]
 
-app = adapter.app          # uvicorn my_model:app
+app = adapter.app          # uvicorn my_model:app — keep this LAST
 ```
+
+`adapter.app` compiles the declaration, so every `@adapter` decorator
+belongs above that line. Registering one below it used to do nothing at
+all; the SDK now raises instead.
 
 That is conformant. The SDK derives what the contract needs and you
 would otherwise hand-write: the **fingerprint** from the weights file,

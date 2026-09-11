@@ -287,6 +287,12 @@ class AdapterApp:
             allow_headers=["*"],
         )
         app.add_middleware(AuthAndCorrelationMiddleware)
+        # Tooling (``opennvr-adapter dev``/``validate``) needs to know
+        # which body field this adapter accepts; without it the dev
+        # runner sent ``frame_b64`` to every adapter and reported audio
+        # and text adapters as broken.
+        app.state.opennvr_body_shape = self._body_shape
+        app.state.opennvr_supports_stream = self._supports_stream
         self._register_routes(app)
         self._customise_openapi(app)
         return app
@@ -513,12 +519,22 @@ class AdapterApp:
         )
 
     def _build_health(self) -> HealthResponse:
+        """The §3.1 health payload.
+
+        A service may report its own status (``health_status``), which
+        is the only way ``error`` can ever be reached: ``is_ready()`` is
+        a bool, so "the model failed to load" and "the model is still
+        loading" were indistinguishable — ``/health`` said ``loading``
+        forever and every downstream check believed it."""
+        from opennvr_adapter_sdk.contract import HealthStatus
+
         info = self._service.model_info()
-        if self._service.is_ready():
-            from opennvr_adapter_sdk.contract import HealthStatus
+        reported = self._service.health_status()
+        if reported is not None:
+            status_value = reported
+        elif self._service.is_ready():
             status_value = HealthStatus.OK
         else:
-            from opennvr_adapter_sdk.contract import HealthStatus
             status_value = HealthStatus.LOADING
         return HealthResponse(
             status=status_value,

@@ -76,6 +76,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from stat import S_ISREG
 from typing import Any, Callable, Sequence
 
 from opennvr_adapter_sdk.adapter_app import BODY_BYTES_KEY, AdapterApp, BodyShape
@@ -197,6 +198,11 @@ class InferCall:
         right on the adapter shows up in the wrong place on the
         operator's screen. Divide pixel coordinates by the frame size.
         """
+        # Pixel coordinates silently clamped to 1.0 and every box landed
+        # in the bottom-right corner, with nothing in the logs to say
+        # why. Warn once per adapter instead.
+        if any(_out_of_range(v) for v in (x, y, w, h)):
+            _warn_pixel_coordinates(label, x, y, w, h)
         item: dict[str, Any] = {
             "label": str(label),
             "confidence": _clamp(confidence),
@@ -219,6 +225,31 @@ def _clamp(value: Any) -> float:
         return min(1.0, max(0.0, float(value)))
     except (TypeError, ValueError):
         return 0.0
+
+
+_WARNED_BBOX = False
+
+
+def _warn_pixel_coordinates(label: Any, *values: Any) -> None:
+    """Say it once, loudly, then stay quiet — a 30 fps stream would
+    otherwise drown the log in the same line."""
+    global _WARNED_BBOX
+    if _WARNED_BBOX:
+        return
+    _WARNED_BBOX = True
+    logger.warning(
+        "detection(%r) has a bbox outside 0-1 (%s) — coordinates are "
+        "NORMALIZED to the frame, so these are being clamped and every box "
+        "will render in the wrong place. Divide pixel values by the frame "
+        "width and height.",
+        label, ", ".join(repr(v) for v in values))
+
+
+def _out_of_range(value: Any) -> bool:
+    try:
+        return not (0.0 <= float(value) <= 1.0)
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass
@@ -281,6 +312,9 @@ class Adapter:
         self.gpu = gpu
         self._network_egress = tuple(network_egress)
         self._max_inflight = max_inflight
+        #: Deliberately smaller than AdapterApp's own 32 MiB default:
+        #: a frame or a clip that large is nearly always a caller
+        #: mistake, and the limit is one constructor argument away.
         self._max_body_bytes = max_body_bytes
         self._cost = cost
 
@@ -290,7 +324,24 @@ class Adapter:
         self._shutdown_fn: Callable[[Any], Any] | None = None
         self._stream_fn: Callable[[Any], Any] | None = None
         self._service: "_FacadeService | None" = None
+        #: ``(path, size, mtime_ns) -> digest``. Re-hashing a
+        #: multi-gigabyte weights file on every /health and twice
+        #: per /capabilities blew the contract's 1000 ms budget on
+        #: a 60s poll; a swapped file changes size or mtime, so
+        #: drift detection still sees it.
+        self._fp_cache: tuple[tuple[str, int, int], str] | None = None
         self._app: AdapterApp | None = None
+
+    def _assert_open(self, what: str) -> None:
+        """Registration after the ASGI app has been built is a no-op the
+        author never sees — ``supports_stream``, the body shape and the
+        advertised tasks are all frozen at that moment. Say so."""
+        if self._app is not None or self._service is not None:
+            raise RuntimeError(
+                f"Adapter({self.id!r}): {what} was registered after the app "
+                f"was built, so it would be ignored. Move every @adapter "
+                f"decorator above the `app = adapter.app` line."
+            )
 
     # ── Declaration ────────────────────────────────────────────────
 
@@ -301,6 +352,8 @@ class Adapter:
         libraries inside it, not at module top: a broken dependency then
         shows up as a red ``/health`` with the real error message rather
         than as a container that will not import."""
+
+        self._assert_open("a load() hook")
 
         def decorate(fn: Callable[[], Any]):
             self._load_fn = fn
@@ -333,6 +386,8 @@ class Adapter:
         return self._handler_decorator("data", tasks)
 
     def _handler_decorator(self, kind: str, tasks: tuple[str, ...]):
+        self._assert_open("an inference handler")
+
         def decorate(fn: Callable[[InferCall], Any]):
             if self._handler is not None:
                 raise RuntimeError(
@@ -355,6 +410,8 @@ class Adapter:
         ``(verdict, reasoning)`` pair. Use it when the model has a real
         requirement to test — a CUDA device, an NPU, enough RAM."""
 
+        self._assert_open("a check_hardware() hook")
+
         def decorate(fn: Callable[[Any], Any]):
             self._hardware_fn = fn
             return fn
@@ -364,6 +421,8 @@ class Adapter:
     def on_shutdown(self) -> Callable[..., Any]:
         """Run on the way out, with the loaded model — release a device,
         close a session."""
+
+        self._assert_open("an on_shutdown() hook")
 
         def decorate(fn: Callable[[Any], Any]):
             self._shutdown_fn = fn
@@ -377,6 +436,8 @@ class Adapter:
         Declaring it advertises streaming in ``/capabilities`` and
         publishes the protocol in the adapter's AsyncAPI document. The
         handler is called with the raw WebSocket."""
+
+        self._assert_open("an on_stream() handler")
 
         def decorate(fn: Callable[[Any], Any]):
             self._stream_fn = fn
@@ -396,12 +457,22 @@ class Adapter:
         that protects the operator."""
         if self.weights:
             path = Path(self.weights)
-            if path.is_file():
+            try:
+                st: os.stat_result | None = path.stat()
+            except OSError:
+                st = None
+            if st is not None and S_ISREG(st.st_mode):
+                key = (str(path), st.st_size, st.st_mtime_ns)
+                cached = self._fp_cache
+                if cached is not None and cached[0] == key:
+                    return cached[1]
                 digest = hashlib.sha256()
                 with path.open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(1 << 16), b""):
+                    for chunk in iter(lambda: handle.read(1 << 20), b""):
                         digest.update(chunk)
-                return f"sha256:{digest.hexdigest()}"
+                value = f"sha256:{digest.hexdigest()}"
+                self._fp_cache = (key, value)
+                return value
         seed = f"{self.id}:{self.model_version}:{self.framework}".encode()
         return f"sha256:{hashlib.sha256(seed).hexdigest()}"
 
@@ -525,6 +596,11 @@ class _FacadeService(AdapterService):
     def is_ready(self) -> bool:
         return self._state == HealthStatus.OK
 
+    def health_status(self) -> HealthStatus:
+        """The real state, so a failed load reports ``error`` rather
+        than pretending to still be loading forever."""
+        return self._state
+
     def shutdown(self) -> None:  # pragma: no cover — exercised by the app
         if self._adapter._shutdown_fn is not None:
             try:
@@ -623,10 +699,19 @@ class _FacadeService(AdapterService):
                 transient=True, http_status=503,
                 retry_after_ms=exc.retry_after_ms,
             ) from exc
-        except (ValueError, KeyError, TypeError) as exc:
-            # The caller sent something this model cannot use. A 400
-            # tells KAI-C not to retry — which is the difference between
-            # one bad frame and a retry storm.
+        except (ValueError, KeyError) as exc:
+            # The caller sent something this model cannot use — a bad
+            # param value, a missing key. A 400 tells KAI-C not to
+            # retry, which is the difference between one bad frame and a
+            # retry storm.
+            #
+            # TypeError is deliberately NOT here: it almost always means
+            # the handler itself is wrong (a None where a number was
+            # expected, a bad call signature), and blaming the caller
+            # for that hid real bugs behind a 400 with no traceback.
+            logger.info(
+                "%s rejected the request as malformed", self._adapter.id,
+                exc_info=True)
             raise ServiceError(
                 ErrorCategory.TRANSPORT_ERROR, code="malformed_input",
                 message=str(exc) or type(exc).__name__,

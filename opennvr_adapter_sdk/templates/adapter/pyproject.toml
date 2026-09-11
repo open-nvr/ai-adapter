@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-__ADAPTER_MODULE__ = "__ADAPTER_MODULE__:app"
+__ADAPTER_MODULE__ = "__ADAPTER_MODULE__:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

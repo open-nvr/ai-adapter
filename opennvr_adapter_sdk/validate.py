@@ -51,7 +51,10 @@ def run_validate(directory: Path, *, as_json: bool = False) -> int:
     base_url = "http://adapter.test"
 
     with TestClient(app, base_url=base_url) as client:
-        report = ConformanceRunner(base_url, client=client).run_all()
+        # An empty base_url tells the runner this is an in-process
+        # client, so it skips the URL-hygiene check instead of warning
+        # "Non-loopback HTTP" about a host that was never bound.
+        report = ConformanceRunner("", client=client).run_all()
 
     if as_json:
         print(json.dumps(_as_dict(report, name, version), indent=2))

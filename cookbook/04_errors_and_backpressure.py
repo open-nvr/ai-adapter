@@ -28,10 +28,12 @@ def infer(call):
 
     # ── Classified for you ─────────────────────────────────────────
     #
-    #   ValueError / KeyError / TypeError → 400 transport_error, not
-    #       retried. The caller sent something this model cannot use.
-    #   anything else                     → 500 model_error.
-    #   Overloaded                        → 503 with retry_after_ms.
+    #   ValueError / KeyError → 400 transport_error, not retried. The
+    #       caller sent something this model cannot use.
+    #   anything else (TypeError included) → 500 model_error, logged
+    #       with a traceback: a TypeError is nearly always this
+    #       handler's own bug, not the caller's.
+    #   Overloaded            → 503 with retry_after_ms.
     if not call.image:
         raise ValueError("a frame is required")
 

@@ -35,6 +35,21 @@ adapter routes real work into a hole, and the operator has no way to
 tell. The facade derives this from the loader, so the only way to get it
 wrong is to swallow the exception yourself.
 
+`is_ready()` is a bool, so on its own it cannot tell *"still loading"*
+from *"the load failed"* — `/health` would say `loading` forever, and
+both Docker's healthcheck and `opennvr-adapter validate` would pass a
+dead adapter. If you implement `AdapterService` directly rather than
+through the facade, override `health_status()` and return the real
+`HealthStatus`:
+
+```python
+def health_status(self) -> HealthStatus | None:
+    return self._state      # OK / DEGRADED / LOADING / ERROR
+```
+
+Returning `None` keeps the old bool-derived behaviour. The conformance
+runner FAILs on `error` and WARNs on `loading`, so neither goes green.
+
 ## Weights: baked in or fetched
 
 | | Baked into the image | Fetched on first load |

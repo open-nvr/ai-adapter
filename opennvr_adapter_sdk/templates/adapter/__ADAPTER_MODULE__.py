@@ -98,4 +98,29 @@ def infer(call):
 
 
 # The ASGI application. `uvicorn __ADAPTER_MODULE__:app`
+#
+# Every @adapter decorator must appear ABOVE this line — the app is
+# built here, and anything registered afterwards would be ignored (the
+# SDK raises rather than letting that pass silently).
 app = adapter.app
+
+
+def main() -> None:
+    """Console-script entry point: serve the adapter with uvicorn.
+
+    `__ADAPTER_MODULE__` on the PATH after `pip install -e .`, and what
+    the Dockerfile could call instead of spelling out uvicorn flags.
+    """
+    import os
+
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "__PORT__")),
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
