@@ -20,7 +20,7 @@ set -euo pipefail
 if [[ $# -ne 3 ]]; then
     echo "usage: $0 <slug> <port> <body-shape>" >&2
     echo "       slug: lowercase, hyphenated, e.g. fall-detection" >&2
-    echo "       port: 4-digit port number (9008+ recommended; 9001-9007 taken)" >&2
+    echo "       port: 4-digit port number; see publish-images.yml for the ports already taken" >&2
     echo "       body-shape: IMAGE | AUDIO | TEXT | GENERIC" >&2
     exit 64
 fi

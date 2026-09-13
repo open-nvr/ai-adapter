@@ -40,6 +40,7 @@ dependencies = [
 #
 #   uv sync --extra yolo          → YOLOv8 person detection (ONNX, CPU-friendly)
 #   uv sync --extra yolo11        → YOLOv11 person counting with ByteTrack
+#   uv sync --extra pose          → YOLO11n-pose human keypoints (ONNX, CPU-first)
 #   uv sync --extra face          → InsightFace recognition (ArcFace, Buffalo-L)
 #   uv sync --extra blip          → BLIP scene captioning (local, needs torch)
 #   uv sync --extra huggingface   → HuggingFace cloud inference proxy
@@ -72,6 +73,21 @@ yolo11 = [
     "matplotlib==3.10.8",
     "networkx==3.6.1",
     "protobuf>=6.33.2",
+]
+
+# YOLO-pose ONNX adapter (adapters/yolo_pose) — human keypoints, CPU-first.
+# Same runtime as the yolo extra (onnxruntime + the OpenCV/numpy already in
+# core); onnx is here only for the local ONNX export step in
+# download_models.py. No torch: the .pt → .onnx conversion is a one-time
+# authoring task that pulls ultralytics on its own, not a runtime dep.
+pose = [
+    "onnxruntime==1.23.2",
+    "onnx==1.20.0",
+    # Serving dep, not a model dep: bare uvicorn has no WebSocket
+    # implementation, so /infer/stream answers the upgrade with a 404
+    # unless one is installed. Streaming is this adapter's primary
+    # path, so it is not optional here.
+    "websockets>=12,<18",
 ]
 
 # InsightFace face recognition adapter (insightface_adapter)
@@ -199,7 +215,7 @@ dev = [
 # Backward-compatible "install everything" profile
 # Equivalent to the old plain `uv sync` that had all deps in [project.dependencies]
 all = [
-    "opennvr-ai-adapter[yolo,yolo11,face,blip,vlm,huggingface,stt,tts,lpr]",
+    "opennvr-ai-adapter[yolo,yolo11,pose,face,blip,vlm,huggingface,stt,tts,lpr]",
 ]
 
 # ── PyTorch index source ───────────────────────────────────────────────────────

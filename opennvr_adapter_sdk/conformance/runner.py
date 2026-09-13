@@ -102,6 +102,9 @@ class ConformanceRunner:
     SAMPLE_INFER_PAYLOADS: dict[str, dict[str, Any]] = {
         "speech_synthesis": {"text": "Conformance check: hello, world."},
         "object_detection": {"confidence_threshold": 0.5},
+        # Pose adapters take image bytes over multipart like any other
+        # vision adapter; this JSON payload is only the fallback path.
+        "pose_estimation": {"conf": 0.5},
         # ASR adapters receive audio bytes via the multipart path (see
         # _post_multipart_audio below); this JSON payload is a no-op
         # fallback for adapters that don't accept multipart for some
@@ -144,6 +147,11 @@ class ConformanceRunner:
         "face_detection": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
         "face_recognition": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
         "face_embedding": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
+        # Pose — a 1x1 black frame contains no person, so the adapter
+        # answers with an empty ``persons`` list. That is the point:
+        # the check is on the wire shape and the §6 roundtrip, not on
+        # the model finding anything.
+        "pose_estimation": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
     }
 
     # ── Sample audio for ASR adapters ──────────────────────────────

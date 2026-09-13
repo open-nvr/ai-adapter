@@ -55,6 +55,22 @@ MODEL_REGISTRY: dict[str, list[dict]] = {
             "size_hint": "~40 MB",
         }
     ],
+    # The contract adapter in adapters/yolo_pose/ — not a legacy app/
+    # plugin, so it never appears in CONFIG["adapters"] and is only
+    # fetched by `--all`. Listed here because the ONNX has to be
+    # derived locally either way (Ultralytics publishes the .pt, not
+    # the ONNX) and one command beats a README recipe.
+    "yolo_pose_adapter": [
+        {
+            "filename": "yolo11n-pose.onnx",
+            "url": "ultralytics_export",   # generated via ultralytics YOLO().export()
+            "size_hint": "~12 MB",
+            # dynamic=True matters: a fixed-size export would reject
+            # every `imgsz` but the one it was exported at, and the
+            # adapter's imgsz param is its CPU/accuracy dial.
+            "export_kwargs": {"dynamic": True, "imgsz": 448, "opset": 12},
+        }
+    ],
     # insightface_adapter downloads its weights automatically via the InsightFace
     # library (buffalo_l pack) on first inference — no manual download needed.
     # huggingface_adapter fetches from HuggingFace Hub on first use.
@@ -87,8 +103,15 @@ def _download_file(url: str, dest_path: Path) -> bool:
         return False
 
 
-def _ultralytics_export(filename: str, dest_path: Path) -> bool:
-    """Generate an ONNX file from the corresponding YOLO .pt via Ultralytics."""
+def _ultralytics_export(
+    filename: str, dest_path: Path, export_kwargs: dict | None = None
+) -> bool:
+    """Generate an ONNX file from the corresponding YOLO .pt via Ultralytics.
+
+    ``export_kwargs`` is passed straight through to ``model.export()``
+    so a registry entry can pin what its adapter needs (dynamic axes,
+    input size, opset) instead of inheriting Ultralytics' defaults.
+    """
     pt_name = filename.replace(".onnx", ".pt")
     print(f"  Generating {filename} via Ultralytics (downloads {pt_name} first)...")
     try:
@@ -96,7 +119,7 @@ def _ultralytics_export(filename: str, dest_path: Path) -> bool:
         import shutil
 
         model = YOLO(pt_name)          # auto-downloads .pt if missing
-        exported_path = model.export(format="onnx")
+        exported_path = model.export(format="onnx", **(export_kwargs or {}))
         if exported_path and os.path.exists(exported_path):
             shutil.move(exported_path, dest_path)
             # Clean up the .pt used for export (optional — saves ~13MB)
@@ -191,7 +214,9 @@ def main() -> None:
             print(f"  → {entry['filename']} {size_hint}")
             url = entry["url"]
             if url == "ultralytics_export":
-                ok = _ultralytics_export(entry["filename"], dest)
+                ok = _ultralytics_export(
+                    entry["filename"], dest, entry.get("export_kwargs")
+                )
             else:
                 ok = _download_file(url, dest)
 

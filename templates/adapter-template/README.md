@@ -51,9 +51,13 @@ From the repo root:
   `pose-estimation`, `audio-events`. Becomes the directory name
   (with underscores, since Python won't import hyphens) and the GHCR
   image name (with hyphens).
-- `<port>` — 4-digit port the adapter listens on. The convention is
-  9001-9006 are taken (piper/yolov8/whisper/fast-plate-ocr/insightface/blip);
-  9007 is bytetrack; pick the next free port (9008+).
+- `<port>` — 4-digit port the adapter listens on. Taken so far:
+  9001-9006 (piper/yolov8/whisper/fast-plate-ocr/insightface/blip),
+  9007 bytetrack, 9008 moondream, 9009 yolo-pose, 9012 vlm, 9018
+  ollamavlm. Check the matrix in
+  `.github/workflows/publish-images.yml` for the current list and pick
+  the next free one — two adapters on the same port can't run on the
+  same host.
 - `<body-shape>` — one of `IMAGE`, `AUDIO`, `TEXT`, `GENERIC`. Drives
   the SDK's body parser. Most vision adapters want `IMAGE`; most ASR
   adapters want `AUDIO`; tracker / LLM / post-processor adapters want
