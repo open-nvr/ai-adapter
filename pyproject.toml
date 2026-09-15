@@ -76,18 +76,19 @@ yolo11 = [
 ]
 
 # YOLO-pose ONNX adapter (adapters/yolo_pose) — human keypoints, CPU-first.
-# Same runtime as the yolo extra (onnxruntime + the OpenCV/numpy already in
-# core); onnx + onnxslim are the local ONNX export step in
-# download_models.py. Deliberately NO ultralytics here: it drags torch in,
-# and the .pt -> .onnx conversion is a one-time authoring task, not a
-# runtime dep. That does mean `download_models.py` needs ultralytics
-# present from somewhere -- `--extra yolo11`, or the standalone pip line
-# in adapters/yolo_pose/README.md -- which the script now says in its
-# error instead of failing on a bare ImportError.
+# What the adapter actually needs to SERVE, and nothing else (CONTRIBUTING,
+# Path A): onnxruntime to run the graph, plus the OpenCV/numpy already in
+# core. adapters/yolo_pose/ imports exactly onnxruntime, cv2 and numpy —
+# and the image (adapters/yolo_pose/Dockerfile) installs no onnx, no
+# onnxslim, no ultralytics, and passes conformance.
+#
+# The .pt -> .onnx export is an authoring task on a development machine,
+# not a runtime dep, so its three packages (ultralytics, onnx, onnxslim)
+# live with the recipe in adapters/yolo_pose/README.md. Listing two of
+# the three here would be the worst of both: dependencies that are dead
+# weight in the serving profile and still not enough to export with.
 pose = [
     "onnxruntime==1.23.2",
-    "onnx==1.20.0",
-    "onnxslim==0.1.80",
     # Serving dep, not a model dep: bare uvicorn has no WebSocket
     # implementation, so /infer/stream answers the upgrade with a 404
     # unless one is installed. Streaming is this adapter's primary

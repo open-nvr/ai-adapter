@@ -139,7 +139,8 @@ def _ultralytics_export(
         print(
             f"  ✗ ultralytics not installed — it is needed only to export "
             f"{filename}. Run `uv sync --extra yolo11` (pulls torch), or "
-            f"`pip install 'ultralytics==8.3.240' 'onnx>=1.16,<2'` in a "
+            f"`pip install 'ultralytics==8.3.240' 'onnx>=1.16,<2' "
+            f"'onnxslim==0.1.80'` in a "
             f"throwaway env and re-run."
         )
         return False

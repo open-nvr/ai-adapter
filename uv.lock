@@ -975,9 +975,7 @@ lpr = [
     { name = "open-image-models", extra = ["onnx"] },
 ]
 pose = [
-    { name = "onnx" },
     { name = "onnxruntime" },
-    { name = "onnxslim" },
     { name = "websockets" },
 ]
 stt = [
@@ -1015,12 +1013,10 @@ requires-dist = [
     { name = "networkx", marker = "extra == 'yolo11'", specifier = "==3.6.1" },
     { name = "numpy", specifier = "==1.26.4" },
     { name = "onnx", marker = "extra == 'face'", specifier = "==1.20.0" },
-    { name = "onnx", marker = "extra == 'pose'", specifier = "==1.20.0" },
     { name = "onnx", marker = "extra == 'yolo'", specifier = "==1.20.0" },
     { name = "onnxruntime", marker = "extra == 'face'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "extra == 'pose'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "extra == 'yolo'", specifier = "==1.23.2" },
-    { name = "onnxslim", marker = "extra == 'pose'", specifier = "==0.1.80" },
     { name = "onnxslim", marker = "extra == 'yolo'", specifier = "==0.1.80" },
     { name = "open-image-models", extras = ["onnx"], marker = "extra == 'lpr'", specifier = ">=0.6.0" },
     { name = "opencv-python", specifier = "==4.10.0.84" },

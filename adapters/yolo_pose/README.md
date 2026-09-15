@@ -108,7 +108,7 @@ The image ships **without** weights (~12 MB of ONNX in a 250 MB image would stil
 # From the ai-adapter repo root. Needs ultralytics, which the lean `pose`
 # extra deliberately does NOT install (it pulls torch, and exporting is a
 # one-time authoring task):
-pip install --quiet "ultralytics==8.3.240" "onnx>=1.16,<2"
+pip install --quiet "ultralytics==8.3.240" "onnx>=1.16,<2" "onnxslim==0.1.80"
 python download_models.py --all      # exports model_weights/yolo11n-pose.onnx
 ```
 
@@ -116,13 +116,21 @@ or by hand, which is the same thing `download_models.py` does:
 
 ```bash
 mkdir -p model_weights && cd model_weights
-pip install --quiet "ultralytics==8.3.240" "onnx>=1.16,<2"
+pip install --quiet "ultralytics==8.3.240" "onnx>=1.16,<2" "onnxslim==0.1.80"
 yolo export model=yolo11n-pose.pt format=onnx opset=12 imgsz=448 dynamic=True
 cd ..
 ```
 
 Either way the export is a **development-machine** step: the runtime image
-never installs ultralytics or torch, it is handed a finished `.onnx`.
+never installs ultralytics, onnx, onnxslim or torch — it is handed a finished
+`.onnx` and runs it on `onnxruntime`. That is also why none of the three is in
+the `pose` extra: per [CONTRIBUTING](../../CONTRIBUTING.md), the dependency
+list is what the adapter needs to serve.
+
+`onnxslim` is pinned explicitly because ultralytics calls it to slim the graph
+and cannot always install it for you — in an ephemeral environment its
+auto-update shells out to a `pip` that may not be on PATH, and the export then
+fails on a package you never asked about.
 
 Then mount that directory at `/weights`. Operators who prefer a first-boot download host the exported file themselves and set `YOLO_POSE_MODEL_URL`; the SDK's `ensure_model_file` streams it into the weights volume once and every later boot finds it already there. A file that is already present **always** wins and no network call is made, which is what makes the `sovereignty=local_only` posture (empty URL, pre-populated volume) work.
 
@@ -134,7 +142,7 @@ uv venv && source .venv/bin/activate
 uv sync --extra pose
 
 # Weights (see above — the export needs ultralytics, which `pose` omits)
-pip install --quiet "ultralytics==8.3.240" "onnx>=1.16,<2"
+pip install --quiet "ultralytics==8.3.240" "onnx>=1.16,<2" "onnxslim==0.1.80"
 python download_models.py --all
 
 # Start the service
