@@ -9,6 +9,33 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`yolo-pose` adapter** — contract-v1 `pose_estimation` on port 9009,
+  wrapping a YOLO11n-pose ONNX model on `onnxruntime`. Returns a
+  COCO-17 skeleton per person (`persons[].keypoints` — 17
+  `[x, y, confidence]` triples in the fixed COCO order, plus
+  `keypoint_names` and `frame_dimensions`), over HTTP `/infer` or the
+  full §6 WebSocket streaming protocol, which is the path a 10 fps
+  camera uses. Built for apps that reason about body geometry rather
+  than object location: wand-compliance verification (is the guard's
+  detector tracking the visitor's arms?), fall detection, queue
+  orientation.
+  CPU-first by design — the nano model at a 448 px default input, one
+  serial session, ~47 ms/frame and ~160 MB RSS measured on an 8-core
+  x86 CPU. Coordinates are **pixels in the source frame**, not §5.1's
+  normalized boxes: normalizing a 16:9 frame to a unit square distorts
+  exactly the limb angles these apps measure. Per-call `conf`, `iou`,
+  `imgsz` and `max_persons`; per-joint visibility exported as a domain
+  metric (`adapter_pose_keypoints_visible_total{keypoint=…}`), which
+  is how a camera that has stopped seeing wrists shows up before the
+  app goes quiet. Weights are not baked into the image: the ONNX is
+  exported locally (`python download_models.py --all`) and mounted,
+  or fetched once from an operator-configured `YOLO_POSE_MODEL_URL` —
+  and `permissions.network_egress` is derived from that setting, so the
+  default deployment declares no egress at all and a configured fetch
+  declares exactly its one host.
+
 ## [0.1.5] — 2026-09-10
 
 The LPR adapter goes from unusable to correct. Everything below is the

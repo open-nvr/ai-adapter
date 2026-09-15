@@ -176,6 +176,12 @@ jobs:
           # Moondream2 vision-language model — VQA + captioning (drop-in for the
           # BLIP caption slot, but answers questions about the scene).
           - { dir: moondream,      image: moondream-adapter,      port: 9008, platforms: "linux/amd64,linux/arm64" }
+          # YOLO11n-pose human keypoints — a COCO-17 skeleton per
+          # person, over HTTP or the §6 WS stream at ~10 fps. CPU-first
+          # (the image pins the CPU-only onnxruntime wheel); weights are
+          # mounted rather than baked, so the image stays small and the
+          # container boots with no network.
+          - { dir: yolo_pose,      image: yolo-pose-adapter,      port: 9009, platforms: "linux/amd64,linux/arm64" }
           # Combined Whisper+Piper+BLIP in one image (issue #82): three voice
           # adapters, one container, same per-adapter /infer contract.
           - { dir: voice-bundle,   image: voice-adapter,          port: 9006, platforms: "linux/amd64,linux/arm64" }

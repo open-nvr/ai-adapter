@@ -99,7 +99,8 @@ import asyncio, json, websockets
 
 async def main():
     headers = {"Authorization": "Bearer dev-token"}
-    async with websockets.connect("ws://localhost:9002/infer/stream", extra_headers=headers) as ws:
+    # additional_headers on websockets >= 14; extra_headers before that.
+    async with websockets.connect("ws://localhost:9002/infer/stream", additional_headers=headers) as ws:
         # Handshake
         await ws.send(json.dumps({
             "type": "handshake", "client_id": "demo", "camera_id": "cam-1",
