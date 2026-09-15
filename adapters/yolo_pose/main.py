@@ -4,9 +4,9 @@
 """
 YOLO-pose human-keypoint adapter — contract-compliant FastAPI service.
 
-This file is the ~30-line app construction §3.7 promises: everything
-pose-specific lives in ``adapters/yolo_pose/service.py`` (including
-the full §6 WS protocol loop), and the SDK provides the rest — auth,
+This file is the declaration-only app construction §3.7 asks for:
+everything pose-specific lives in ``adapters/yolo_pose/service.py``
+(including the §6 WS protocol loop), and the SDK provides the rest — auth,
 metrics, correlation_id, all six contract endpoints, body parsing,
 error envelope translation, lifespan.
 
@@ -19,7 +19,10 @@ Conformance check:
 """
 from __future__ import annotations
 
-from adapters.yolo_pose.service import MAX_IMAGE_BYTES, YoloPoseService
+import os
+from urllib.parse import urlparse
+
+from adapters.yolo_pose.service import MAX_IMAGE_BYTES, MODEL_URL_ENV, YoloPoseService
 from opennvr_adapter_sdk import (
     AdapterApp,
     BodyShape,
@@ -28,6 +31,26 @@ from opennvr_adapter_sdk import (
     Permissions,
     Scheduling,
 )
+
+
+def _model_fetch_egress() -> list[str]:
+    """The host the adapter may contact on first boot, or nothing.
+
+    Declared the same way ``gpu`` is: from what this build/config can
+    actually do, not from what the happy path does. ``YOLO_POSE_MODEL_URL``
+    is empty by default, so the stock deployment declares no egress at
+    all and stays sovereignty-clean for ``local_only``. An operator who
+    points it at their own artifact store gets that ONE host declared,
+    because ``ensure_model_file`` will genuinely dial it — and §8 says an
+    undeclared egress host in an audit log is what gets an adapter
+    removed. A present weights file still short-circuits the fetch; the
+    declaration covers the capability, not the certainty.
+    """
+    url = os.getenv(MODEL_URL_ENV, "").strip()
+    if not url:
+        return []
+    host = urlparse(url).hostname
+    return [host] if host else []
 
 
 def _cuda_provider_available() -> bool:
@@ -72,16 +95,21 @@ _adapter_app = AdapterApp(
         # normal deployment for this adapter, since it is CPU-first by
         # design.
         gpu=_cuda_provider_available(),
-        # No egress: the ONNX file is mounted (or fetched once, by the
-        # operator's own explicitly-configured YOLO_POSE_MODEL_URL,
-        # which is empty by default). Nothing this adapter does on the
-        # steady-state path touches the network.
-        network_egress=[],
-        # No host_filesystem entry: as with the yolov8 adapter, the
-        # weights belong in a container-owned named volume mounted at
-        # /weights, not a host bind-mount, so declaring a host path
-        # would only add a needless operator-approval scope
-        # (§8 "declare minimally").
+        # Empty unless the operator configured a first-boot weights
+        # fetch, in which case that one host is declared. Nothing this
+        # adapter does on the steady-state path touches the network
+        # either way — see _model_fetch_egress above.
+        network_egress=_model_fetch_egress(),
+        # No host_filesystem entry, because the deployed path genuinely
+        # is a container-owned named volume: open-nvr's
+        # docker-compose.apps.yml runs a yolo-pose-weights-init image
+        # that populates ``opennvr_yolo_pose_weights``, and this
+        # container mounts that volume at /weights. Declaring a host
+        # path would add an operator-approval scope nothing uses
+        # (§8 "declare minimally"). The ``-v $(pwd)/model_weights`` line
+        # in this adapter's README is the DEVELOPMENT shortcut, not the
+        # deployment — an operator who really does bind-mount a host
+        # directory should add it here.
         host_filesystem=[],
         shared_memory_paths=[],
         host_metadata=False,
@@ -100,7 +128,19 @@ _adapter_app = AdapterApp(
     ),
     cost=Cost(currency="USD"),
     supports_stream=True,
-    stream_max_concurrent=16,
+    # Sized from measured throughput, not copied from a sibling. The
+    # session is serial (max_inflight=1) and the whole adapter sustains
+    # ~12 fps end-to-end at the default imgsz, so it can feed about ONE
+    # camera at the 10 fps this is built for. The cap is 4 rather than 1
+    # because a stream is not always inferring — a reconnecting client,
+    # a paused session and an idle one all hold a connection and cost
+    # nothing — and 4 is still a number an operator can size from. It is
+    # deliberately not higher: nothing here enforces the cap per frame,
+    # and until this adapter can push back (§7.1 ``overloaded``, §6.5
+    # close code 4004) a generous advertisement is just a promise the
+    # inference session cannot keep. Need more cameras: run more
+    # instances, as the README says.
+    stream_max_concurrent=4,
     # Shared-memory fast path is documented in §6.2 but not
     # implemented. Advertise false so KAI-C never sends frame_ref.
     stream_supports_shared_memory=False,

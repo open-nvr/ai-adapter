@@ -12,8 +12,10 @@ It mirrors the shape of ``adapters/yolov8/`` — the canonical
 ``BodyShape.IMAGE`` adapter — and carries the same surface:
 
 * multipart with real binary image upload on /infer
-* the full §6 WebSocket streaming protocol (inline frames), which is
-  the path a 10 fps camera uses
+* the §6 WebSocket streaming protocol with inline frames — which is
+  the path a 10 fps camera uses. Inline frames only: §6.2's
+  shared-memory ``frame_ref`` and §6.3's NATS ``result_sink`` are both
+  answered by downgrading to websocket in the handshake_ack.
 * pixel-coordinate keypoint output plus ``frame_dimensions``, rather
   than §5.1's normalized detection shape (see ``service.py`` for why)
 

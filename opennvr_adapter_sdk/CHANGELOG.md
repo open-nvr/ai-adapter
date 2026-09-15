@@ -5,6 +5,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the SDK uses semantic versioning aligned with the AI Adapter Contract major version (SDK v1.x targets contract v1).
 
 
+## [Unreleased]
+
+### Added
+
+- **`Metrics.gauges()`** — a read-only snapshot of the live inflight and
+  queue-depth gauges (plus active stream connections). `render()` already
+  published these to Prometheus, but §6.4's `stats` control message has to
+  answer a streaming client with the same two numbers over the WebSocket,
+  and a stream handler should not have to keep a second, drifting copy of a
+  counter the SDK is already maintaining. Purely additive.
+
+
 ## [1.3.0] — 2026-09-11
 
 ### Added

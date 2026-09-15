@@ -85,9 +85,9 @@ Frames inferred over the **WebSocket** path use these defaults: §6's `frame` me
 | `GET /hardware/evaluation` | required | load state, onnxruntime providers, core count, effective `imgsz` |
 | `GET /metrics` | required | Prometheus exposition incl. `adapter_stream_connections_active` and the domain metrics below |
 | `POST /infer` | required | multipart (`frame` file) or JSON (`frame_b64`) |
-| `POST /infer/stream` (WS) | required | full §6 protocol — handshake → frame_meta + bytes → result loop |
+| `POST /infer/stream` (WS) | required | §6 protocol, inline frames — handshake → frame_meta + bytes → result loop. `stats` answers with this session's real inflight / queue depth / fps |
 
-**Shared-memory fast path** (§6.2) is not implemented. The adapter advertises `supports_shared_memory: false`; a client that offers `frame_transport: "shared_memory"` sees the ack downgrade to `"websocket"`.
+**Two §6 options are not implemented**, and both are answered by a downgrade in the `handshake_ack` rather than a refusal — read the ack, don't assume your offer was taken. §6.2's shared-memory fast path: the adapter advertises `supports_shared_memory: false`, and `frame_transport: "shared_memory"` comes back as `"websocket"`. §6.3's NATS `result_sink`: results always return over the same socket.
 
 ### Domain metrics
 
@@ -98,14 +98,17 @@ Frames inferred over the **WebSocket** path use these defaults: §6's `frame` me
 
 ## Permissions
 
-Declared **build-accurately** per §8. `gpu` follows the installed onnxruntime build: the stock image pins the CPU-only `onnxruntime` wheel, declares `gpu=false`, and registers with KAI-C without a GPU-grant prompt — which is the normal deployment here, since the adapter is CPU-first by design. A rebuild against `onnxruntime-gpu` declares `gpu=true` and starts `pending` until an operator grants the scope. `network_egress` is empty: the weights are mounted (or fetched once by an explicitly-configured `YOLO_POSE_MODEL_URL`, empty by default), and nothing on the steady-state path touches the network. No `host_filesystem` scope either — weights belong in a container-owned named volume mounted at `/weights`, not a host bind-mount. The declaration lives in [`main.py`](main.py); authoring rules are in the repo [README](../../README.md#declaring-permissions).
+Declared **build-accurately** per §8. `gpu` follows the installed onnxruntime build: the stock image pins the CPU-only `onnxruntime` wheel, declares `gpu=false`, and registers with KAI-C without a GPU-grant prompt — which is the normal deployment here, since the adapter is CPU-first by design. A rebuild against `onnxruntime-gpu` declares `gpu=true` and starts `pending` until an operator grants the scope. `network_egress` is **derived from the configuration the same way**: empty when `YOLO_POSE_MODEL_URL` is unset (the default, and the `sovereignty=local_only` posture — weights are mounted and the container never dials out), and exactly the one host of that URL when an operator configures a first-boot fetch, because that is a call the adapter can genuinely make and §8 treats an undeclared egress host as grounds for removal. Nothing on the steady-state path touches the network either way. No `host_filesystem` scope either — weights belong in a container-owned named volume mounted at `/weights`, not a host bind-mount. The declaration lives in [`main.py`](main.py); authoring rules are in the repo [README](../../README.md#declaring-permissions).
 
 ## Getting the weights
 
 The image ships **without** weights (~12 MB of ONNX in a 250 MB image would still have to be versioned somewhere). Ultralytics publishes the `.pt` checkpoint but no pre-built ONNX, so the ONNX is exported locally — one command, once:
 
 ```bash
-# From the ai-adapter repo root
+# From the ai-adapter repo root. Needs ultralytics, which the lean `pose`
+# extra deliberately does NOT install (it pulls torch, and exporting is a
+# one-time authoring task):
+pip install --quiet "ultralytics==8.3.240" "onnx>=1.16,<2"
 python download_models.py --all      # exports model_weights/yolo11n-pose.onnx
 ```
 
@@ -118,6 +121,9 @@ yolo export model=yolo11n-pose.pt format=onnx opset=12 imgsz=448 dynamic=True
 cd ..
 ```
 
+Either way the export is a **development-machine** step: the runtime image
+never installs ultralytics or torch, it is handed a finished `.onnx`.
+
 Then mount that directory at `/weights`. Operators who prefer a first-boot download host the exported file themselves and set `YOLO_POSE_MODEL_URL`; the SDK's `ensure_model_file` streams it into the weights volume once and every later boot finds it already there. A file that is already present **always** wins and no network call is made, which is what makes the `sovereignty=local_only` posture (empty URL, pre-populated volume) work.
 
 ## Run locally
@@ -127,7 +133,8 @@ Then mount that directory at `/weights`. Operators who prefer a first-boot downl
 uv venv && source .venv/bin/activate
 uv sync --extra pose
 
-# Weights (see above)
+# Weights (see above — the export needs ultralytics, which `pose` omits)
+pip install --quiet "ultralytics==8.3.240" "onnx>=1.16,<2"
 python download_models.py --all
 
 # Start the service
@@ -164,7 +171,7 @@ Pre-built images are published to `ghcr.io/open-nvr/yolo-pose-adapter` on every 
   A 4-core box of the same generation runs roughly 1.5–2× slower, which puts the default `imgsz=448` at ~6–8 fps end-to-end — **below** the 10 fps target. On four cores, run at `imgsz=320` (31 ms here, so ~10 fps end-to-end there) or give the adapter more cores; either way plan **one camera per adapter instance** and scale out with more instances rather than more streams. Measure before fanning out: these are one machine's numbers, not a promise. `/hardware/evaluation` reports `warn` below four cores for the same reason.
 - **Memory:** ~160 MB RSS measured after load, warm-up and 20 inferences at `imgsz=448` (onnxruntime session + OpenCV + numpy), plus the usual FastAPI/uvicorn overhead — budget ~250 MB for the container. There is no per-camera state: the adapter is stateless between frames, so memory does not grow with the number of streams.
 - **Cold start:** the model loads and runs one throwaway warm-up inference during lifespan startup, so the first real frame doesn't pay onnxruntime's arena allocation. Measured at 0.4 s for load + warm-up. `/health` reports `loading` until it finishes and `error` if the weights are missing.
-- **Concurrency:** `max_inflight=1` — one shared ONNX session, no cross-stream serialization. `fair_queuing=per_camera` matters more here than for an event-driven adapter: every camera streaming pose is a *steady* load, and without it the busiest entrance starves the rest.
+- **Concurrency:** `max_inflight=1` — one shared ONNX session, no cross-stream serialization — and `stream_max_concurrent=4`, which is the same honesty applied to the advertisement: ~12 fps end-to-end feeds about one 10 fps camera, and the extra headroom is for connections that are reconnecting, paused or idle rather than for four simultaneous inferring cameras. Nothing enforces the cap per frame yet (no §7.1 `overloaded`, no §6.5 `4004`), which is exactly why it is not higher. `fair_queuing=per_camera` matters more here than for an event-driven adapter: every camera streaming pose is a *steady* load, and without it the busiest entrance starves the rest.
 - **Not a tracker.** Persons are per-frame and carry no identity across frames. Pair with [`adapters/bytetrack/`](../bytetrack/README.md) if the app needs stable IDs (wrist *travel* over time, for instance).
 - **Sovereignty:** no egress on the steady-state path; the only network call the adapter can ever make is the optional first-boot weights fetch the operator configures.
 
@@ -183,7 +190,8 @@ import asyncio, json, websockets
 
 async def main():
     headers = {"Authorization": "Bearer dev-token"}
-    async with websockets.connect("ws://localhost:9009/infer/stream", extra_headers=headers) as ws:
+    # additional_headers on websockets >= 14; extra_headers before that.
+    async with websockets.connect("ws://localhost:9009/infer/stream", additional_headers=headers) as ws:
         await ws.send(json.dumps({
             "type": "handshake", "client_id": "wand-app", "camera_id": "entrance-1",
             "frame_transport": "websocket", "expected_input_rate_hz": 10,
@@ -224,7 +232,7 @@ adapters/yolo_pose/
 pytest tests/test_yolo_pose_service.py
 ```
 
-59 tests over the load lifecycle (including missing weights and a wrong-model export), the documented output shape, COCO-17 ordering, letterbox un-mapping on a 16:9 frame, NMS, every caller parameter and its rejection path, the full §6 WebSocket protocol, fingerprint stability and drift, auth and correlation_id. The model is stubbed (`tests/_yolo_pose_service_fixtures.py`) — no weights, no network, no GPU — so what is under test is everything between the request bytes and the response JSON.
+67 tests over the load lifecycle (including missing weights and a wrong-model export), the documented output shape, COCO-17 ordering, letterbox un-mapping on a 16:9 frame, NMS, every caller parameter and its rejection path, the §6 WebSocket protocol including a stats reply carrying real values, fingerprint stability and drift, containment of an unforeseen post-processing failure on both transports, the derived egress declaration, auth and correlation_id. The model is stubbed (`tests/_yolo_pose_service_fixtures.py`) — no weights, no network, no GPU — so what is under test is everything between the request bytes and the response JSON.
 
 ## Why this model
 

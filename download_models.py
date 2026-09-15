@@ -132,8 +132,15 @@ def _ultralytics_export(
             print(f"  ✗ Ultralytics export succeeded but output not found")
             return False
     except ImportError:
+        # ultralytics is an AUTHORING dep, not a runtime one: it pulls
+        # torch, so the lean ONNX extras (yolo, pose) deliberately leave
+        # it out. Name both ways to get it rather than sending the reader
+        # to an extra that doesn't carry it.
         print(
-            "  ✗ ultralytics not installed — run `uv sync --extra yolo` first"
+            f"  ✗ ultralytics not installed — it is needed only to export "
+            f"{filename}. Run `uv sync --extra yolo11` (pulls torch), or "
+            f"`pip install 'ultralytics==8.3.240' 'onnx>=1.16,<2'` in a "
+            f"throwaway env and re-run."
         )
         return False
     except Exception as exc:

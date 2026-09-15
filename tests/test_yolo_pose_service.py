@@ -171,7 +171,9 @@ class TestFingerprint:
         assert info.name == "yolo11n-pose"
         assert info.framework == "onnxruntime"
         assert info.modalities_in == ["image"]
-        assert info.modalities_out == ["pose_keypoints"]
+        # Must match server/config/adapters_index.yml's
+        # modalities_out: [keypoints] — one spelling, not two.
+        assert info.modalities_out == ["keypoints"]
         assert info.fingerprint == service.fingerprint()
 
 
@@ -474,6 +476,12 @@ class TestMalformedInput:
             {"max_persons": 0},
             {"max_persons": "lots"},
             {"max_persons": 10_000},
+            # bool is an int subclass: without an explicit guard these
+            # slide through as 1.0 / 1 and the caller never learns their
+            # threshold was a typo.
+            {"conf": True},
+            {"iou": False},
+            {"max_persons": True},
         ],
     )
     def test_bad_params_return_typed_400(self, yolo_pose_app, square_jpeg, params):
@@ -585,6 +593,38 @@ class TestStreaming:
             result = json.loads(ws.receive_text())
             assert result["seq"] == 2  # the paused frame was dropped
 
+    def test_stats_reports_this_sessions_real_numbers(
+        self, yolo_pose_app, square_jpeg
+    ):
+        """§6.4's stats reply carries live values, not zeros: after one
+        inferred frame the session's fps is positive, and inflight
+        reflects the SDK gauge (zero between frames, since inference is
+        serial and already finished)."""
+        with yolo_pose_app.websocket_connect("/infer/stream") as ws:
+            ws.send_text(json.dumps({
+                "type": "handshake", "client_id": "c", "camera_id": "cam-stats",
+                "frame_transport": "websocket",
+            }))
+            json.loads(ws.receive_text())  # ack
+
+            ws.send_text(json.dumps({"type": "stats"}))
+            before = json.loads(ws.receive_text())
+            assert before["fps"] == 0.0        # nothing inferred yet
+
+            ws.send_text(json.dumps({
+                "type": "frame", "seq": 1, "ts_ms": 0,
+                "content_type": "image/jpeg",
+            }))
+            ws.send_bytes(square_jpeg)
+            json.loads(ws.receive_text())      # result
+
+            ws.send_text(json.dumps({"type": "stats"}))
+            after = json.loads(ws.receive_text())
+            assert after["fps"] > 0.0
+            assert after["inflight"] == 0
+            assert after["queue_depth"] == 0
+            ws.send_text(json.dumps({"type": "close", "reason": "done"}))
+
     def test_stats_message_returns_stats(self, yolo_pose_app):
         with yolo_pose_app.websocket_connect("/infer/stream") as ws:
             ws.send_text(json.dumps({
@@ -680,3 +720,90 @@ def test_correlation_id_echoed_on_capabilities(yolo_pose_app):
 
 def test_correlation_id_minted_when_absent(yolo_pose_app):
     assert yolo_pose_app.get("/capabilities").headers.get("X-Correlation-Id")
+
+
+# ── Unexpected-failure containment ─────────────────────────────────
+#
+# Every failure _infer_image_bytes knows about is already a typed
+# ServiceError. These two tests pin the failure it does NOT know about:
+# post-processing raising something unforeseen. Shaping the response used
+# to sit outside the guarded block, so such an error escaped as a bare
+# exception — a 500 with no §7 envelope on HTTP, and a torn-down socket
+# mid-session on the stream, in both cases uncounted by record_infer.
+
+
+def _explode(*_args, **_kwargs):
+    raise RuntimeError("post-processing blew up")
+
+
+def test_unexpected_shaping_failure_is_a_typed_envelope(
+    yolo_pose_app, square_jpeg, monkeypatch
+):
+    """HTTP: an unforeseen error in post-processing is a §7 envelope
+    with a 500, not an untyped framework error page."""
+    from adapters.yolo_pose.service import YoloPoseService
+
+    monkeypatch.setattr(YoloPoseService, "_shape_persons", _explode)
+    response = _infer(yolo_pose_app, square_jpeg)
+    assert response.status_code == 500, response.text
+    envelope = FailureEnvelope.model_validate(response.json())
+    assert envelope.error.category == ErrorCategory.MODEL_ERROR
+    assert envelope.error.code == "inference_runtime_crash"
+
+
+def test_unexpected_shaping_failure_does_not_kill_the_stream(
+    yolo_pose_app, square_jpeg, monkeypatch
+):
+    """WS: the same failure comes back as a result message carrying the
+    envelope, and the session stays open for the next frame. One bad
+    frame must not end a camera's stream."""
+    from adapters.yolo_pose.service import YoloPoseService
+
+    monkeypatch.setattr(YoloPoseService, "_shape_persons", _explode)
+    with yolo_pose_app.websocket_connect("/infer/stream") as ws:
+        ws.send_text(json.dumps({
+            "type": "handshake", "client_id": "c", "camera_id": "cam-boom",
+            "frame_transport": "websocket",
+        }))
+        json.loads(ws.receive_text())  # ack
+
+        for seq in (1, 2):
+            ws.send_text(json.dumps({
+                "type": "frame", "seq": seq, "ts_ms": 0,
+                "content_type": "image/jpeg",
+            }))
+            ws.send_bytes(square_jpeg)
+            message = json.loads(ws.receive_text())
+            assert message["type"] == "result"
+            assert message["seq"] == seq
+            envelope = FailureEnvelope.model_validate(message["result"])
+            assert envelope.error.code == "inference_runtime_crash"
+
+        # Still a live session: a control message is still answered.
+        ws.send_text(json.dumps({"type": "stats"}))
+        assert json.loads(ws.receive_text())["type"] == "stats"
+        ws.send_text(json.dumps({"type": "close", "reason": "done"}))
+
+
+# ── §8 permissions are derived from the build AND the config ───────
+
+
+def test_network_egress_is_empty_without_a_configured_fetch(monkeypatch):
+    """The default posture: weights are mounted, nothing is declared,
+    and the adapter stays clean under sovereignty=local_only."""
+    import adapters.yolo_pose.main as pose_main
+
+    monkeypatch.delenv("YOLO_POSE_MODEL_URL", raising=False)
+    assert pose_main._model_fetch_egress() == []
+
+
+def test_configured_model_url_is_declared_as_egress(monkeypatch):
+    """An operator who turns on the first-boot fetch gets that one host
+    declared — §8 treats an undeclared egress host as grounds for
+    removing the adapter."""
+    import adapters.yolo_pose.main as pose_main
+
+    monkeypatch.setenv(
+        "YOLO_POSE_MODEL_URL", "https://artifacts.example.com/pose/yolo11n-pose.onnx"
+    )
+    assert pose_main._model_fetch_egress() == ["artifacts.example.com"]

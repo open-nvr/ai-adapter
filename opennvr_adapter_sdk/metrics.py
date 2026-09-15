@@ -211,6 +211,22 @@ class Metrics:
         with self._lock:
             self._queue_depth = max(0, int(depth))
 
+    def gauges(self) -> dict[str, int]:
+        """Read the live gauge values back.
+
+        ``render()`` already publishes these to Prometheus, but §6.4's
+        ``stats`` control message has to answer a client with the same
+        two numbers over the WebSocket, and a stream handler should not
+        have to keep a second, drifting copy of a counter the SDK is
+        already maintaining. Read-only snapshot, taken under the lock.
+        """
+        with self._lock:
+            return {
+                "inflight": self._inflight,
+                "queue_depth": self._queue_depth,
+                "stream_connections": self._stream_active,
+            }
+
     def inc_stream_connection(self) -> None:
         with self._lock:
             self._stream_active += 1

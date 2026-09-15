@@ -258,7 +258,12 @@ class YoloPoseService(AdapterService):
             framework=MODEL_FRAMEWORK,
             size_mb=self._weights_size_mb(),
             modalities_in=["image"],
-            modalities_out=["pose_keypoints"],
+            # "keypoints", not "pose_keypoints": this string is the
+            # platform's vocabulary, and server/config/adapters_index.yml
+            # lists this adapter with modalities_out: [keypoints]. Two
+            # spellings of one concept is how a registry lookup starts
+            # missing an adapter that is right there.
+            modalities_out=["keypoints"],
             fingerprint=self.fingerprint(),
         )
 
@@ -339,11 +344,19 @@ class YoloPoseService(AdapterService):
     # ── §6 WebSocket streaming protocol ────────────────────────────
 
     async def handle_stream(self, websocket: WebSocket) -> None:
-        """Implements the full §6 WS protocol — the path the
-        wand-compliance app uses at 10 fps, where one HTTP request per
-        frame would spend more time on connection setup than on
-        inference. The SDK has already verified the bearer token and
-        wrapped this call with ``inc/dec_stream_connection``.
+        """Implements the §6 WS protocol — the path the wand-compliance
+        app uses at 10 fps, where one HTTP request per frame would spend
+        more time on connection setup than on inference. The SDK has
+        already verified the bearer token and wrapped this call with
+        ``inc/dec_stream_connection``.
+
+        Two §6 options are NOT implemented, and both are answered by
+        downgrading in the ack rather than by refusing the session:
+        §6.2's shared-memory ``frame_ref`` transport (capabilities
+        advertise ``supports_shared_memory: false``) and §6.3's NATS
+        ``result_sink`` — results always come back over this socket. A
+        client that offers either gets ``websocket`` in the ack and
+        should read it rather than assume its offer was taken.
 
         Frames inferred over a stream use the adapter's default
         params: §6's ``frame`` message carries metadata only, and
@@ -417,6 +430,11 @@ class YoloPoseService(AdapterService):
 
         # ── Message loop ───────────────────────────────────────────
         paused = False
+        # Frames inferred on THIS session, for the §6.4 stats reply.
+        # Session-scoped rather than adapter-wide: a client asking for
+        # stats is asking what its own camera is getting.
+        frames_done = 0
+        session_start = time.monotonic()
         while True:
             try:
                 msg = await websocket.receive()
@@ -448,11 +466,17 @@ class YoloPoseService(AdapterService):
                     paused = False
                     continue
                 if msg_type == "stats":
+                    # §6.4 says this reply carries the real numbers. The
+                    # SDK is already maintaining the two gauges; fps is
+                    # this session's own average since the handshake,
+                    # which is what a client tuning its send rate wants.
+                    gauges = self.metrics.gauges()
+                    elapsed = max(time.monotonic() - session_start, 1e-6)
                     await websocket.send_text(json.dumps({
                         "type": "stats",
-                        "inflight": 0,
-                        "queue_depth": 0,
-                        "fps": 0.0,
+                        "inflight": gauges["inflight"],
+                        "queue_depth": gauges["queue_depth"],
+                        "fps": round(frames_done / elapsed, 2),
                     }))
                     continue
                 if msg_type == "frame":
@@ -502,6 +526,7 @@ class YoloPoseService(AdapterService):
                         else:
                             outcome = "ok"
                         metrics.record_infer(outcome, latency_seconds)
+                        frames_done += 1
                     finally:
                         metrics.dec_inflight()
                     continue
@@ -567,9 +592,27 @@ class YoloPoseService(AdapterService):
                                  1, ABSOLUTE_MAX_PERSONS)
 
         start = time.monotonic()
+        # Decode, inference AND post-processing all live inside this
+        # guard. Post-processing used to sit outside it, which meant an
+        # unexpected numpy error while shaping the response escaped as a
+        # bare exception: the SDK route only catches ServiceError, so the
+        # caller got a 500 with no §7 envelope and the failure was never
+        # counted by record_infer. Every exit from this method is now a
+        # typed ServiceError.
         try:
             img, width, height = _decode_image(image_bytes)
             raw, scale, pad_x, pad_y = self._run_inference(img, imgsz)
+            persons = self._shape_persons(
+                raw,
+                scale=scale,
+                pad_x=pad_x,
+                pad_y=pad_y,
+                width=width,
+                height=height,
+                conf=conf,
+                iou=iou,
+                max_persons=max_persons,
+            )
         except DecodeError as exc:
             raise ServiceError(
                 ErrorCategory.TRANSPORT_ERROR,
@@ -590,17 +633,6 @@ class YoloPoseService(AdapterService):
                 http_status=500,
             ) from exc
 
-        persons = self._shape_persons(
-            raw,
-            scale=scale,
-            pad_x=pad_x,
-            pad_y=pad_y,
-            width=width,
-            height=height,
-            conf=conf,
-            iou=iou,
-            max_persons=max_persons,
-        )
         inference_ms = int((time.monotonic() - start) * 1000)
 
         try:
@@ -677,6 +709,27 @@ class YoloPoseService(AdapterService):
             infer = self._infer_image_bytes(image_bytes, params)
         except ServiceError as exc:
             envelope = exc.envelope().model_dump(mode="json")
+            return ResultMessage(
+                seq=seq,
+                ts_ms=ts_ms,
+                inference_ms=0,
+                result=envelope,
+            ).model_dump(mode="json")
+        except Exception:
+            # Belt and braces. _infer_image_bytes types every failure it
+            # knows about, but an exception that escapes here would
+            # propagate out of handle_stream and tear the socket down
+            # mid-session: the client sees an abrupt close instead of a
+            # §6.5 code or an error result, and the frame never reaches
+            # record_infer. One bad frame must not end a camera's stream.
+            logger.exception("YOLO-pose stream frame failed unexpectedly seq=%s", seq)
+            envelope = ServiceError(
+                ErrorCategory.MODEL_ERROR,
+                code="inference_runtime_crash",
+                message="Inference failed.",
+                transient=False,
+                http_status=500,
+            ).envelope().model_dump(mode="json")
             return ResultMessage(
                 seq=seq,
                 ts_ms=ts_ms,
@@ -878,6 +931,8 @@ def _float_param(
             raw = params.get(alias)
     if raw is None:
         return default
+    if isinstance(raw, bool):  # bool is an int subclass — reject explicitly,
+        raw = repr(raw)        # same as _int_param. conf=true is a typo, not 1.0.
     try:
         value = float(raw)
     except (TypeError, ValueError) as exc:

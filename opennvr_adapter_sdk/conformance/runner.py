@@ -640,13 +640,32 @@ class ConformanceRunner:
             )
 
         ws_url = self.base_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1) + "/infer/stream"
-        extra_headers = {}
+        headers = {}
         if self._token:
-            extra_headers["Authorization"] = f"Bearer {self._token}"
+            headers["Authorization"] = f"Bearer {self._token}"
+
+        # websockets 14.0 replaced the legacy asyncio client with a new
+        # one and renamed this parameter extra_headers -> additional_headers.
+        # Passing the old name to a new install is a TypeError from deep
+        # inside BaseEventLoop.create_connection, which reads like a bug in
+        # the ADAPTER being tested rather than in this kit — so ask the
+        # library which name it takes instead of pinning a version. Every
+        # adapter that advertises streaming runs this check.
+        import inspect
+
+        try:
+            _params = inspect.signature(websockets.connect).parameters
+            header_kwarg = (
+                "additional_headers" if "additional_headers" in _params
+                else "extra_headers"
+            )
+        except (TypeError, ValueError):       # pragma: no cover - exotic builds
+            header_kwarg = "extra_headers"
+        connect_kwargs = {header_kwarg: headers}
 
         async def _exercise() -> tuple[bool, str]:
             try:
-                async with websockets.connect(ws_url, extra_headers=extra_headers) as ws:
+                async with websockets.connect(ws_url, **connect_kwargs) as ws:
                     await ws.send(json.dumps({
                         "type": "handshake",
                         "client_id": "conformance",

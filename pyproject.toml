@@ -77,12 +77,17 @@ yolo11 = [
 
 # YOLO-pose ONNX adapter (adapters/yolo_pose) — human keypoints, CPU-first.
 # Same runtime as the yolo extra (onnxruntime + the OpenCV/numpy already in
-# core); onnx is here only for the local ONNX export step in
-# download_models.py. No torch: the .pt → .onnx conversion is a one-time
-# authoring task that pulls ultralytics on its own, not a runtime dep.
+# core); onnx + onnxslim are the local ONNX export step in
+# download_models.py. Deliberately NO ultralytics here: it drags torch in,
+# and the .pt -> .onnx conversion is a one-time authoring task, not a
+# runtime dep. That does mean `download_models.py` needs ultralytics
+# present from somewhere -- `--extra yolo11`, or the standalone pip line
+# in adapters/yolo_pose/README.md -- which the script now says in its
+# error instead of failing on a bare ImportError.
 pose = [
     "onnxruntime==1.23.2",
     "onnx==1.20.0",
+    "onnxslim==0.1.80",
     # Serving dep, not a model dep: bare uvicorn has no WebSocket
     # implementation, so /infer/stream answers the upgrade with a 404
     # unless one is installed. Streaming is this adapter's primary

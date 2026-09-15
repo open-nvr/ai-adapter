@@ -31,7 +31,10 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is how a camera that has stopped seeing wrists shows up before the
   app goes quiet. Weights are not baked into the image: the ONNX is
   exported locally (`python download_models.py --all`) and mounted,
-  or fetched once from an operator-configured `YOLO_POSE_MODEL_URL`.
+  or fetched once from an operator-configured `YOLO_POSE_MODEL_URL` —
+  and `permissions.network_egress` is derived from that setting, so the
+  default deployment declares no egress at all and a configured fetch
+  declares exactly its one host.
 
 ## [0.1.5] — 2026-09-10
 
