@@ -836,22 +836,6 @@ wheels = [
 ]
 
 [[package]]
-name = "onnxslim"
-version = "0.1.80"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama" },
-    { name = "ml-dtypes" },
-    { name = "onnx" },
-    { name = "packaging" },
-    { name = "sympy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/a4/3c0d946f0cda16d7acf96908498d3d2e23739f733319e7ab27addf960e85/onnxslim-0.1.80.tar.gz", hash = "sha256:0ff5c51019de3c114721032ebe710aacb4163ef042526de0cfe1a182d496665f", size = 143702, upload-time = "2025-12-15T00:37:00.663Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/d0/ac16f8170fdddcd664693ed9e536795a4a577031925d98c7b36762891afe/onnxslim-0.1.80-py3-none-any.whl", hash = "sha256:1c74770858359b252c5f2bd2cbd0d990c98f1dd252c8a5c4ba88760cf9282586", size = 167422, upload-time = "2025-12-15T00:36:59.449Z" },
-]
-
-[[package]]
 name = "open-image-models"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -932,7 +916,6 @@ all = [
     { name = "networkx" },
     { name = "onnx" },
     { name = "onnxruntime" },
-    { name = "onnxslim" },
     { name = "open-image-models", extra = ["onnx"] },
     { name = "pillow" },
     { name = "piper-tts" },
@@ -989,9 +972,7 @@ vlm = [
     { name = "transformers" },
 ]
 yolo = [
-    { name = "onnx" },
     { name = "onnxruntime" },
-    { name = "onnxslim" },
 ]
 yolo11 = [
     { name = "matplotlib" },
@@ -1013,11 +994,9 @@ requires-dist = [
     { name = "networkx", marker = "extra == 'yolo11'", specifier = "==3.6.1" },
     { name = "numpy", specifier = "==1.26.4" },
     { name = "onnx", marker = "extra == 'face'", specifier = "==1.20.0" },
-    { name = "onnx", marker = "extra == 'yolo'", specifier = "==1.20.0" },
     { name = "onnxruntime", marker = "extra == 'face'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "extra == 'pose'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "extra == 'yolo'", specifier = "==1.23.2" },
-    { name = "onnxslim", marker = "extra == 'yolo'", specifier = "==0.1.80" },
     { name = "open-image-models", extras = ["onnx"], marker = "extra == 'lpr'", specifier = ">=0.6.0" },
     { name = "opencv-python", specifier = "==4.10.0.84" },
     { name = "opennvr-ai-adapter", extras = ["yolo", "yolo11", "pose", "face", "blip", "vlm", "huggingface", "stt", "tts", "lpr"], marker = "extra == 'all'" },

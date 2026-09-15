@@ -59,11 +59,16 @@ dependencies = [
 #   uv sync --extra yolo11 --extra blip --extra cpu → counting + captions on CPU
 [project.optional-dependencies]
 
-# YOLOv8 ONNX adapter (yolov8_adapter) — lightweight, no torch needed
+# YOLOv8 ONNX adapter (yolov8_adapter) — lightweight, no torch needed.
+# What it needs to SERVE, and nothing else: adapters/yolov8/ imports
+# onnxruntime, cv2 and numpy, and adapters/yolov8/Dockerfile installs
+# onnxruntime alone. onnx and onnxslim used to sit here as well; they are
+# the ultralytics EXPORT step (download_models.py), which also needs
+# ultralytics — never listed here either, because it drags torch in — so
+# the two of them were dead weight when serving and still not enough to
+# export with. The export recipe names all three where it lives.
 yolo = [
     "onnxruntime==1.23.2",
-    "onnx==1.20.0",
-    "onnxslim==0.1.80",
 ]
 
 # YOLOv11 PyTorch adapter with ByteTrack (yolov11_adapter)
@@ -96,7 +101,10 @@ pose = [
     "websockets>=12,<18",
 ]
 
-# InsightFace face recognition adapter (insightface_adapter)
+# InsightFace face recognition adapter (insightface_adapter).
+# Unlike yolo/pose, the `onnx` here is NOT an export leftover: insightface
+# itself requires onnx>=1.13, so this line is a deliberate version pin on
+# a dependency the adapter really does load. Leave it.
 face = [
     "insightface>=0.7.3",
     "onnx==1.20.0",
