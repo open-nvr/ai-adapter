@@ -135,7 +135,11 @@ def _ultralytics_export(
         # ultralytics is an AUTHORING dep, not a runtime one: it pulls
         # torch, so the lean ONNX extras (yolo, pose) deliberately leave
         # it out. Name both ways to get it rather than sending the reader
-        # to an extra that doesn't carry it.
+        # to an extra that doesn't carry it. onnx is a hard requirement of
+        # ultralytics' ONNX export; onnxslim is optional (simplify=True is
+        # the default and the slim step is wrapped upstream) and named
+        # here so an export is reproducible rather than silently
+        # unslimmed.
         print(
             f"  ✗ ultralytics not installed — it is needed only to export "
             f"{filename}. Run `uv sync --extra yolo11` (pulls torch), or "
