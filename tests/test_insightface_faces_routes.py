@@ -168,3 +168,41 @@ def test_patch_rejects_unknown_fields_blank_names_and_missing_people(insightface
     assert insightface_app.patch("/faces/alice", json={"name": "  "}).status_code == 422
     assert insightface_app.patch("/faces/alice", json={"metadata": "x"}).status_code == 422
     assert insightface_app.patch("/faces/nobody", json={"name": "N"}).status_code == 404
+
+
+def test_append_adds_a_sample_and_matching_uses_the_best_one(insightface_app, insightface_environment):
+    """Two photos of Alice; a query near the second must still be Alice,
+    with the similarity of the closer sample — not a blend."""
+    files = {"frame": ("alice.jpg", insightface_environment["sample_jpeg"], "image/jpeg")}
+    first = insightface_app.post("/faces/register", data=_register_payload(), files=files).json()["face"]
+    assert first["samples"] == 1
+
+    second = insightface_app.post(
+        "/faces/register", files=files,
+        data={"person_id": "alice", "name": "", "category": "", "append": "true"},
+    )
+    assert second.status_code == 200, second.text
+    face = second.json()["face"]
+    assert face["samples"] == 2
+    assert face["name"] == "Alice Smith" and face["category"] == "family"   # kept
+    assert face["metadata"]["role"] == "owner"                              # kept
+
+    # Without append, the same call replaces: back to one sample, and a
+    # blank name is now an error again.
+    replaced = insightface_app.post("/faces/register", data=_register_payload(name="Alice S."), files=files)
+    assert replaced.json()["face"]["samples"] == 1
+    assert replaced.json()["face"]["name"] == "Alice S."
+    assert insightface_app.post("/faces/register", files=files,
+                                data={"person_id": "nobody", "name": "", "append": "true"}).status_code == 400
+
+
+def test_remove_sample_keeps_at_least_one(insightface_app, insightface_environment):
+    files = {"frame": ("alice.jpg", insightface_environment["sample_jpeg"], "image/jpeg")}
+    insightface_app.post("/faces/register", data=_register_payload(), files=files)
+    insightface_app.post("/faces/register", files=files, data={"person_id": "alice", "name": "", "append": "true"})
+    assert insightface_app.get("/faces/alice").json()["face"]["samples"] == 2
+    assert insightface_app.delete("/faces/alice/samples/7").status_code == 404   # no such sample
+    assert insightface_app.delete("/faces/nobody/samples/0").status_code == 404
+    ok = insightface_app.delete("/faces/alice/samples/0")
+    assert ok.status_code == 200 and ok.json()["face"]["samples"] == 1
+    assert insightface_app.delete("/faces/alice/samples/0").status_code == 409   # the last one

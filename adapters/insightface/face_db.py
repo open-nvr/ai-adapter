@@ -29,25 +29,50 @@ from typing import Any, Iterable
 logger = logging.getLogger(__name__)
 
 
+#: The most samples one person keeps. Enough to cover angles, lighting,
+#: glasses on and off, day and night (the products that do this well
+#: recommend 5-10 to start, 20-30 for robust matching); bounded so a
+#: door that keeps adding captures cannot grow one record without limit.
+MAX_SAMPLES_PER_PERSON = 32
+
+
 @dataclass
 class FaceRecord:
-    """One registered face."""
+    """One registered person: a set of face samples, not one face.
+
+    Each sample is an L2-normalised 512-d embedding from one photo. A
+    match is the best similarity across the samples, so the porch
+    camera's 30-degree night view of Alice can be enrolled alongside
+    her straight-on daytime selfie and both will recognise her."""
     person_id: str
     name: str
-    embedding: list[float]  # L2-normalised, 512-d
+    embeddings: list[list[float]]
     category: str = "unknown"
     metadata: dict[str, Any] = field(default_factory=dict)
     registered_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    @property
+    def embedding(self) -> list[float]:
+        """The first sample — kept for callers that predate multi-sample
+        records."""
+        return self.embeddings[0]
+
+    def similarity(self, query: list[float]) -> float:
+        """Best cosine similarity across this person's samples."""
+        return max(_dot(query, e) for e in self.embeddings)
 
     def to_public_dict(self) -> dict[str, Any]:
-        """Public-facing dict — drops the embedding (clients don't need
-        the vector, it's an internal detail)."""
+        """Public-facing dict — drops the vectors (an internal detail)
+        but says how many there are."""
         return {
             "person_id": self.person_id,
             "name": self.name,
             "category": self.category,
             "metadata": dict(self.metadata),
+            "samples": len(self.embeddings),
             "registered_at": self.registered_at,
+            "updated_at": self.updated_at,
         }
 
 
@@ -71,29 +96,65 @@ class FaceDB:
         embedding: list[float] | Any,
         category: str = "unknown",
         metadata: dict[str, Any] | None = None,
+        append: bool = False,
     ) -> FaceRecord:
-        """Register or update a person. Idempotent — re-registering the
-        same ``person_id`` overwrites the embedding (useful for
-        re-enrolling after a haircut, new glasses, etc.)."""
+        """Register a person from one photo, or add a photo to them.
+
+        ``append=False`` (the default, and the historical behaviour)
+        replaces the person: one fresh sample, the given name, category
+        and metadata. ``append=True`` on an existing person ADDS the
+        sample and merges metadata, keeping name and category unless
+        non-blank ones are given; on a new person it simply registers.
+        The sample list is capped at MAX_SAMPLES_PER_PERSON, oldest
+        dropped first."""
         if not person_id or not person_id.strip():
             raise ValueError("person_id is required")
-        if not name or not name.strip():
-            raise ValueError("name is required")
+        pid = person_id.strip()
+        normalised = _l2_normalise(_ensure_list(embedding))
+        cat = (category or "").strip()
 
-        embedding_list = _ensure_list(embedding)
-        normalised = _l2_normalise(embedding_list)
-
-        record = FaceRecord(
-            person_id=person_id.strip(),
-            name=name.strip(),
-            embedding=normalised,
-            category=(category or "unknown").strip() or "unknown",
-            metadata=dict(metadata or {}),
-        )
         with self._lock:
-            self._records[record.person_id] = record
+            existing = self._records.get(pid) if append else None
+            if existing is not None:
+                if name and name.strip():
+                    existing.name = name.strip()
+                if cat:
+                    existing.category = cat
+                if metadata:
+                    existing.metadata = {**existing.metadata, **metadata}
+                existing.embeddings.append(normalised)
+                if len(existing.embeddings) > MAX_SAMPLES_PER_PERSON:
+                    del existing.embeddings[: len(existing.embeddings) - MAX_SAMPLES_PER_PERSON]
+                existing.updated_at = time.time()
+                self._save()
+                return existing
+            if not name or not name.strip():
+                raise ValueError("name is required")
+            record = FaceRecord(
+                person_id=pid,
+                name=name.strip(),
+                embeddings=[normalised],
+                category=cat or "unknown",
+                metadata=dict(metadata or {}),
+            )
+            self._records[pid] = record
             self._save()
-        return record
+            return record
+
+    def remove_sample(self, person_id: str, index: int) -> FaceRecord | None:
+        """Drop one sample (a bad capture that got added). The last
+        sample cannot be removed — delete the person instead. Returns
+        None for an unknown person; raises IndexError for a bad index."""
+        with self._lock:
+            record = self._records.get(person_id)
+            if record is None:
+                return None
+            if len(record.embeddings) <= 1:
+                raise ValueError("a person must keep at least one sample; delete the person instead")
+            del record.embeddings[index]      # IndexError propagates
+            record.updated_at = time.time()
+            self._save()
+            return record
 
     def get(self, person_id: str) -> FaceRecord | None:
         with self._lock:
@@ -179,7 +240,7 @@ class FaceDB:
             for record in self._records.values():
                 if category is not None and record.category != category:
                     continue
-                sim = _dot(query, record.embedding)
+                sim = record.similarity(query)
                 if sim < threshold:
                     continue
                 if best is None:
@@ -218,7 +279,7 @@ class FaceDB:
             for record in self._records.values():
                 if category is not None and record.category != category:
                     continue
-                sim = _dot(query, record.embedding)
+                sim = record.similarity(query)
                 if sim >= threshold:
                     hits.append((sim, record))
         hits.sort(key=lambda pair: pair[0], reverse=True)
@@ -250,13 +311,23 @@ class FaceDB:
             if not isinstance(entry, dict):
                 continue
             try:
+                # schema 1 stored one ``embedding``; schema 2 stores
+                # ``embeddings``. Read both, write only the new shape.
+                if "embeddings" in entry:
+                    vectors = [[float(v) for v in e] for e in entry["embeddings"]]
+                else:
+                    vectors = [[float(v) for v in entry["embedding"]]]
+                if not vectors:
+                    raise ValueError("no samples")
+                registered = float(entry.get("registered_at", time.time()))
                 self._records[entry["person_id"]] = FaceRecord(
                     person_id=str(entry["person_id"]),
                     name=str(entry["name"]),
-                    embedding=[float(v) for v in entry["embedding"]],
+                    embeddings=vectors,
                     category=str(entry.get("category", "unknown")),
                     metadata=dict(entry.get("metadata", {})),
-                    registered_at=float(entry.get("registered_at", time.time())),
+                    registered_at=registered,
+                    updated_at=float(entry.get("updated_at", registered)),
                 )
             except Exception:
                 logger.exception("face DB: skipping malformed entry %r", entry)
@@ -270,7 +341,7 @@ class FaceDB:
         # consistent if the process dies mid-write.
         tmp_path = path.with_suffix(path.suffix + ".tmp")
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "records": [asdict(r) for r in self._records.values()],
         }
         tmp_path.write_text(json.dumps(payload, indent=2))
