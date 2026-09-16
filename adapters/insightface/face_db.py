@@ -99,6 +99,40 @@ class FaceDB:
         with self._lock:
             return self._records.get(person_id)
 
+    def update(
+        self,
+        person_id: str,
+        *,
+        name: str | None = None,
+        category: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> FaceRecord | None:
+        """Change what is *said* about a person without touching the
+        embedding: a rename, a category move (friend → watchlist), or a
+        metadata merge (notes, an expiry date). ``None`` leaves a field
+        alone; metadata keys are merged over the existing dict, and a
+        key set to ``None`` is removed. Returns ``None`` if unknown."""
+        with self._lock:
+            record = self._records.get(person_id)
+            if record is None:
+                return None
+            if name is not None:
+                if not name.strip():
+                    raise ValueError("name must not be blank")
+                record.name = name.strip()
+            if category is not None:
+                record.category = category.strip() or "unknown"
+            if metadata:
+                merged = dict(record.metadata)
+                for key, value in metadata.items():
+                    if value is None:
+                        merged.pop(key, None)
+                    else:
+                        merged[key] = value
+                record.metadata = merged
+            self._save()
+            return record
+
     def delete(self, person_id: str) -> bool:
         with self._lock:
             removed = self._records.pop(person_id, None) is not None
