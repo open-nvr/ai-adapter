@@ -241,6 +241,41 @@ async def get_face(person_id: str) -> dict[str, Any]:
     return {"face": record.to_public_dict()}
 
 
+@app.patch("/faces/{person_id}")
+async def update_face(person_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    """Edit name / category / metadata without a new photo (the Smart
+    Doorbell's People page: rename, move to watchlist, set an expiry,
+    add notes). JSON body; absent fields are untouched, metadata is
+    merged, a metadata key sent as null is removed. The embedding never
+    changes here — re-register for that."""
+    if not isinstance(changes, dict):
+        raise HTTPException(status_code=422, detail="body must be a JSON object")
+    unknown = set(changes) - {"name", "category", "metadata"}
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown field(s): {', '.join(sorted(unknown))}",
+        )
+    metadata = changes.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise HTTPException(status_code=422, detail="metadata must be a JSON object")
+    try:
+        record = _SHARED_FACE_DB.update(
+            person_id,
+            name=changes.get("name"),
+            category=changes.get("category"),
+            metadata=metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no registered face with person_id={person_id!r}",
+        )
+    return {"ok": True, "face": record.to_public_dict()}
+
+
 @app.delete("/faces/{person_id}")
 async def delete_face(person_id: str) -> dict[str, Any]:
     removed = _SHARED_FACE_DB.delete(person_id)

@@ -133,3 +133,38 @@ def test_delete_round_trip(insightface_app, insightface_environment):
     # Second delete is now a 404.
     again = insightface_app.delete("/faces/alice")
     assert again.status_code == 404
+
+
+def test_patch_edits_name_category_and_merges_metadata(insightface_app, insightface_environment):
+    files = {"frame": ("alice.jpg", insightface_environment["sample_jpeg"], "image/jpeg")}
+    insightface_app.post("/faces/register", data=_register_payload(), files=files)
+
+    resp = insightface_app.patch("/faces/alice", json={
+        "category": "watchlist",
+        "metadata": {"notes": "Flat 4B", "valid_until": "2026-12-31"},
+    })
+    assert resp.status_code == 200, resp.text
+    face = resp.json()["face"]
+    assert face["category"] == "watchlist"
+    assert face["name"] == "Alice Smith"            # untouched
+    assert face["metadata"]["notes"] == "Flat 4B"
+
+    # A second patch merges: the note survives, the expiry is removed.
+    resp = insightface_app.patch("/faces/alice", json={"metadata": {"valid_until": None}})
+    face = resp.json()["face"]
+    assert face["metadata"]["notes"] == "Flat 4B"
+    assert "valid_until" not in face["metadata"]
+    assert face["metadata"]["role"] == "owner"       # what register set, still there
+
+    # The embedding is intact: recognition still works is covered by the
+    # service tests; here, the record is still listed once.
+    assert insightface_app.get("/faces").json()["count"] == 1
+
+
+def test_patch_rejects_unknown_fields_blank_names_and_missing_people(insightface_app, insightface_environment):
+    files = {"frame": ("alice.jpg", insightface_environment["sample_jpeg"], "image/jpeg")}
+    insightface_app.post("/faces/register", data=_register_payload(), files=files)
+    assert insightface_app.patch("/faces/alice", json={"embedding": [1, 2]}).status_code == 422
+    assert insightface_app.patch("/faces/alice", json={"name": "  "}).status_code == 422
+    assert insightface_app.patch("/faces/alice", json={"metadata": "x"}).status_code == 422
+    assert insightface_app.patch("/faces/nobody", json={"name": "N"}).status_code == 404
