@@ -40,6 +40,7 @@ dependencies = [
 #
 #   uv sync --extra yolo          → YOLOv8 person detection (ONNX, CPU-friendly)
 #   uv sync --extra yolo11        → YOLOv11 person counting with ByteTrack
+#   uv sync --extra pose          → YOLO11n-pose human keypoints (ONNX, CPU-first)
 #   uv sync --extra face          → InsightFace recognition (ArcFace, Buffalo-L)
 #   uv sync --extra blip          → BLIP scene captioning (local, needs torch)
 #   uv sync --extra huggingface   → HuggingFace cloud inference proxy
@@ -58,11 +59,16 @@ dependencies = [
 #   uv sync --extra yolo11 --extra blip --extra cpu → counting + captions on CPU
 [project.optional-dependencies]
 
-# YOLOv8 ONNX adapter (yolov8_adapter) — lightweight, no torch needed
+# YOLOv8 ONNX adapter (yolov8_adapter) — lightweight, no torch needed.
+# What it needs to SERVE, and nothing else: adapters/yolov8/ imports
+# onnxruntime, cv2 and numpy, and adapters/yolov8/Dockerfile installs
+# onnxruntime alone. onnx and onnxslim used to sit here as well; they are
+# the ultralytics EXPORT step (download_models.py), which also needs
+# ultralytics — never listed here either, because it drags torch in — so
+# the two of them were dead weight when serving and still not enough to
+# export with. The export recipe names all three where it lives.
 yolo = [
     "onnxruntime==1.23.2",
-    "onnx==1.20.0",
-    "onnxslim==0.1.80",
 ]
 
 # YOLOv11 PyTorch adapter with ByteTrack (yolov11_adapter)
@@ -74,7 +80,31 @@ yolo11 = [
     "protobuf>=6.33.2",
 ]
 
-# InsightFace face recognition adapter (insightface_adapter)
+# YOLO-pose ONNX adapter (adapters/yolo_pose) — human keypoints, CPU-first.
+# What the adapter actually needs to SERVE, and nothing else (CONTRIBUTING,
+# Path A): onnxruntime to run the graph, plus the OpenCV/numpy already in
+# core. adapters/yolo_pose/ imports exactly onnxruntime, cv2 and numpy —
+# and the image (adapters/yolo_pose/Dockerfile) installs no onnx, no
+# onnxslim, no ultralytics, and passes conformance.
+#
+# The .pt -> .onnx export is an authoring task on a development machine,
+# not a runtime dep, so its three packages (ultralytics, onnx, onnxslim)
+# live with the recipe in adapters/yolo_pose/README.md. Listing two of
+# the three here would be the worst of both: dependencies that are dead
+# weight in the serving profile and still not enough to export with.
+pose = [
+    "onnxruntime==1.23.2",
+    # Serving dep, not a model dep: bare uvicorn has no WebSocket
+    # implementation, so /infer/stream answers the upgrade with a 404
+    # unless one is installed. Streaming is this adapter's primary
+    # path, so it is not optional here.
+    "websockets>=12,<18",
+]
+
+# InsightFace face recognition adapter (insightface_adapter).
+# Unlike yolo/pose, the `onnx` here is NOT an export leftover: insightface
+# itself requires onnx>=1.13, so this line is a deliberate version pin on
+# a dependency the adapter really does load. Leave it.
 face = [
     "insightface>=0.7.3",
     "onnx==1.20.0",
@@ -199,7 +229,7 @@ dev = [
 # Backward-compatible "install everything" profile
 # Equivalent to the old plain `uv sync` that had all deps in [project.dependencies]
 all = [
-    "opennvr-ai-adapter[yolo,yolo11,face,blip,vlm,huggingface,stt,tts,lpr]",
+    "opennvr-ai-adapter[yolo,yolo11,pose,face,blip,vlm,huggingface,stt,tts,lpr]",
 ]
 
 # ── PyTorch index source ───────────────────────────────────────────────────────

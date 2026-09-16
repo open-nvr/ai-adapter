@@ -102,6 +102,9 @@ class ConformanceRunner:
     SAMPLE_INFER_PAYLOADS: dict[str, dict[str, Any]] = {
         "speech_synthesis": {"text": "Conformance check: hello, world."},
         "object_detection": {"confidence_threshold": 0.5},
+        # Pose adapters take image bytes over multipart like any other
+        # vision adapter; this JSON payload is only the fallback path.
+        "pose_estimation": {"conf": 0.5},
         # ASR adapters receive audio bytes via the multipart path (see
         # _post_multipart_audio below); this JSON payload is a no-op
         # fallback for adapters that don't accept multipart for some
@@ -144,6 +147,11 @@ class ConformanceRunner:
         "face_detection": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
         "face_recognition": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
         "face_embedding": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
+        # Pose — a 1x1 black frame contains no person, so the adapter
+        # answers with an empty ``persons`` list. That is the point:
+        # the check is on the wire shape and the §6 roundtrip, not on
+        # the model finding anything.
+        "pose_estimation": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
     }
 
     # ── Sample audio for ASR adapters ──────────────────────────────
@@ -632,13 +640,32 @@ class ConformanceRunner:
             )
 
         ws_url = self.base_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1) + "/infer/stream"
-        extra_headers = {}
+        headers = {}
         if self._token:
-            extra_headers["Authorization"] = f"Bearer {self._token}"
+            headers["Authorization"] = f"Bearer {self._token}"
+
+        # websockets 14.0 replaced the legacy asyncio client with a new
+        # one and renamed this parameter extra_headers -> additional_headers.
+        # Passing the old name to a new install is a TypeError from deep
+        # inside BaseEventLoop.create_connection, which reads like a bug in
+        # the ADAPTER being tested rather than in this kit — so ask the
+        # library which name it takes instead of pinning a version. Every
+        # adapter that advertises streaming runs this check.
+        import inspect
+
+        try:
+            _params = inspect.signature(websockets.connect).parameters
+            header_kwarg = (
+                "additional_headers" if "additional_headers" in _params
+                else "extra_headers"
+            )
+        except (TypeError, ValueError):       # pragma: no cover - exotic builds
+            header_kwarg = "extra_headers"
+        connect_kwargs = {header_kwarg: headers}
 
         async def _exercise() -> tuple[bool, str]:
             try:
-                async with websockets.connect(ws_url, extra_headers=extra_headers) as ws:
+                async with websockets.connect(ws_url, **connect_kwargs) as ws:
                     await ws.send(json.dumps({
                         "type": "handshake",
                         "client_id": "conformance",

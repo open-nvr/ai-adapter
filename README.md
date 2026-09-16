@@ -78,7 +78,7 @@ app = AdapterApp(
 
 ## What ships
 
-The repo is two things in one. The [`opennvr_adapter_sdk/`](opennvr_adapter_sdk/) directory is the small Apache-2.0 SDK published to PyPI — three classes (`AdapterService`, `AdapterApp`, `ServiceError`), a handful of result models, zero ML dependencies. Adapter authors install it from PyPI and never need to clone this repo. The [`adapters/`](adapters/) directory is the eight reference adapters that ship as standalone Docker images on GHCR (`ghcr.io/open-nvr/*-adapter`) — each is a working example of an SDK-based adapter, and Tier 0 of OpenNVR pulls them by tag.
+The repo is two things in one. The [`opennvr_adapter_sdk/`](opennvr_adapter_sdk/) directory is the small Apache-2.0 SDK published to PyPI — three classes (`AdapterService`, `AdapterApp`, `ServiceError`), a handful of result models, zero ML dependencies. Adapter authors install it from PyPI and never need to clone this repo. The [`adapters/`](adapters/) directory is the nine reference adapters that ship as standalone Docker images on GHCR (`ghcr.io/open-nvr/*-adapter`) — each is a working example of an SDK-based adapter, and Tier 0 of OpenNVR pulls them by tag.
 
 ```
 ai-adapter/
@@ -91,6 +91,7 @@ ai-adapter/
 │   ├── insightface/          Face detection + recognition with REST face DB
 │   ├── blip/                 Scene captioning — used by the camera-agent
 │   ├── vlm/                  Open-vocabulary detection — OWL-ViT v2, detects free-text queries ("red truck")
+│   ├── yolo_pose/            Human pose — COCO-17 body keypoints per person, ONNX, CPU-first
 │   └── bytetrack/            Multi-object tracking — stateful post-processor over an upstream detector
 ├── templates/adapter-template/   Scaffold a new adapter in one command
 ├── conformance/              Wire-contract conformance test suite
@@ -98,7 +99,7 @@ ai-adapter/
 └── docs/                     Architecture, plugin dev, API reference
 ```
 
-Each of the eight shipped adapters lives in its own directory with its own `pyproject.toml`, Dockerfile, README, and tests. Replicate the shape, swap the model, and you have a new adapter.
+Each of the nine shipped adapters lives in its own directory with its own `pyproject.toml`, Dockerfile, README, and tests. Replicate the shape, swap the model, and you have a new adapter.
 
 ## Write your own adapter
 
@@ -192,7 +193,7 @@ Apple Silicon Mac or a Raspberry Pi 5 pulls a native image with no
 
 | Adapter images | amd64 | arm64 |
 |---|:---:|:---:|
-| `yolov8`, `piper`, `whisper`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm` | ✓ | ✓ |
+| `yolov8`, `piper`, `whisper`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm`, `yolo-pose` | ✓ | ✓ |
 
 (The former amd64-only pair — `llamacpp` and `smolvlm`, blocked on
 [ggml-org/llama.cpp#19177](https://github.com/ggml-org/llama.cpp/issues/19177) —
