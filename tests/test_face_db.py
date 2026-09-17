@@ -113,7 +113,7 @@ def test_persistence_round_trip_atomic() -> None:
         assert not os.path.exists(path + ".tmp"), "tmp file should be renamed"
 
         raw = json.loads(open(path).read())
-        assert raw["schema_version"] == 1
+        assert raw["schema_version"] == 2   # bumped by the multi-sample records
         assert raw["records"][0]["person_id"] == "alice"
         assert raw["records"][0]["category"] == "family"
 
