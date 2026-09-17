@@ -325,3 +325,39 @@ def test_low_confidence_faces_are_filtered_before_recognition(
     monkeypatch.setattr(svc._face_app, "get", lambda img: [FakeFace(det_score=0.10)])
     resp = svc.infer({"__file__": sample_jpeg, "task": "face_detection"})
     assert resp.result["face_count"] == 0
+
+
+def test_face_db_matches_the_best_of_several_samples(tmp_path):
+    """Multi-sample records: the porch-angle sample recognises the porch
+    view; a schema-1 file (one ``embedding``) still loads."""
+    import json
+    from adapters.insightface.face_db import FaceDB, MAX_SAMPLES_PER_PERSON
+
+    db = FaceDB(str(tmp_path / "faces.json"))
+    straight = [1.0, 0.0, 0.0, 0.0]
+    angled = [0.0, 1.0, 0.0, 0.0]
+    db.register(person_id="alice", name="Alice", embedding=straight)
+    assert db.best_match(angled, threshold=0.5) is None            # one sample: the angle misses
+    db.register(person_id="alice", name="", embedding=angled, append=True)
+    hit = db.best_match(angled, threshold=0.5)
+    assert hit is not None and hit["person_id"] == "alice" and hit["similarity"] == 1.0
+    assert db.best_match(straight, threshold=0.5)["similarity"] == 1.0
+    assert db.get("alice").to_public_dict()["samples"] == 2
+
+    # The cap drops the oldest, never the newest.
+    for i in range(MAX_SAMPLES_PER_PERSON + 5):
+        db.register(person_id="alice", name="", embedding=[0.0, 0.0, 1.0, float(i + 1)], append=True)
+    assert len(db.get("alice").embeddings) == MAX_SAMPLES_PER_PERSON
+
+    # Persisted as schema 2 and reloaded intact.
+    again = FaceDB(str(tmp_path / "faces.json"))
+    assert len(again.get("alice").embeddings) == MAX_SAMPLES_PER_PERSON
+
+    # A schema-1 file still loads (one embedding becomes one sample).
+    legacy = tmp_path / "old.json"
+    legacy.write_text(json.dumps({"schema_version": 1, "records": [
+        {"person_id": "bob", "name": "Bob", "embedding": [0, 0, 0, 1], "category": "staff",
+         "metadata": {}, "registered_at": 1.0}]}))
+    old = FaceDB(str(legacy))
+    assert old.get("bob").embeddings == [[0.0, 0.0, 0.0, 1.0]]
+    assert old.best_match([0, 0, 0, 1], threshold=0.9)["person_id"] == "bob"

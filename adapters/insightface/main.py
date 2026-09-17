@@ -129,19 +129,25 @@ app = _adapter_app.fastapi_app
 async def register_face(
     frame: UploadFile = File(..., description="JPEG/PNG face image"),
     person_id: str = Form(..., description="Stable id used in recognition responses"),
-    name: str = Form(..., description="Display name"),
-    category: str = Form("unknown", description="e.g. 'family' / 'friend' / 'watchlist'"),
+    name: str = Form("", description="Display name (required unless appending to an existing person)"),
+    category: str = Form("", description="e.g. 'family' / 'friend' / 'watchlist'; unknown when blank on a new person"),
     metadata: str = Form("{}", description="Optional JSON object string"),
+    append: bool = Form(False, description="Add this photo to an existing person "
+                                           "instead of replacing them"),
 ) -> dict[str, Any]:
-    """Register or update a face. Multipart-only (the natural shape
-    for a file upload). Idempotent — re-registering the same
-    ``person_id`` overwrites the embedding (useful for re-enrollment
-    after a haircut, new glasses, etc.)."""
+    """Register a person from a photo, or add a photo to them.
+
+    Multipart-only (the natural shape for a file upload). Without
+    ``append`` this replaces the person's samples — the historical
+    behaviour, right for "start over after a haircut". With ``append``
+    the sample is added to the person's set and matching uses the best
+    of them, which is how a doorbell learns the porch camera's own
+    angles and lighting one capture at a time."""
     person_id_clean = person_id.strip()
     name_clean = name.strip()
     if not person_id_clean:
         raise HTTPException(status_code=400, detail="person_id is required")
-    if not name_clean:
+    if not name_clean and not (append and _SHARED_FACE_DB.get(person_id_clean)):
         raise HTTPException(status_code=400, detail="name is required")
 
     try:
@@ -213,14 +219,30 @@ async def register_face(
         person_id=person_id_clean,
         name=name_clean,
         embedding=embedding,
-        category=(category or "unknown").strip() or "unknown",
+        category=(category or ("" if append else "unknown")).strip(),
         metadata=metadata_obj,
+        append=append,
     )
     return {
         "ok": True,
         "face": record.to_public_dict(),
         "face_bbox": embedding_response.result.get("face_bbox"),
     }
+
+
+@app.delete("/faces/{person_id}/samples/{index}")
+async def delete_face_sample(person_id: str, index: int) -> dict[str, Any]:
+    """Drop one sample from a person — a capture that turned out to be
+    someone else, or a blurry one. The last sample cannot be removed."""
+    try:
+        record = _SHARED_FACE_DB.remove_sample(person_id, index)
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"no sample {index} on {person_id!r}") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"no registered face with person_id={person_id!r}")
+    return {"ok": True, "face": record.to_public_dict()}
 
 
 @app.get("/faces")
