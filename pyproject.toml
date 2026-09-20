@@ -41,6 +41,7 @@ dependencies = [
 #   uv sync --extra yolo          → YOLOv8 person detection (ONNX, CPU-friendly)
 #   uv sync --extra yolo11        → YOLOv11 person counting with ByteTrack
 #   uv sync --extra pose          → YOLO11n-pose human keypoints (ONNX, CPU-first)
+#   uv sync --extra package       → package-detection parcels on a doorstep (ONNX, CPU, on demand)
 #   uv sync --extra face          → InsightFace recognition (ArcFace, Buffalo-L)
 #   uv sync --extra blip          → BLIP scene captioning (local, needs torch)
 #   uv sync --extra huggingface   → HuggingFace cloud inference proxy
@@ -99,6 +100,15 @@ pose = [
     # unless one is installed. Streaming is this adapter's primary
     # path, so it is not optional here.
     "websockets>=12,<18",
+]
+
+# Package-detection ONNX adapter (adapters/package_detection) — parcels.
+# Same serving stack as yolo/pose: onnxruntime plus the OpenCV/numpy in
+# core, nothing else. No websockets — it serves HTTP /infer only. The
+# training/export recipe (ultralytics, onnx, onnxslim, roboflow) is an
+# authoring task in adapters/package_detection/train_package_model.py.
+package = [
+    "onnxruntime==1.23.2",
 ]
 
 # InsightFace face recognition adapter (insightface_adapter).
@@ -229,7 +239,7 @@ dev = [
 # Backward-compatible "install everything" profile
 # Equivalent to the old plain `uv sync` that had all deps in [project.dependencies]
 all = [
-    "opennvr-ai-adapter[yolo,yolo11,pose,face,blip,vlm,huggingface,stt,tts,lpr]",
+    "opennvr-ai-adapter[yolo,yolo11,pose,package,face,blip,vlm,huggingface,stt,tts,lpr]",
 ]
 
 # ── PyTorch index source ───────────────────────────────────────────────────────

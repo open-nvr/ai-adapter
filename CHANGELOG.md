@@ -11,6 +11,33 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`package-detection` adapter** — contract-v1 `package_detection` on
+  port 9010: parcels on a doorstep, the one class COCO does not have.
+  A YOLOv8n fine-tuned on two openly licensed doorstep sets (*package at
+  front door*, 1,293 images, MIT; Roboflow's *Packages*, CC0) on
+  `onnxruntime`, returning §5.1 `detections` with the label `package`,
+  normalized boxes un-letterboxed into the source frame, plus `count`
+  and a `labels` echo. Advertises ONLY `package_detection` — a
+  one-class model must not satisfy an app whose `object_detection`
+  means people and vehicles. On demand over HTTP `/infer`, no stream:
+  its consumer (open-nvr's `package-delivery` app) asks once when
+  Tier-0 says somebody left the doorstep and on a slow recheck cadence,
+  and picks this adapter over VQA and over the COCO bag-class stand-in
+  the moment it registers. Trained 40 epochs at 416 px on 1,242
+  images; on the held-out test split precision 0.974, recall 0.804,
+  mAP50 0.914, mAP50-95 0.631 — precise before it is complete, which
+  is the right way round for a consumer that re-counts on a cadence
+  and must not invent a delivery. CPU is the design target: 11.7 MB
+  ONNX, 23–34 ms per frame on two x86 cores. Per-call `conf`, `iou`, `imgsz`,
+  `max_detections`; multi-class fine-tunes work unchanged through
+  `PACKAGE_DETECTION_LABELS`. Domain metrics
+  `adapter_package_frames_total{result=packages|empty}` and
+  `adapter_packages_total{label}`. Weights are not baked: mounted, or
+  fetched once from `PACKAGE_DETECTION_MODEL_URL` (the release asset),
+  with `network_egress` derived from that setting. The training and
+  export recipe ships as `adapters/package_detection/train_package_model.py`,
+  including the hook for fine-tuning on a site's own frames.
+
 - **`yolo-pose` adapter** — contract-v1 `pose_estimation` on port 9009,
   wrapping a YOLO11n-pose ONNX model on `onnxruntime`. Returns a
   COCO-17 skeleton per person (`persons[].keypoints` — 17

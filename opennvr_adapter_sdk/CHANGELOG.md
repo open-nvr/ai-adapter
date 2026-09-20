@@ -9,6 +9,11 @@ the SDK uses semantic versioning aligned with the AI Adapter Contract major vers
 
 ### Added
 
+- **Conformance kit knows `package_detection`** — a sample multipart frame
+  and a JSON params fallback for the task, so an adapter advertising it
+  gets the real `infer` check instead of a "nothing to send" WARN. Same
+  1×1 JPEG the other vision tasks use; the check is on the wire shape.
+
 - **`Metrics.gauges()`** — a read-only snapshot of the live inflight and
   queue-depth gauges (plus active stream connections). `render()` already
   published these to Prometheus, but §6.4's `stats` control message has to

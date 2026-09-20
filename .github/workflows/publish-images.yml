@@ -182,6 +182,12 @@ jobs:
           # mounted rather than baked, so the image stays small and the
           # container boots with no network.
           - { dir: yolo_pose,      image: yolo-pose-adapter,      port: 9009, platforms: "linux/amd64,linux/arm64" }
+          # Parcels on a doorstep — the package_detection task COCO
+          # cannot provide. YOLOv8n fine-tuned on two openly licensed
+          # doorstep sets, ONNX on CPU, HTTP /infer on demand (no
+          # stream). Weights mounted or fetched once from
+          # PACKAGE_DETECTION_MODEL_URL, never baked.
+          - { dir: package_detection, image: package-detection-adapter, port: 9010, platforms: "linux/amd64,linux/arm64" }
           # Combined Whisper+Piper+BLIP in one image (issue #82): three voice
           # adapters, one container, same per-adapter /infer contract.
           - { dir: voice-bundle,   image: voice-adapter,          port: 9006, platforms: "linux/amd64,linux/arm64" }

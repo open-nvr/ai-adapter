@@ -71,6 +71,18 @@ MODEL_REGISTRY: dict[str, list[dict]] = {
             "export_kwargs": {"dynamic": True, "imgsz": 448, "opset": 12},
         }
     ],
+    # The package-detection contract adapter (adapters/package_detection/)
+    # — like yolo_pose, only fetched by `--all`. These weights are a
+    # fine-tune published as a release asset of this repository (not an
+    # Ultralytics download), so this is a plain URL. The adapter can also
+    # fetch it itself on first boot via PACKAGE_DETECTION_MODEL_URL.
+    "package_detection_adapter": [
+        {
+            "filename": "yolov8n-package.onnx",
+            "url": "https://github.com/open-nvr/ai-adapter/releases/download/package-detection-v1.0.0/yolov8n-package.onnx",
+            "size_hint": "~12 MB",
+        }
+    ],
     # insightface_adapter downloads its weights automatically via the InsightFace
     # library (buffalo_l pack) on first inference — no manual download needed.
     # huggingface_adapter fetches from HuggingFace Hub on first use.
