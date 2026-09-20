@@ -957,6 +957,9 @@ lpr = [
     { name = "fast-plate-ocr", extra = ["onnx"] },
     { name = "open-image-models", extra = ["onnx"] },
 ]
+package = [
+    { name = "onnxruntime" },
+]
 pose = [
     { name = "onnxruntime" },
     { name = "websockets" },
@@ -995,11 +998,12 @@ requires-dist = [
     { name = "numpy", specifier = "==1.26.4" },
     { name = "onnx", marker = "extra == 'face'", specifier = "==1.20.0" },
     { name = "onnxruntime", marker = "extra == 'face'", specifier = "==1.23.2" },
+    { name = "onnxruntime", marker = "extra == 'package'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "extra == 'pose'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "extra == 'yolo'", specifier = "==1.23.2" },
     { name = "open-image-models", extras = ["onnx"], marker = "extra == 'lpr'", specifier = ">=0.6.0" },
     { name = "opencv-python", specifier = "==4.10.0.84" },
-    { name = "opennvr-ai-adapter", extras = ["yolo", "yolo11", "pose", "face", "blip", "vlm", "huggingface", "stt", "tts", "lpr"], marker = "extra == 'all'" },
+    { name = "opennvr-ai-adapter", extras = ["yolo", "yolo11", "pose", "package", "face", "blip", "vlm", "huggingface", "stt", "tts", "lpr"], marker = "extra == 'all'" },
     { name = "pillow", specifier = "==12.0.0" },
     { name = "pillow", marker = "extra == 'vlm'", specifier = ">=10.0.0" },
     { name = "piper-tts", marker = "extra == 'tts'", specifier = ">=1.2.0" },
@@ -1023,7 +1027,7 @@ requires-dist = [
     { name = "uvicorn", specifier = "==0.40.0" },
     { name = "websockets", marker = "extra == 'pose'", specifier = ">=12,<18" },
 ]
-provides-extras = ["yolo", "yolo11", "pose", "face", "blip", "vlm", "huggingface", "stt", "tts", "lpr", "cpu", "gpu", "dev", "all"]
+provides-extras = ["yolo", "yolo11", "pose", "package", "face", "blip", "vlm", "huggingface", "stt", "tts", "lpr", "cpu", "gpu", "dev", "all"]
 
 [[package]]
 name = "packaging"
