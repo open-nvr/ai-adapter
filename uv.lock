@@ -426,6 +426,18 @@ wheels = [
 ]
 
 [[package]]
+name = "ftfy"
+version = "6.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/d3/8650919bc3c7c6e90ee3fa7fd618bf373cbbe55dff043bd67353dbb20cd8/ftfy-6.3.1.tar.gz", hash = "sha256:9b3c3d90f84fb267fe64d375a07b7f8912d817cf86009ae134aa03e1819506ec", size = 308927, upload-time = "2024-10-26T00:50:35.149Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/6e/81d47999aebc1b155f81eca4477a616a70f238a2549848c38983f3c22a82/ftfy-6.3.1-py3-none-any.whl", hash = "sha256:7c70eb532015cd2f9adb53f101fb6c7945988d023a085d127d1573dc49dd0083", size = 44821, upload-time = "2024-10-26T00:50:33.425Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -836,6 +848,25 @@ wheels = [
 ]
 
 [[package]]
+name = "open-clip-torch"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ftfy" },
+    { name = "huggingface-hub" },
+    { name = "regex" },
+    { name = "safetensors" },
+    { name = "timm" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4a/1f/2bc9795047fa2c1ad2567ef78ce6dfc9a7b763fa534acee09a94da2a5b8f/open_clip_torch-3.3.0.tar.gz", hash = "sha256:904b1a9f909df8281bb3de60ab95491cd2994a509177ea4f9d6292a84fe24d6d", size = 1503380, upload-time = "2026-02-27T00:32:46.74Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/b5/41c315ccd94ca332ead3e832e83eee343ab245005c3e43d9d3e75eae34eb/open_clip_torch-3.3.0-py3-none-any.whl", hash = "sha256:c549ad5ed6bfc119cc11105033c0a2b9d7a2a4afeb40a58a09aab3da1a0043ce", size = 1547268, upload-time = "2026-02-27T00:32:44.902Z" },
+]
+
+[[package]]
 name = "open-image-models"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -916,6 +947,7 @@ all = [
     { name = "networkx" },
     { name = "onnx" },
     { name = "onnxruntime" },
+    { name = "open-clip-torch" },
     { name = "open-image-models", extra = ["onnx"] },
     { name = "pillow" },
     { name = "piper-tts" },
@@ -928,6 +960,9 @@ all = [
 ]
 blip = [
     { name = "transformers" },
+]
+clip = [
+    { name = "open-clip-torch" },
 ]
 cpu = [
     { name = "torch" },
@@ -1001,9 +1036,10 @@ requires-dist = [
     { name = "onnxruntime", marker = "extra == 'package'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "extra == 'pose'", specifier = "==1.23.2" },
     { name = "onnxruntime", marker = "extra == 'yolo'", specifier = "==1.23.2" },
+    { name = "open-clip-torch", marker = "extra == 'clip'", specifier = ">=2.24,<4" },
     { name = "open-image-models", extras = ["onnx"], marker = "extra == 'lpr'", specifier = ">=0.6.0" },
     { name = "opencv-python", specifier = "==4.10.0.84" },
-    { name = "opennvr-ai-adapter", extras = ["yolo", "yolo11", "pose", "package", "face", "blip", "vlm", "huggingface", "stt", "tts", "lpr"], marker = "extra == 'all'" },
+    { name = "opennvr-ai-adapter", extras = ["yolo", "yolo11", "pose", "package", "face", "blip", "vlm", "clip", "huggingface", "stt", "tts", "lpr"], marker = "extra == 'all'" },
     { name = "pillow", specifier = "==12.0.0" },
     { name = "pillow", marker = "extra == 'vlm'", specifier = ">=10.0.0" },
     { name = "piper-tts", marker = "extra == 'tts'", specifier = ">=1.2.0" },
@@ -1027,7 +1063,7 @@ requires-dist = [
     { name = "uvicorn", specifier = "==0.40.0" },
     { name = "websockets", marker = "extra == 'pose'", specifier = ">=12,<18" },
 ]
-provides-extras = ["yolo", "yolo11", "pose", "package", "face", "blip", "vlm", "huggingface", "stt", "tts", "lpr", "cpu", "gpu", "dev", "all"]
+provides-extras = ["yolo", "yolo11", "pose", "package", "clip", "face", "blip", "vlm", "huggingface", "stt", "tts", "lpr", "cpu", "gpu", "dev", "all"]
 
 [[package]]
 name = "packaging"
@@ -1681,6 +1717,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c5/cb/2f6d79c7576e22c116352a801f4c3c8ace5957e9aced862012430b62e14f/tifffile-2026.3.3.tar.gz", hash = "sha256:d9a1266bed6f2ee1dd0abde2018a38b4f8b2935cb843df381d70ac4eac5458b7", size = 388745, upload-time = "2026-03-03T19:14:38.134Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/e4/e804505f87627cd8cdae9c010c47c4485fd8c1ce31a7dd0ab7fcc4707377/tifffile-2026.3.3-py3-none-any.whl", hash = "sha256:e8be15c94273113d31ecb7aa3a39822189dd11c4967e3cc88c178f1ad2fd1170", size = 243960, upload-time = "2026-03-03T19:14:35.808Z" },
+]
+
+[[package]]
+name = "timm"
+version = "1.0.30"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "torchvision" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/ab/49041213990e48edcb6013463b18ef86d8d3c5d6ac5b408802c480443025/timm-1.0.30.tar.gz", hash = "sha256:1444a3af7e17fdba5440ac2bcf6e4b728da96dd62289ed9e1bcba31a545f5935", size = 2534738, upload-time = "2026-09-22T20:46:13.9Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/85/b897716d0fa016af23b11e6526f5ef76d2013e8bc36b9c7ce15d9200e456/timm-1.0.30-py3-none-any.whl", hash = "sha256:c8e27adf6801a2fdfb570dbbdd171f2f084756eefc673df8cfaab06bd14864f3", size = 2668917, upload-time = "2026-09-22T20:46:12.11Z" },
 ]
 
 [[package]]

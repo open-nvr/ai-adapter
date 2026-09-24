@@ -42,6 +42,7 @@ dependencies = [
 #   uv sync --extra yolo11        → YOLOv11 person counting with ByteTrack
 #   uv sync --extra pose          → YOLO11n-pose human keypoints (ONNX, CPU-first)
 #   uv sync --extra package       → package-detection parcels on a doorstep (ONNX, CPU, on demand)
+#   uv sync --extra clip --extra cpu   → CLIP embeddings for semantic search
 #   uv sync --extra face          → InsightFace recognition (ArcFace, Buffalo-L)
 #   uv sync --extra blip          → BLIP scene captioning (local, needs torch)
 #   uv sync --extra huggingface   → HuggingFace cloud inference proxy
@@ -109,6 +110,22 @@ pose = [
 # authoring task in adapters/package_detection/train_package_model.py.
 package = [
     "onnxruntime==1.23.2",
+]
+
+# CLIP embedding adapter (adapters/clip) — the `embed` task: one vector
+# per frame, and one per QUERY IN WORDS, in the same space.
+# Requires torch — add --extra cpu or --extra gpu as well, exactly like
+# yolo11, blip and vlm. torch is NOT listed here: it is pinned once, in
+# the cpu/gpu extras, so the operator picks the wheel their hardware
+# wants instead of every extra fighting over it.
+#
+# pillow is not listed either — it is a core dependency at an exact pin
+# (see [project.dependencies]). Restating it here as a range is what
+# broke the lock: `pillow>=10,<12` excludes the pinned 12.0.0, and uv
+# resolves EVERY extra even for `uv sync --extra dev`, so a conflict in
+# an unused extra fails the whole install.
+clip = [
+    "open-clip-torch>=2.24,<4",
 ]
 
 # InsightFace face recognition adapter (insightface_adapter).
@@ -239,7 +256,7 @@ dev = [
 # Backward-compatible "install everything" profile
 # Equivalent to the old plain `uv sync` that had all deps in [project.dependencies]
 all = [
-    "opennvr-ai-adapter[yolo,yolo11,pose,package,face,blip,vlm,huggingface,stt,tts,lpr]",
+    "opennvr-ai-adapter[yolo,yolo11,pose,package,face,blip,vlm,clip,huggingface,stt,tts,lpr]",
 ]
 
 # ── PyTorch index source ───────────────────────────────────────────────────────
