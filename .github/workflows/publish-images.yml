@@ -188,6 +188,14 @@ jobs:
           # stream). Weights mounted or fetched once from
           # PACKAGE_DETECTION_MODEL_URL, never baked.
           - { dir: package_detection, image: package-detection-adapter, port: 9010, platforms: "linux/amd64,linux/arm64" }
+          # CLIP embeddings — the `embed` task. Turns a frame into a
+          # vector AND a query in words into a vector in the same space,
+          # which is what lets OpenNVR's search rank by meaning as well
+          # as by keyword. ViT-B-32, MIT-licensed LAION weights, 512
+          # dims, CPU torch wheel. Weights BAKED IN like adapters/blip
+          # (issue #79): a bigger image, bought for a container that
+          # declares no network egress at all and needs no volume.
+          - { dir: clip,           image: clip-adapter,           port: 9011, platforms: "linux/amd64,linux/arm64" }
           # Combined Whisper+Piper+BLIP in one image (issue #82): three voice
           # adapters, one container, same per-adapter /infer contract.
           - { dir: voice-bundle,   image: voice-adapter,          port: 9006, platforms: "linux/amd64,linux/arm64" }
