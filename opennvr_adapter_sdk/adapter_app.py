@@ -31,6 +31,7 @@ What the SDK does NOT do (intentionally):
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import enum
 import json
@@ -194,6 +195,12 @@ class AdapterApp:
         self._max_body_bytes = max_body_bytes
         self._permissions = permissions or Permissions()
         self._scheduling = scheduling or Scheduling()
+        # Inference runs OFF the event loop (see _handle_infer), which
+        # removes the accidental one-at-a-time serialisation the loop used
+        # to provide. The contract's declared max_inflight becomes the
+        # real limit here: a slot per allowed in-flight call, and callers
+        # beyond it wait for one rather than running the model N-wide.
+        self._infer_slots = asyncio.Semaphore(self._scheduling.max_inflight)
         self._cost = cost or Cost()
         self._model_card_url = model_card_url
         self._supported_contract_versions = list(supported_contract_versions)
@@ -617,7 +624,19 @@ class AdapterApp:
         self._metrics.inc_inflight()
         started = time.monotonic()
         try:
-            result = self._service.infer(payload)
+            # NOT `self._service.infer(payload)` inline. This handler is a
+            # coroutine, and a model call is seconds of synchronous CPU
+            # (or a blocking HTTP call to an Ollama). Run inline, it held
+            # the event loop for the whole inference, so /health and
+            # /capabilities could not be answered until it returned. Under
+            # sustained load that read as an adapter that was DOWN: KAI-C's
+            # health polls timed out, it marked the adapter unavailable,
+            # registrations of other adapters stalled behind it, and the
+            # enrichers backed off — while the model was busy and fine.
+            # The worker thread keeps the loop free; the semaphore keeps
+            # the model at its declared max_inflight.
+            async with self._infer_slots:
+                result = await asyncio.to_thread(self._service.infer, payload)
         except ServiceError as exc:
             latency = time.monotonic() - started
             self._metrics.record_infer(
