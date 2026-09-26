@@ -21,6 +21,8 @@ The pluggable inference layer for [OpenNVR™](https://github.com/open-nvr/open-
 
 ---
 
+> **This is the model side of OpenNVR.** The platform itself — quick start, the app catalog, the app SDK, Home Assistant — lives at **[open-nvr/open-nvr](https://github.com/open-nvr/open-nvr)**: start there, ⭐ star that one, and come here when you want to put a model behind the contract. Questions and show-and-tell: **[Discord](DISCORD_INVITE_URL)**.
+
 ## What this is
 
 OpenNVR is the offline-first NVR underneath; this repo is the layer that lets *any* AI model become one of its detectors. The wire spec — the [AI Adapter Contract v1](https://github.com/open-nvr/open-nvr/blob/main/docs/AI_ADAPTER_CONTRACT.md) — describes six HTTP endpoints (plus one WebSocket) every adapter implements. An adapter is whatever software implements those endpoints. The SDK published here makes that around thirty lines of Python.
