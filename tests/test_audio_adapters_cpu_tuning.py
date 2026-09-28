@@ -207,3 +207,39 @@ def test_whisper_service_finally_honours_the_documented_env(monkeypatch):
     assert s._model_size == svc.DEFAULT_MODEL_SIZE and s._adapter.config["cpu_threads"] == 0
     assert svc.WhisperService(model_size="tiny")._model_size == "tiny", "an explicit argument still wins"
     assert svc.DEFAULT_BEAM_SIZE == 1
+
+
+# ── a requested voice that is not on disk does not mute the box ───────
+
+def test_a_missing_requested_voice_falls_back_to_what_is_on_disk(voice_dir, monkeypatch, caplog):
+    """An upgraded, offline deployment: the agent names the new default
+    voice, the init could not download it, the old voice is right there.
+    Speak with it — and say so once, not per sentence."""
+    import logging
+    _install_fake_piper_and_ort(monkeypatch)
+    a = _piper(voice_dir, threads=None)            # default voice "v" is on disk
+    with caplog.at_level(logging.WARNING):
+        got = a._get_voice("en_US-lessac-medium")
+        again = a._get_voice("en_US-lessac-medium")
+    assert got is a._voice_cache["v"] and again is got
+    assert caplog.text.count("not found") == 1, "said once per missing name"
+    assert "speaking with 'v' instead" in caplog.text
+
+
+def test_with_no_voice_at_all_the_error_still_names_the_path(voice_dir, monkeypatch):
+    _install_fake_piper_and_ort(monkeypatch)
+    a = _piper(voice_dir, threads=None)
+    (voice_dir / "v.onnx").unlink()
+    a._voice_cache.clear()
+    with pytest.raises(FileNotFoundError, match="not found"):
+        a._get_voice("en_US-lessac-medium")
+
+
+def test_the_fallback_prefers_the_default_then_any_voice(voice_dir, monkeypatch):
+    _install_fake_piper_and_ort(monkeypatch)
+    a = _piper(voice_dir, threads=None)
+    (voice_dir / "other.onnx").write_bytes(b""); (voice_dir / "other.onnx.json").write_text("{}")
+    assert a._fallback_voice("missing") == "v", "the default first"
+    (voice_dir / "v.onnx").unlink()
+    assert a._fallback_voice("missing") == "other", "then whatever is there"
+    assert a._fallback_voice("other") is None, "never itself"

@@ -66,6 +66,21 @@ class PiperAdapter(BaseAdapter):
         self._threads = self._int_or_none(self.config.get("threads"))
         self._voice_cache: Dict[str, Any] = {}
         self._session_fallback_logged = False
+        self._missing_logged: set = set()
+
+    def _fallback_voice(self, missing: str) -> Optional[str]:
+        """The default voice when it is on disk, else the first voice that
+        is; None when the directory holds nothing to speak with."""
+        default_onnx, _ = self._voice_paths(self._default_voice)
+        if self._default_voice != missing and os.path.exists(default_onnx):
+            return self._default_voice
+        try:
+            names = sorted(e[: -len(".onnx")] for e in os.listdir(self._voice_dir)
+                           if e.endswith(".onnx"))
+        except OSError:
+            return None
+        names = [n for n in names if n != missing]
+        return names[0] if names else None
 
     @staticmethod
     def _int_or_none(value: Any) -> Optional[int]:
@@ -142,7 +157,24 @@ class PiperAdapter(BaseAdapter):
 
         onnx_path, config_path = self._voice_paths(voice_name)
         if not os.path.exists(onnx_path):
-            raise FileNotFoundError(f"Piper voice '{voice_name}' not found at {onnx_path}")
+            # A requested voice that is not on disk falls back to what IS
+            # — the default voice, else any voice present — rather than
+            # muting the box. The case: an upgraded, offline deployment
+            # whose agent now names a newer default voice the init could
+            # not download, while the old one sits right there. Said
+            # once per missing name, not per sentence.
+            fallback = self._fallback_voice(voice_name)
+            if fallback is None:
+                raise FileNotFoundError(f"Piper voice '{voice_name}' not found at {onnx_path}")
+            if voice_name not in self._missing_logged:
+                self._missing_logged.add(voice_name)
+                logger.warning(
+                    "Piper voice '%s' not found at %s; speaking with '%s' instead "
+                    "(place the requested voice's .onnx + .onnx.json in %s to use it)",
+                    voice_name, onnx_path, fallback, self._voice_dir)
+            voice = self._get_voice(fallback)
+            self._voice_cache[voice_name] = voice     # the alias, so it is decided once
+            return voice
 
         logger.info("Loading Piper voice on demand: %s", voice_name)
         voice = self._load_voice(onnx_path, config_path)
