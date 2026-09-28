@@ -84,6 +84,14 @@ WHISPER_MODEL_SIZE=base \
   uvicorn adapters.whisper.main:app --host 0.0.0.0 --port 9003
 ```
 
+## Tuning on CPU
+
+| Env / param | Default | What it does |
+|---|---|---|
+| `WHISPER_MODEL_SIZE` | `base` | The faster-whisper model. (Documented since day one; honoured since 1.0.1 — earlier builds loaded `base` whatever was set.) |
+| `OPENNVR_WHISPER_CPU_THREADS` | `0` (all) | CTranslate2 intra-op threads on CPU. On a box that also runs a detector, a recorder and a TTS, cap it (2-4) so one transcription does not take every core. Ignored on CUDA. |
+| `beam_size` (request) | `1` | Greedy decoding. Beam 5 costs 30-50% more CPU and buys nothing on a short, VAD-trimmed utterance — the voice assistant's whole diet. Ask for `5` per request for offline accuracy. |
+
 ## Run with Docker
 
 ```bash

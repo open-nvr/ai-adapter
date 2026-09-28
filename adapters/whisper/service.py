@@ -49,6 +49,11 @@ from typing import Any
 
 from app.adapters.audio.whisper_adapter import WhisperAdapter
 from app.config import MODEL_WEIGHTS_DIR
+from opennvr_adapter_sdk import (
+    BODY_BYTES_KEY,
+    AdapterService,
+    ServiceError,
+)
 from opennvr_adapter_sdk.contract import (
     AsrResult,
     AsrSegment,
@@ -58,11 +63,6 @@ from opennvr_adapter_sdk.contract import (
     HealthStatus,
     InferResponse,
     ModelInfo,
-)
-from opennvr_adapter_sdk import (
-    AdapterService,
-    BODY_BYTES_KEY,
-    ServiceError,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,21 @@ MODEL_FRAMEWORK: str = "faster-whisper"
 MAX_AUDIO_BYTES: int = 25 * 1024 * 1024
 
 DEFAULT_MODEL_SIZE: str = "base"
-DEFAULT_BEAM_SIZE: int = 5
+#: Greedy. Beam 5 costs 30-50% more CPU and buys nothing on a short,
+#: VAD-trimmed utterance — the voice assistant's whole diet. A request
+#: may still ask for any beam up to 32.
+DEFAULT_BEAM_SIZE: int = 1
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %d", name, raw, default)
+        return default
 
 # Contract task name → faster-whisper "task" param. WhisperAdapter
 # has the same map internally; duplicated here so the validation
@@ -95,11 +109,20 @@ class WhisperService(AdapterService):
         download_root: str | None = None,
         device: str = "auto",
         compute_type: str = "auto",
+        cpu_threads: int | None = None,
     ) -> None:
-        self._model_size = model_size or DEFAULT_MODEL_SIZE
+        # The SDK constructs the service with no arguments, so the
+        # operator's knobs arrive as environment. WHISPER_MODEL_SIZE has
+        # been documented (README, Dockerfile, the compose stack) since the
+        # adapter shipped — and read by nothing: every deployment loaded
+        # "base" whatever it set. It is honoured now.
+        self._model_size = (model_size or os.getenv("WHISPER_MODEL_SIZE", "").strip()
+                            or DEFAULT_MODEL_SIZE)
         self._download_root = download_root or os.path.join(MODEL_WEIGHTS_DIR, "whisper")
         self._device_setting = device
         self._compute_setting = compute_type
+        self._cpu_threads = (_env_int("OPENNVR_WHISPER_CPU_THREADS", 0)
+                             if cpu_threads is None else int(cpu_threads))
 
         self._adapter: WhisperAdapter = WhisperAdapter(
             config={
@@ -107,6 +130,7 @@ class WhisperService(AdapterService):
                 "model_size": self._model_size,
                 "device": device,
                 "compute_type": compute_type,
+                "cpu_threads": self._cpu_threads,
             }
         )
 

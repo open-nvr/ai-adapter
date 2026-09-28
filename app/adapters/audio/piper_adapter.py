@@ -58,15 +58,64 @@ class PiperAdapter(BaseAdapter):
         self._voice_dir = self.config.get("voice_dir") or os.path.join(MODEL_WEIGHTS_DIR, "piper")
         self._default_voice = self.config.get("voice", "en_US-libritts-high")
         self._output_subdir = self.config.get("output_subdir", "tts")
+        # ONNX Runtime intra-op threads per synthesis. Unset, ORT fans one
+        # utterance across every core — measured at ~390% of a 4-core box
+        # — and fights the detector and recorder the box exists for. Two
+        # threads keeps a medium voice well under real time. 0/None = ORT's
+        # own default (all cores).
+        self._threads = self._int_or_none(self.config.get("threads"))
         self._voice_cache: Dict[str, Any] = {}
+        self._session_fallback_logged = False
+
+    @staticmethod
+    def _int_or_none(value: Any) -> Optional[int]:
+        try:
+            n = int(value) if value is not None and str(value).strip() != "" else 0
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+
+    def _load_voice(self, onnx_path: str, config_path: str):
+        """A ``PiperVoice`` whose ONNX session honours ``threads``.
+
+        ``PiperVoice.load`` builds its session with default options, which
+        means every core. piper-tts ≥ 1.3 exposes the constructor
+        ``PiperVoice(session=..., config=...)`` and ``PiperConfig.from_dict``,
+        so the session can be ours. An older piper falls back to ``load``
+        — with a warning, because then the cap is not in effect.
+        """
+        from piper.voice import PiperVoice  # optional dep: uv sync --extra tts
+
+        if self._threads is None:
+            return PiperVoice.load(onnx_path, config_path=config_path)
+        try:
+            import json
+
+            import onnxruntime as ort
+            from piper.config import PiperConfig
+
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = int(self._threads)
+            opts.inter_op_num_threads = 1
+            session = ort.InferenceSession(
+                onnx_path, sess_options=opts, providers=["CPUExecutionProvider"])
+            with open(config_path, "r", encoding="utf-8") as fh:
+                config = PiperConfig.from_dict(json.load(fh))
+            return PiperVoice(session=session, config=config)
+        except Exception as exc:  # noqa: BLE001 — an old piper, not a broken voice
+            if not self._session_fallback_logged:
+                logger.warning(
+                    "Piper: cannot build a thread-capped session (%s: %s); loading "
+                    "with piper's defaults — the threads=%s cap is NOT in effect",
+                    type(exc).__name__, exc, self._threads)
+                self._session_fallback_logged = True
+            return PiperVoice.load(onnx_path, config_path=config_path)
 
     def load_model(self) -> None:
         # We don't pre-load any specific voice here — voices are tiny and loaded
         # on demand into the cache. What we DO verify is that the default voice
         # exists on disk, so misconfiguration surfaces at warmup rather than
         # mid-inference.
-        from piper.voice import PiperVoice  # optional dep: uv sync --extra tts
-
         onnx_path, config_path = self._voice_paths(self._default_voice)
         if not os.path.exists(onnx_path):
             raise FileNotFoundError(
@@ -75,9 +124,10 @@ class PiperAdapter(BaseAdapter):
                 f"into {self._voice_dir}"
             )
 
-        self._voice_cache[self._default_voice] = PiperVoice.load(onnx_path, config_path=config_path)
+        self._voice_cache[self._default_voice] = self._load_voice(onnx_path, config_path)
         self.model = self._voice_cache
-        logger.info("Piper adapter loaded default voice '%s' from %s", self._default_voice, onnx_path)
+        logger.info("Piper adapter loaded default voice '%s' from %s (threads=%s)",
+                    self._default_voice, onnx_path, self._threads or "all")
 
     def _voice_paths(self, voice_name: str) -> tuple[str, str]:
         if not voice_name or "/" in voice_name or "\\" in voice_name or ".." in voice_name:
@@ -90,14 +140,12 @@ class PiperAdapter(BaseAdapter):
         if voice_name in self._voice_cache:
             return self._voice_cache[voice_name]
 
-        from piper.voice import PiperVoice
-
         onnx_path, config_path = self._voice_paths(voice_name)
         if not os.path.exists(onnx_path):
             raise FileNotFoundError(f"Piper voice '{voice_name}' not found at {onnx_path}")
 
         logger.info("Loading Piper voice on demand: %s", voice_name)
-        voice = PiperVoice.load(onnx_path, config_path=config_path)
+        voice = self._load_voice(onnx_path, config_path)
         self._voice_cache[voice_name] = voice
         return voice
 
