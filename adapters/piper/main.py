@@ -35,7 +35,7 @@ _adapter_app = AdapterApp(
     # take effect. Production deployments don't care which path is used.
     service_factory=PiperService,
     name="piper-tts",
-    version="1.0.1",
+    version="1.0.0",
     vendor="open-nvr",
     license="AGPL-3.0",
     model_card_url="https://github.com/rhasspy/piper",

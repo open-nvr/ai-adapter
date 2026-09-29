@@ -46,7 +46,7 @@ _adapter_app = AdapterApp(
     # __enter__ take effect.
     service_factory=WhisperService,
     name="whisper-asr",
-    version="1.0.1",
+    version="1.0.0",
     vendor="open-nvr",
     license="AGPL-3.0",
     model_card_url="https://github.com/SYSTRAN/faster-whisper",
