@@ -75,7 +75,15 @@ class PiperService(AdapterService):
         # The SDK constructs the service with no arguments, so the
         # operator's knobs arrive as environment: OPENNVR_PIPER_VOICE (the
         # voice used when a request names none) and OPENNVR_PIPER_THREADS.
-        self._default_voice = default_voice or os.getenv("OPENNVR_PIPER_VOICE", "").strip() or DEFAULT_VOICE
+        env_voice = os.getenv("OPENNVR_PIPER_VOICE", "").strip()
+        if env_voice and ("/" in env_voice or "\\" in env_voice or ".." in env_voice):
+            # Fail here, naming the knob: swallowed into load(), this reads
+            # as "weights_missing" and sends the operator hunting for files.
+            raise ValueError(
+                f"OPENNVR_PIPER_VOICE={env_voice!r} is not a voice name: give the bare "
+                "name of the .onnx in the voice directory (e.g. en_US-lessac-medium), "
+                "not a path")
+        self._default_voice = default_voice or env_voice or DEFAULT_VOICE
         self._voice_dir = voice_dir or os.path.join(MODEL_WEIGHTS_DIR, "piper")
         self._threads = _env_int("OPENNVR_PIPER_THREADS", DEFAULT_THREADS) if threads is None else int(threads)
         self._adapter: PiperAdapter = PiperAdapter(
@@ -159,6 +167,7 @@ class PiperService(AdapterService):
                 "python_version": platform.python_version(),
                 "default_voice": self._default_voice,
                 "voice_dir": self._voice_dir,
+                "threads": self._threads,
             },
         )
 

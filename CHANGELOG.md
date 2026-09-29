@@ -18,9 +18,17 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Piper builds a thread-capped ONNX session** — `OPENNVR_PIPER_THREADS`
   (default 2) sets intra-op threads; unset by piper, one utterance took
   every core (~390% of a 4-core box, 25 s for two sentences on the field
-  box) and fought the detector and recorder. Needs piper-tts ≥ 1.3 for
-  the `PiperVoice(session, config)` constructor; an older piper falls
-  back to `PiperVoice.load` and logs once that the cap is not in effect.
+  box) and fought the detector and recorder. Uses the
+  `PiperVoice(session, config)` constructor of piper-tts 1.2 — the version
+  the image pins (1.3+ also changed `synthesize`; the pin is deliberate);
+  a piper without it falls back to `PiperVoice.load` and logs once that
+  the cap is not in effect.
+- **A requested Piper voice that is not on disk falls back** to the default
+  voice, else a complete voice in the same language, else any — said once
+  per missing name — instead of muting the box; the result's `voice` names
+  the voice that actually spoke, and the requested voice is picked up the
+  moment its files land. `OPENNVR_PIPER_VOICE` is validated at start-up
+  (a path is refused with the variable's name, not as "weights missing").
 - **`OPENNVR_PIPER_VOICE`** names the voice used when a request names
   none; **`OPENNVR_WHISPER_CPU_THREADS`** caps CTranslate2's threads on
   CPU (ignored on CUDA).

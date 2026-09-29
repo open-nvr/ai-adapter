@@ -47,6 +47,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from app.adapters.audio.whisper_adapter import DEFAULT_BEAM_SIZE as _ADAPTER_DEFAULT_BEAM_SIZE
 from app.adapters.audio.whisper_adapter import WhisperAdapter
 from app.config import MODEL_WEIGHTS_DIR
 from opennvr_adapter_sdk import (
@@ -74,10 +75,12 @@ MODEL_FRAMEWORK: str = "faster-whisper"
 MAX_AUDIO_BYTES: int = 25 * 1024 * 1024
 
 DEFAULT_MODEL_SIZE: str = "base"
-#: Greedy. Beam 5 costs 30-50% more CPU and buys nothing on a short,
+#: Greedy (the adapter's own default — one constant, imported, so the
+#: schema the adapter advertises and the decode the service runs cannot
+#: drift). Beam 5 costs 30-50% more CPU and buys nothing on a short,
 #: VAD-trimmed utterance — the voice assistant's whole diet. A request
 #: may still ask for any beam up to 32.
-DEFAULT_BEAM_SIZE: int = 1
+DEFAULT_BEAM_SIZE: int = _ADAPTER_DEFAULT_BEAM_SIZE
 
 
 def _env_int(name: str, default: int) -> int:
@@ -158,10 +161,15 @@ class WhisperService(AdapterService):
             self._load_state = HealthStatus.OK
             self._load_error = None
             logger.info(
-                "WhisperService ready: model=%s device=%s compute=%s fingerprint=%s",
+                "WhisperService ready: model=%s device=%s compute=%s cpu_threads=%s "
+                "beam_size=%d fingerprint=%s",
                 self._model_size,
                 self._adapter._device,
                 self._adapter._compute_type,
+                # What the cap resolved to, so "set but ignored" (a CUDA
+                # box, a misspelt variable) is one log line away.
+                (self._cpu_threads or "default") if self._adapter._device != "cuda" else "n/a (cuda)",
+                DEFAULT_BEAM_SIZE,
                 self._fingerprint_cache,
             )
         except Exception as exc:
@@ -220,6 +228,10 @@ class WhisperService(AdapterService):
                 "device": device,
                 "compute_type": compute,
                 "model_size": self._model_size,
+                # 0 = CTranslate2's default (every core); on CUDA the cap
+                # does not apply and is reported as such.
+                "cpu_threads": self._cpu_threads if device != "cuda" else None,
+                "beam_size_default": DEFAULT_BEAM_SIZE,
                 "cpu_count": os.cpu_count() or 0,
                 "platform": platform.platform(),
                 "python_version": platform.python_version(),

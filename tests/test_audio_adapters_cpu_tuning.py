@@ -243,3 +243,75 @@ def test_the_fallback_prefers_the_default_then_any_voice(voice_dir, monkeypatch)
     (voice_dir / "v.onnx").unlink()
     assert a._fallback_voice("missing") == "other", "then whatever is there"
     assert a._fallback_voice("other") is None, "never itself"
+
+
+def _put_voice(vdir, name):
+    (vdir / f"{name}.onnx").write_bytes(b"")
+    (vdir / f"{name}.onnx.json").write_text("{}")
+
+
+def test_the_fallback_prefers_the_language_asked_for(voice_dir, monkeypatch):
+    """The only German voice on the box is not a fallback for English text."""
+    _install_fake_piper_and_ort(monkeypatch)
+    a = _piper(voice_dir, threads=None)
+    (voice_dir / "v.onnx").unlink()
+    _put_voice(voice_dir, "de_DE-thorsten-medium"); _put_voice(voice_dir, "en_US-libritts-high")
+    assert a._fallback_voice("en_US-lessac-medium") == "en_US-libritts-high"
+    assert a._fallback_voice("fr_FR-siwis-medium") == "de_DE-thorsten-medium", "no match: any voice"
+
+
+def test_a_half_downloaded_voice_is_never_the_fallback(voice_dir, monkeypatch):
+    _install_fake_piper_and_ort(monkeypatch)
+    a = _piper(voice_dir, threads=None)
+    (voice_dir / "v.onnx").unlink()
+    (voice_dir / "aaa.onnx").write_bytes(b"")           # the init died before its json
+    _put_voice(voice_dir, "zzz")
+    assert a._fallback_voice("missing") == "zzz"
+
+
+def test_a_dropped_in_voice_is_picked_up_without_a_restart(voice_dir, monkeypatch):
+    """The warning tells the operator to place the files; when they do,
+    the next request must use them — not the stand-in, forever."""
+    _install_fake_piper_and_ort(monkeypatch)
+    a = _piper(voice_dir, threads=None)
+    name, voice = a._resolve_voice("en_US-lessac-medium")
+    assert name == "v" and a._aliases == {"en_US-lessac-medium": "v"}
+    assert "en_US-lessac-medium" not in a.get_model_info()["cached_voices"], "not claimed as loaded"
+    _put_voice(voice_dir, "en_US-lessac-medium")
+    name, voice2 = a._resolve_voice("en_US-lessac-medium")
+    assert name == "en_US-lessac-medium" and voice2 is not voice and a._aliases == {}
+
+
+def test_the_result_names_the_voice_that_spoke(voice_dir, monkeypatch):
+    _install_fake_piper_and_ort(monkeypatch)
+    a = _piper(voice_dir, threads=None)
+    out = a.infer_local({"task": "speech_synthesis", "text": "hello", "voice": "en_US-lessac-medium"})
+    assert out["voice"] == "v", "after a fallback, the voice actually used — not the one asked for"
+
+
+def test_a_broken_voice_file_raises_as_itself_not_as_an_old_piper(voice_dir, monkeypatch, caplog):
+    import logging
+    _install_fake_piper_and_ort(monkeypatch)
+    (voice_dir / "v.onnx.json").write_text("{not json")
+    with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match="Expecting property name"):
+        _piper(voice_dir, threads=2)               # BaseAdapter wraps it; the cause is named
+    assert "cap is NOT in effect" not in caplog.text, "a truncated json is not a piper version"
+
+
+def test_a_path_in_the_voice_env_is_refused_by_name(monkeypatch):
+    from adapters.piper import service as svc
+    monkeypatch.setenv("OPENNVR_PIPER_VOICE", "voices/en_US-lessac-medium")
+    with pytest.raises(ValueError, match="OPENNVR_PIPER_VOICE"):
+        svc.PiperService()
+
+
+def test_whisper_reports_the_cap_it_applied(monkeypatch):
+    """One constant for the beam (the service imports the adapter's), and
+    the thread cap visible from /hardware — so "set but ignored" is not a
+    CPU graph away."""
+    from adapters.whisper import service as svc
+    from app.adapters.audio import whisper_adapter
+    assert svc.DEFAULT_BEAM_SIZE is whisper_adapter.DEFAULT_BEAM_SIZE
+    monkeypatch.setenv("OPENNVR_WHISPER_CPU_THREADS", "4")
+    details = svc.WhisperService().hardware_evaluation().details
+    assert details["cpu_threads"] == 4 and details["beam_size_default"] == 1
