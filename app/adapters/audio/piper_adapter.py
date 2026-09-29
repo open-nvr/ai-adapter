@@ -58,15 +58,100 @@ class PiperAdapter(BaseAdapter):
         self._voice_dir = self.config.get("voice_dir") or os.path.join(MODEL_WEIGHTS_DIR, "piper")
         self._default_voice = self.config.get("voice", "en_US-libritts-high")
         self._output_subdir = self.config.get("output_subdir", "tts")
+        # ONNX Runtime intra-op threads per synthesis. Unset, ORT fans one
+        # utterance across every core — measured at ~390% of a 4-core box
+        # — and fights the detector and recorder the box exists for. Two
+        # threads keeps a medium voice well under real time. 0/None = ORT's
+        # own default (all cores).
+        self._threads = self._int_or_none(self.config.get("threads"))
         self._voice_cache: Dict[str, Any] = {}
+        #: requested voice name → the on-disk voice standing in for it
+        self._aliases: Dict[str, str] = {}
+        self._session_fallback_logged = False
+        self._missing_logged: set = set()
+
+    def _voice_on_disk(self, voice_name: str) -> bool:
+        """Both files: a half-downloaded voice (onnx, no json) is not a voice."""
+        try:
+            onnx_path, config_path = self._voice_paths(voice_name)
+        except ValueError:
+            return False
+        return os.path.exists(onnx_path) and os.path.exists(config_path)
+
+    def _fallback_voice(self, missing: str) -> Optional[str]:
+        """The default voice when it is on disk; else a complete voice in
+        the same language as the one asked for ("en_US-…" for "en_US-…"),
+        else any complete voice; None when there is nothing to speak with.
+        Language first: English text read by the only German voice on the
+        box is not a fallback, it is a different failure."""
+        if self._default_voice != missing and self._voice_on_disk(self._default_voice):
+            return self._default_voice
+        try:
+            names = sorted(e[: -len(".onnx")] for e in os.listdir(self._voice_dir)
+                           if e.endswith(".onnx"))
+        except OSError:
+            return None
+        names = [n for n in names if n != missing and self._voice_on_disk(n)]
+        lang = missing.split("-", 1)[0] if "-" in missing else ""
+        same_lang = [n for n in names if lang and n.startswith(lang + "-")]
+        return (same_lang or names or [None])[0]
+
+    @staticmethod
+    def _int_or_none(value: Any) -> Optional[int]:
+        try:
+            n = int(value) if value is not None and str(value).strip() != "" else 0
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+
+    def _load_voice(self, onnx_path: str, config_path: str):
+        """A ``PiperVoice`` whose ONNX session honours ``threads``.
+
+        ``PiperVoice.load`` builds its session with default options, which
+        means every core. piper-tts 1.2 — the version the adapter image
+        pins — is a dataclass ``PiperVoice(session=..., config=...)`` with
+        ``PiperConfig.from_dict``, so the session can be ours. (1.3+ changed
+        ``synthesize`` as well; ``infer_local`` is written against 1.2, so
+        the pin is the whole story, not just this constructor.) A piper
+        without that shape falls back to ``load`` — with a warning, because
+        then the cap is not in effect. A broken voice file is NOT that
+        case: its error is raised as itself.
+        """
+        from piper.voice import PiperVoice  # optional dep: uv sync --extra tts
+
+        if self._threads is None:
+            return PiperVoice.load(onnx_path, config_path=config_path)
+        try:
+            import json
+
+            import onnxruntime as ort
+            from piper.config import PiperConfig
+
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = int(self._threads)
+            opts.inter_op_num_threads = 1
+            session = ort.InferenceSession(
+                onnx_path, sess_options=opts, providers=["CPUExecutionProvider"])
+            with open(config_path, "r", encoding="utf-8") as fh:
+                config = PiperConfig.from_dict(json.load(fh))
+            return PiperVoice(session=session, config=config)
+        except (ImportError, AttributeError, TypeError) as exc:
+            # The shapes a piper without this constructor produces — not a
+            # truncated .onnx.json or a missing provider, which raise as
+            # themselves (and would raise the same way from ``load``).
+            if not self._session_fallback_logged:
+                logger.warning(
+                    "Piper: cannot build a thread-capped session (%s: %s); loading "
+                    "with piper's defaults — the threads=%s cap is NOT in effect",
+                    type(exc).__name__, exc, self._threads)
+                self._session_fallback_logged = True
+            return PiperVoice.load(onnx_path, config_path=config_path)
 
     def load_model(self) -> None:
         # We don't pre-load any specific voice here — voices are tiny and loaded
         # on demand into the cache. What we DO verify is that the default voice
         # exists on disk, so misconfiguration surfaces at warmup rather than
         # mid-inference.
-        from piper.voice import PiperVoice  # optional dep: uv sync --extra tts
-
         onnx_path, config_path = self._voice_paths(self._default_voice)
         if not os.path.exists(onnx_path):
             raise FileNotFoundError(
@@ -75,9 +160,10 @@ class PiperAdapter(BaseAdapter):
                 f"into {self._voice_dir}"
             )
 
-        self._voice_cache[self._default_voice] = PiperVoice.load(onnx_path, config_path=config_path)
+        self._voice_cache[self._default_voice] = self._load_voice(onnx_path, config_path)
         self.model = self._voice_cache
-        logger.info("Piper adapter loaded default voice '%s' from %s", self._default_voice, onnx_path)
+        logger.info("Piper adapter loaded default voice '%s' from %s (threads=%s)",
+                    self._default_voice, onnx_path, self._threads or "all")
 
     def _voice_paths(self, voice_name: str) -> tuple[str, str]:
         if not voice_name or "/" in voice_name or "\\" in voice_name or ".." in voice_name:
@@ -87,19 +173,46 @@ class PiperAdapter(BaseAdapter):
         return onnx_path, config_path
 
     def _get_voice(self, voice_name: str):
-        if voice_name in self._voice_cache:
-            return self._voice_cache[voice_name]
+        return self._resolve_voice(voice_name)[1]
 
-        from piper.voice import PiperVoice
+    def _resolve_voice(self, voice_name: str) -> tuple[str, Any]:
+        """``(name actually spoken with, voice)``.
+
+        A requested voice that is not on disk falls back to what IS — the
+        default voice, else a voice present — rather than muting the box.
+        The case: an upgraded, offline deployment whose agent now names a
+        newer default voice the init could not download, while the old
+        one sits right there. Said once per missing name, not per
+        sentence. The stand-in is remembered, but the requested name is
+        re-checked on disk each call (one stat), so the voice the log
+        told the operator to drop in is picked up the moment it lands.
+        """
+        if voice_name in self._voice_cache:
+            return voice_name, self._voice_cache[voice_name]
 
         onnx_path, config_path = self._voice_paths(voice_name)
-        if not os.path.exists(onnx_path):
-            raise FileNotFoundError(f"Piper voice '{voice_name}' not found at {onnx_path}")
+        if not self._voice_on_disk(voice_name):
+            stand_in = self._aliases.get(voice_name) or self._fallback_voice(voice_name)
+            if stand_in is None or not self._voice_on_disk(stand_in):
+                self._aliases.pop(voice_name, None)
+                raise FileNotFoundError(f"Piper voice '{voice_name}' not found at {onnx_path}")
+            if voice_name not in self._missing_logged:
+                self._missing_logged.add(voice_name)
+                logger.warning(
+                    "Piper voice '%s' not found at %s; speaking with '%s' instead "
+                    "(place the requested voice's .onnx + .onnx.json in %s to use it)",
+                    voice_name, onnx_path, stand_in, self._voice_dir)
+            self._aliases[voice_name] = stand_in
+            return self._resolve_voice(stand_in)
 
+        if voice_name in self._aliases:
+            logger.info("Piper voice '%s' is on disk now; using it", voice_name)
+            self._aliases.pop(voice_name, None)
+            self._missing_logged.discard(voice_name)
         logger.info("Loading Piper voice on demand: %s", voice_name)
-        voice = PiperVoice.load(onnx_path, config_path=config_path)
+        voice = self._load_voice(onnx_path, config_path)
         self._voice_cache[voice_name] = voice
-        return voice
+        return voice_name, voice
 
     def infer_local(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         task = input_data.get("task", "speech_synthesis")
@@ -112,8 +225,10 @@ class PiperAdapter(BaseAdapter):
         if len(text) > _MAX_TEXT_CHARS:
             raise ValueError(f"'text' exceeds {_MAX_TEXT_CHARS}-char limit; split into chunks")
 
-        voice_name = input_data.get("voice", self._default_voice)
-        voice = self._get_voice(voice_name)
+        # ``voice`` in the result is the voice that SPOKE — after a
+        # fallback that is not the one requested, and a caller keying
+        # anything on it must not be told otherwise.
+        voice_name, voice = self._resolve_voice(input_data.get("voice", self._default_voice))
 
         synth_kwargs: Dict[str, Any] = {}
         if "length_scale" in input_data:

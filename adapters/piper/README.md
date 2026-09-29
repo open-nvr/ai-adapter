@@ -36,6 +36,13 @@ OPENNVR_ADAPTER_TOKEN=dev-token \
   uvicorn adapters.piper.main:app --host 0.0.0.0 --port 9001
 ```
 
+## Tuning on CPU
+
+| Env | Default | What it does |
+|---|---|---|
+| `OPENNVR_PIPER_VOICE` | `en_US-libritts-high` | The voice used when a request names none (a request's `voice` key always wins). The **quality tier is the CPU cost**: a `high` voice took ~4 cores and 25 s for two sentences on an 8-core field box; a `medium` voice (`en_US-lessac-medium`) is 2-3x cheaper and as intelligible. |
+| `OPENNVR_PIPER_THREADS` | `2` | ONNX Runtime intra-op threads per synthesis. Unset by piper, one utterance fans across every core (~390% of a 4-core box) and fights the detector and recorder the box exists for. `0` = all cores. Uses the `PiperVoice(session, config)` constructor of piper-tts 1.2 (the version the image pins — 1.3+ also changed `synthesize`, so bumping the pin is a code change, not a version bump); a piper without it logs once that the cap is not in effect. |
+
 ## Run with Docker
 
 ```bash

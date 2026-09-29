@@ -24,7 +24,6 @@ import logging
 import os
 import platform
 import threading
-import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -46,22 +45,53 @@ logger = logging.getLogger(__name__)
 DEFAULT_VOICE: str = "en_US-libritts-high"
 MAX_TEXT_CHARS: int = 10_000
 
+#: ONNX intra-op threads per synthesis when OPENNVR_PIPER_THREADS is unset.
+#: Two: enough for a medium voice at several times real time, and it
+#: leaves the box's other cores to the detector and recorder. 0 = all.
+DEFAULT_THREADS: int = 2
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %d", name, raw, default)
+        return default
+
 
 class PiperService(AdapterService):
     """Stateful façade around ``PiperAdapter``."""
 
     def __init__(
         self,
-        default_voice: str = DEFAULT_VOICE,
+        default_voice: str | None = None,
         voice_dir: str | None = None,
+        *,
+        threads: int | None = None,
     ) -> None:
-        self._default_voice = default_voice
+        # The SDK constructs the service with no arguments, so the
+        # operator's knobs arrive as environment: OPENNVR_PIPER_VOICE (the
+        # voice used when a request names none) and OPENNVR_PIPER_THREADS.
+        env_voice = os.getenv("OPENNVR_PIPER_VOICE", "").strip()
+        if env_voice and ("/" in env_voice or "\\" in env_voice or ".." in env_voice):
+            # Fail here, naming the knob: swallowed into load(), this reads
+            # as "weights_missing" and sends the operator hunting for files.
+            raise ValueError(
+                f"OPENNVR_PIPER_VOICE={env_voice!r} is not a voice name: give the bare "
+                "name of the .onnx in the voice directory (e.g. en_US-lessac-medium), "
+                "not a path")
+        self._default_voice = default_voice or env_voice or DEFAULT_VOICE
         self._voice_dir = voice_dir or os.path.join(MODEL_WEIGHTS_DIR, "piper")
+        self._threads = _env_int("OPENNVR_PIPER_THREADS", DEFAULT_THREADS) if threads is None else int(threads)
         self._adapter: PiperAdapter = PiperAdapter(
             config={
                 "enabled": True,
-                "voice": default_voice,
+                "voice": self._default_voice,
                 "voice_dir": self._voice_dir,
+                "threads": self._threads,
             }
         )
         self._load_state: HealthStatus = HealthStatus.LOADING
@@ -137,6 +167,7 @@ class PiperService(AdapterService):
                 "python_version": platform.python_version(),
                 "default_voice": self._default_voice,
                 "voice_dir": self._voice_dir,
+                "threads": self._threads,
             },
         )
 

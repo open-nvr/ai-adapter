@@ -16,7 +16,7 @@ Input shape:
         "task": "audio_transcription" | "audio_translation",
         "audio": {"uri": "opennvr://audio/<path>"},
         "language": "en"      # optional ISO-639-1 code; auto-detect if omitted
-        "beam_size": 5,       # optional decoder beam width
+        "beam_size": 1,       # optional decoder beam width (greedy by default)
         "vad_filter": true,   # optional Silero VAD to strip silence/noise
     }
 
@@ -32,6 +32,9 @@ from app.config import MODEL_WEIGHTS_DIR
 from app.utils.audio_utils import resolve_audio_uri
 
 logger = logging.getLogger(__name__)
+
+#: Decoder beam width when a request names none. Greedy: see infer_local.
+DEFAULT_BEAM_SIZE: int = 1
 
 _SUPPORTED_TASKS = {"audio_transcription", "audio_translation"}
 _WHISPER_MODE_BY_TASK = {
@@ -71,6 +74,13 @@ class WhisperAdapter(BaseAdapter):
             return self._requested_compute_type
         return "float16" if device == "cuda" else "int8"
 
+    @staticmethod
+    def _int_or_zero(value: Any) -> int:
+        try:
+            return max(0, int(value)) if value is not None and str(value).strip() != "" else 0
+        except (TypeError, ValueError):
+            return 0
+
     def load_model(self) -> None:
         from faster_whisper import WhisperModel  # optional dep: uv sync --extra stt
 
@@ -85,11 +95,20 @@ class WhisperAdapter(BaseAdapter):
             self._device,
             self._compute_type,
         )
+        # cpu_threads caps CTranslate2's intra-op threads on CPU (0 = its
+        # default, every core). On a box that also runs a detector, a
+        # recorder and a TTS, a single transcription taking all cores is
+        # what makes the voice turn slow for everything else.
+        extra: Dict[str, Any] = {}
+        cpu_threads = self._int_or_zero(self.config.get("cpu_threads"))
+        if cpu_threads > 0 and self._device == "cpu":
+            extra["cpu_threads"] = cpu_threads
         self.model = WhisperModel(
             self._model_size,
             device=self._device,
             compute_type=self._compute_type,
             download_root=self._download_root,
+            **extra,
         )
         logger.info("Whisper model loaded")
 
@@ -109,7 +128,11 @@ class WhisperAdapter(BaseAdapter):
 
         whisper_task = _WHISPER_MODE_BY_TASK[task]
         language = input_data.get("language")
-        beam_size = int(input_data.get("beam_size", 5))
+        # Greedy by default. Beam 5 costs 30-50% more CPU and buys nothing
+        # on a clean, VAD-trimmed utterance of a few seconds — and that is
+        # what a voice assistant sends. Offline transcription of long or
+        # noisy audio can ask for a beam per request.
+        beam_size = int(input_data.get("beam_size", DEFAULT_BEAM_SIZE))
         vad_filter = bool(input_data.get("vad_filter", False))
 
         start_time = time.time()
@@ -166,7 +189,7 @@ class WhisperAdapter(BaseAdapter):
             "input_fields": {
                 "audio.uri": {"type": "string", "description": "opennvr://audio/<path>"},
                 "language": {"type": "string", "description": "ISO-639-1 code; auto-detected if omitted"},
-                "beam_size": {"type": "integer", "description": "Decoder beam width (default 5)"},
+                "beam_size": {"type": "integer", "description": "Decoder beam width (default 1, greedy; 5 for offline accuracy)"},
                 "vad_filter": {"type": "boolean", "description": "Silero VAD to skip silence (default false)"},
             },
             "response_fields": {

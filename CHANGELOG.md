@@ -9,6 +9,36 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Whisper decodes greedily by default** (`beam_size` 1, was 5). Beam 5
+  costs 30-50% more CPU and buys nothing on a short, VAD-trimmed
+  utterance — what a voice assistant sends. A request may still ask for
+  any beam up to 32. (open-nvr #583: 14 s of a 71 s voice turn.)
+- **Piper builds a thread-capped ONNX session** — `OPENNVR_PIPER_THREADS`
+  (default 2) sets intra-op threads; unset by piper, one utterance took
+  every core (~390% of a 4-core box, 25 s for two sentences on the field
+  box) and fought the detector and recorder. Uses the
+  `PiperVoice(session, config)` constructor of piper-tts 1.2 — the version
+  the image pins (1.3+ also changed `synthesize`; the pin is deliberate);
+  a piper without it falls back to `PiperVoice.load` and logs once that
+  the cap is not in effect.
+- **A requested Piper voice that is not on disk falls back** to the default
+  voice, else a complete voice in the same language, else any — said once
+  per missing name — instead of muting the box; the result's `voice` names
+  the voice that actually spoke, and the requested voice is picked up the
+  moment its files land. `OPENNVR_PIPER_VOICE` is validated at start-up
+  (a path is refused with the variable's name, not as "weights missing").
+- **`OPENNVR_PIPER_VOICE`** names the voice used when a request names
+  none; **`OPENNVR_WHISPER_CPU_THREADS`** caps CTranslate2's threads on
+  CPU (ignored on CUDA).
+
+### Fixed
+
+- **`WHISPER_MODEL_SIZE` is honoured.** It has been in the README, the
+  Dockerfile and open-nvr's compose stack since the adapter shipped, and
+  nothing read it: every deployment loaded `base` whatever it set.
+
 ### Added
 
 - **`package-detection` adapter** — contract-v1 `package_detection` on
