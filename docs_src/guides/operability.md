@@ -63,6 +63,22 @@ runner FAILs on `error` and WARNs on `loading`, so neither goes green.
 nothing is downloaded, so the same image works in a deployment running
 `sovereignty=local_only` where the operator pre-populated the volume.
 
+## Threads: leave the box something
+
+An adapter is one tenant on a box that also records, detects and — on a
+voice install — transcribes and speaks. A runtime left to its defaults
+takes every core for one request: ONNX Runtime, CTranslate2 and numpy's
+BLAS all fan out, and the measured result on a 4-core box was one Piper
+synthesis at ~390 % CPU and a voice turn of 71 s. Cap the intra-op
+threads and make the cap an environment knob with a sane default, named
+`OPENNVR_<ADAPTER>_THREADS` (the shipped adapters: `OPENNVR_PIPER_THREADS`,
+default 2; `OPENNVR_WHISPER_CPU_THREADS`, CPU only). Log the value the
+cap resolved to at start-up and report it in `/hardware` details, so
+"set but ignored" — a CUDA box, a misspelt variable — is one line away
+rather than a CPU graph. Document it in the adapter's README next to the
+other knobs; the reference adapters' READMEs have a *Tuning on CPU*
+table for exactly this.
+
 Full examples:
 [`06_capabilities_and_metrics.py`](https://github.com/open-nvr/ai-adapter/blob/main/cookbook/06_capabilities_and_metrics.py),
 [`08_weights_and_packaging.py`](https://github.com/open-nvr/ai-adapter/blob/main/cookbook/08_weights_and_packaging.py).
