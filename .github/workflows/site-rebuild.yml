@@ -1,0 +1,34 @@
+# opennvr.org builds the Adapter SDK reference (/adapters/) from this
+# repository's docs_src at deploy time — but the site only deploys when
+# ITS repository changes. On a push to main that touches what the site
+# renders, ask Cloudflare Pages to rebuild.
+#
+# OPENNVR_SITE_DEPLOY_HOOK is the Pages project's deploy-hook URL
+# (Cloudflare → Workers & Pages → opennvr-site → Settings → Builds &
+# deployments → Deploy hooks). Unset, this workflow says so and passes.
+name: site-rebuild
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs_src/**"
+      - "mkdocs.yml"
+      - "opennvr_adapter_sdk/**"
+      - "cookbook/**"
+      - ".github/workflows/site-rebuild.yml"
+
+jobs:
+  rebuild:
+    name: ask opennvr.org to rebuild
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the Pages deploy hook
+        env:
+          HOOK: ${{ secrets.OPENNVR_SITE_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::warning::OPENNVR_SITE_DEPLOY_HOOK is not set — opennvr.org will pick this up on its next deploy."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK" -o /dev/null && echo "opennvr.org rebuild requested."
