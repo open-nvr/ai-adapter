@@ -57,6 +57,7 @@ copies only the SDK and this package.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -507,7 +508,11 @@ class YoloPoseService(AdapterService):
                     metrics = self.metrics
                     metrics.inc_inflight()
                     try:
-                        result_dict = self._infer_frame_for_stream(
+                        # Off the event loop, as in yolov8: inline it
+                        # froze every other stream and HTTP request for
+                        # the duration of each frame.
+                        result_dict = await asyncio.to_thread(
+                            self._infer_frame_for_stream,
                             bytes(frame_bytes),
                             seq=frame_meta.seq,
                             ts_ms=frame_meta.ts_ms,

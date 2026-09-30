@@ -43,13 +43,15 @@ def install_fake_onnxruntime() -> None:
 
         def __init__(self, *_args, **_kwargs) -> None:
             self._providers = ["CPUExecutionProvider"]
-            # Shape (1, 84, 3): 4 box coords + 80 class scores per detection
+            # Shape (1, 84, 3): 4 box coords + 80 class scores per detection.
+            # Boxes are cx, cy, w, h in MODEL-INPUT pixels (640 square),
+            # exactly as the Ultralytics export emits them.
             preds = np.zeros((1, 84, 3), dtype=np.float32)
-            # detection 0: center (0.5, 0.5) normalized, size (0.3, 0.4); person score 0.92
-            preds[0, 0, 0] = 0.5
-            preds[0, 1, 0] = 0.5
-            preds[0, 2, 0] = 0.3
-            preds[0, 3, 0] = 0.4
+            # detection 0: centred, 192x256 px of the 640 input; person score 0.92
+            preds[0, 0, 0] = 320.0
+            preds[0, 1, 0] = 320.0
+            preds[0, 2, 0] = 192.0
+            preds[0, 3, 0] = 256.0
             preds[0, 4 + 0, 0] = 0.92  # class_id 0 = person
             # detection 1: cat (class 15) below threshold
             preds[0, 4 + 15, 1] = 0.10

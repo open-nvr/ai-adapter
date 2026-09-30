@@ -21,6 +21,7 @@ shim.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -34,8 +35,13 @@ from typing import Any
 from fastapi import WebSocket, WebSocketDisconnect
 
 from adapters.yolov8.coco_classes import class_id_to_label
-from app.adapters.vision.yolov8_adapter import YOLOv8Adapter
-from app.config import INPUT_SIZE, MODEL_WEIGHTS_DIR
+from app.adapters.vision.yolov8_adapter import (
+    DEFAULT_IOU_THRESHOLD,
+    YOLOv8Adapter,
+    box_to_source,
+    decode_predictions,
+)
+from app.config import MODEL_WEIGHTS_DIR
 from opennvr_adapter_sdk.contract import (
     DetectionItem,
     DetectionResult,
@@ -68,6 +74,10 @@ MAX_IMAGE_BYTES: int = 8 * 1024 * 1024
 
 # Confidence threshold default if the caller doesn't supply one.
 DEFAULT_CONFIDENCE_THRESHOLD: float = 0.25
+# Per-class NMS overlap: a same-class box overlapping a stronger one above
+# this IoU is a duplicate, not a second object. Callers may override per
+# request with ``iou_threshold``.
+DEFAULT_NMS_IOU_THRESHOLD: float = DEFAULT_IOU_THRESHOLD
 
 
 class YoloV8Service(AdapterService):
@@ -330,7 +340,14 @@ class YoloV8Service(AdapterService):
                     metrics = self.metrics
                     metrics.inc_inflight()
                     try:
-                        result_dict = self._infer_frame_for_stream(
+                        # Off the event loop: decode + ONNX inference is
+                        # CPU-bound and takes tens to hundreds of ms.
+                        # Called inline it froze every other stream and
+                        # every HTTP request on the process for the
+                        # duration of each frame (the SDK's /infer route
+                        # already does this).
+                        result_dict = await asyncio.to_thread(
+                            self._infer_frame_for_stream,
                             bytes(frame_bytes),
                             seq=frame_meta.seq,
                             ts_ms=frame_meta.ts_ms,
@@ -404,30 +421,21 @@ class YoloV8Service(AdapterService):
                 http_status=413,
             )
 
-        raw_threshold = params.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD)
-        try:
-            confidence_threshold = float(raw_threshold)
-        except (TypeError, ValueError) as exc:
-            raise ServiceError(
-                ErrorCategory.TRANSPORT_ERROR,
-                code="malformed_input",
-                message=f"confidence_threshold must be a number, got {raw_threshold!r}.",
-                transient=False,
-                http_status=400,
-            ) from exc
-        if not 0.0 <= confidence_threshold <= 1.0:
-            raise ServiceError(
-                ErrorCategory.TRANSPORT_ERROR,
-                code="malformed_input",
-                message="confidence_threshold must be between 0.0 and 1.0.",
-                transient=False,
-                http_status=400,
-            )
+        confidence_threshold = _unit_interval_param(
+            params, "confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD,
+            aliases=("conf",),
+        )
+        iou_threshold = _unit_interval_param(
+            params, "iou_threshold", DEFAULT_NMS_IOU_THRESHOLD,
+            aliases=("iou", "nms_threshold"),
+        )
 
         start = time.monotonic()
         try:
             img, width, height = _decode_image(image_bytes)
-            raw_predictions, raw_count = self._run_inference(img, confidence_threshold)
+            raw_predictions, raw_count = self._run_inference(
+                img, confidence_threshold, iou_threshold
+            )
         except DecodeError as exc:
             raise ServiceError(
                 ErrorCategory.TRANSPORT_ERROR,
@@ -500,36 +508,38 @@ class YoloV8Service(AdapterService):
         self,
         img: Any,
         confidence_threshold: float,
+        iou_threshold: float = DEFAULT_NMS_IOU_THRESHOLD,
     ) -> tuple[list[dict[str, Any]], int]:
         """Bridge to the legacy adapter. We can't reuse ``infer_local``
         directly because it loads from a URI; instead we drive the
         underlying ``_preprocess`` / ``_run_inference`` directly so the
-        bytes path stays in-memory (no temp-file dance)."""
-        import numpy as np
+        bytes path stays in-memory (no temp-file dance).
 
-        blob = self._adapter._preprocess(img)
+        Returns detections as ``(x1, y1, x2, y2)`` in SOURCE pixels —
+        letterbox padding removed and clipped to the frame — plus the raw
+        anchor count. The decode is vectorised and NMS'd (see
+        ``decode_predictions``): the previous per-row Python loop cost
+        tens of ms per frame and, with no NMS, returned every anchor over
+        threshold, so one person came back as a cluster of boxes.
+        """
+        blob, geometry = self._adapter._preprocess(img)
         raw = self._adapter._run_inference(blob)
-        if raw.ndim == 1:
-            raw = np.expand_dims(raw, axis=0)
-
+        boxes, class_ids, confidences = decode_predictions(
+            raw,
+            confidence_threshold=confidence_threshold,
+            iou_threshold=iou_threshold,
+        )
         detections: list[dict[str, Any]] = []
-        for pred in raw:
-            if len(pred) < 5:
-                continue
-            cx, cy, w, h = pred[:4]
-            class_scores = pred[4:]
-            class_id = int(np.argmax(class_scores))
-            confidence = float(class_scores[class_id])
-            if confidence < confidence_threshold:
-                continue
+        for box, class_id, confidence in zip(boxes, class_ids, confidences):
+            x1, y1, x2, y2 = box_to_source(box, geometry)
             detections.append(
                 {
-                    "cx": float(cx),
-                    "cy": float(cy),
-                    "w": float(w),
-                    "h": float(h),
-                    "class_id": class_id,
-                    "confidence": confidence,
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "class_id": int(class_id),
+                    "confidence": float(confidence),
                 }
             )
         return detections, int(raw.shape[0])
@@ -542,36 +552,40 @@ class YoloV8Service(AdapterService):
         *,
         classes_filter: list[str] | None = None,
     ) -> DetectionResult:
-        """Translate pixel/raw detections into a §5.1 DetectionResult
-        with normalized [0,1] bboxes and human-readable labels."""
+        """Translate source-pixel detections into a §5.1 DetectionResult
+        with normalized [0,1] bboxes and human-readable labels.
+
+        Boxes are clipped by their EDGES: a box that starts left of the
+        frame loses the off-frame part. The old clamp moved x to 0 and
+        kept the full width, so an edge box slid inward instead of being
+        cropped.
+        """
         items: list[DetectionItem] = []
         allowed_labels: set[str] | None = (
             {label.lower() for label in classes_filter}
             if isinstance(classes_filter, list) and classes_filter
             else None
         )
+        fw = float(width) if width > 0 else 1.0
+        fh = float(height) if height > 0 else 1.0
 
         for det in detections:
             label = class_id_to_label(det["class_id"])
             if allowed_labels is not None and label.lower() not in allowed_labels:
                 continue
-            cx, cy, w, h = det["cx"], det["cy"], det["w"], det["h"]
-            if w < 1.0:
-                x = max(0.0, min(1.0, cx - w / 2.0))
-                y = max(0.0, min(1.0, cy - h / 2.0))
-                nw = max(0.0, min(1.0 - x, w))
-                nh = max(0.0, min(1.0 - y, h))
-            else:
-                x = max(0.0, min(1.0, (cx - w / 2.0) / INPUT_SIZE))
-                y = max(0.0, min(1.0, (cy - h / 2.0) / INPUT_SIZE))
-                nw = max(0.0, min(1.0 - x, w / INPUT_SIZE))
-                nh = max(0.0, min(1.0 - y, h / INPUT_SIZE))
+            x1 = min(max(det["x1"] / fw, 0.0), 1.0)
+            y1 = min(max(det["y1"] / fh, 0.0), 1.0)
+            x2 = min(max(det["x2"] / fw, 0.0), 1.0)
+            y2 = min(max(det["y2"] / fh, 0.0), 1.0)
+            nw, nh = x2 - x1, y2 - y1
+            if nw <= 0.0 or nh <= 0.0:
+                continue  # entirely outside the frame, or degenerate
 
             items.append(
                 DetectionItem(
                     label=label,
                     confidence=round(det["confidence"], 4),
-                    bbox=NormalizedBBox(x=x, y=y, w=nw, h=nh),
+                    bbox=NormalizedBBox(x=x1, y=y1, w=nw, h=nh),
                     track_id=None,
                     attributes={"class_id": det["class_id"]},
                 )
@@ -609,6 +623,50 @@ class YoloV8Service(AdapterService):
             return "CUDAExecutionProvider" in providers
         except Exception:
             return False
+
+
+# ── Request parameter helpers ───────────────────────────────────────
+
+
+def _unit_interval_param(
+    params: dict[str, Any],
+    name: str,
+    default: float,
+    *,
+    aliases: tuple[str, ...] = (),
+) -> float:
+    """Read a [0, 1] float request parameter, or raise the contract's
+    ``malformed_input`` error. ``aliases`` are the spellings the sibling
+    vision adapters accept for the same knob (yolo_pose takes ``conf``
+    and ``iou``/``nms_threshold``), so a caller need not special-case
+    which adapter it is talking to."""
+    raw_value = params.get(name)
+    for alias in aliases:
+        if raw_value is None:
+            raw_value = params.get(alias)
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, bool):   # bool is an int subclass; conf=true is a typo
+        raw_value = repr(raw_value)
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ServiceError(
+            ErrorCategory.TRANSPORT_ERROR,
+            code="malformed_input",
+            message=f"{name} must be a number, got {raw_value!r}.",
+            transient=False,
+            http_status=400,
+        ) from exc
+    if not 0.0 <= value <= 1.0:
+        raise ServiceError(
+            ErrorCategory.TRANSPORT_ERROR,
+            code="malformed_input",
+            message=f"{name} must be between 0.0 and 1.0.",
+            transient=False,
+            http_status=400,
+        )
+    return value
 
 
 # ── Image decode helper ─────────────────────────────────────────────

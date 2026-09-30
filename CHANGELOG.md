@@ -35,6 +35,24 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **YOLOv8 boxes are de-duplicated, letterboxed and mapped back
+  correctly.** The adapter returned every raw anchor over threshold — the
+  Ultralytics ONNX export emits 8400 of them — so one person came back as
+  a cluster of overlapping boxes (reported by QA as boxes "not accurate").
+  Now: per-class non-maximum suppression (`iou_threshold`, default 0.45,
+  overridable per request like `confidence_threshold`; the sibling
+  adapters' spellings `iou`, `nms_threshold` and `conf` are accepted
+  too); the frame is
+  letterboxed into the model's square instead of squashed 1.78x on a 16:9
+  camera, which the model was never trained on; a box crossing the frame
+  edge is cropped rather than slid inward; and the decode is vectorised
+  (the per-anchor Python loop cost tens of ms per frame on CPU). The
+  legacy `YOLOv8Adapter.infer_local` path shares the same decode.
+- **YOLOv8 and YOLO-pose streaming no longer freeze the process.** Both
+  §6 WebSocket loops ran decode + inference inline on the event loop, so
+  every other stream and every HTTP request on the adapter stalled for the
+  duration of each frame. Inference now runs on a worker thread, as the
+  SDK's `/infer` route already did.
 - **`WHISPER_MODEL_SIZE` is honoured.** It has been in the README, the
   Dockerfile and open-nvr's compose stack since the adapter shipped, and
   nothing read it: every deployment loaded `base` whatever it set.
