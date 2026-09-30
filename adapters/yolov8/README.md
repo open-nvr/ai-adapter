@@ -82,6 +82,11 @@ curl -X POST http://localhost:9002/infer \
   -F 'params={"confidence_threshold": 0.4, "classes": ["person", "car"]};type=application/json'
 ```
 
+Optional params: `confidence_threshold` (default 0.25), `iou_threshold` — the
+per-class non-maximum-suppression overlap above which a weaker box is a
+duplicate (default 0.45; `1.0` disables NMS and returns every anchor over
+threshold) — and `classes`, an allow-list of COCO labels.
+
 ### HTTP — JSON (base64 fallback)
 
 ```bash
