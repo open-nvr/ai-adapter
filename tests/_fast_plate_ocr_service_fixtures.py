@@ -143,7 +143,7 @@ def fast_plate_ocr_environment(tmp_path: Path):
     """Sandboxed env: a tmp ONNX-shaped file the fake recognizer
     points at so the service's live-fingerprint path has something to
     hash, plus the fake fast_plate_ocr module installed."""
-    model_file = tmp_path / "cct-xs-v1-global-model.onnx"
+    model_file = tmp_path / "cct-s-v2-global-model.onnx"
     # 4 KB of deterministic bytes so the sha256 is stable across test
     # runs. Real ONNX files are much larger; this is just enough for
     # the fingerprint helper to read.

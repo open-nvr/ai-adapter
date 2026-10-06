@@ -9,13 +9,13 @@
 #     -e OPENNVR_ADAPTER_TOKEN=<token> \
 #     opennvr/fast-plate-ocr-adapter:1.0.0
 #
-# The model weights (~3 MB) are downloaded by fast-plate-ocr on first
+# The model weights (~5 MB) are downloaded by fast-plate-ocr on first
 # load() and cached inside the container. To avoid the first-run
 # download in air-gapped deployments, pre-warm and mount the cache:
 #
 #   docker run --rm -v $(pwd)/fp-cache:/root/.cache \
 #     opennvr/fast-plate-ocr-adapter:1.0.0 \
-#     python -c "from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('cct-xs-v1-global-model')"
+#     python -c "from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('cct-s-v2-global-model')"
 #
 #   # subsequent runs:
 #   docker run --rm -p 9004:9004 -v $(pwd)/fp-cache:/root/.cache \
@@ -56,7 +56,7 @@ RUN pip install --no-cache-dir \
 # Build-time guard: importing LicensePlateRecognizer pulls onnxruntime
 # (and cv2/numpy) — if any runtime dependency is missing, the BUILD
 # fails here rather than the first plate read failing in production.
-# Import only; the ~3 MB model still downloads on first load() so the
+# Import only; the ~5 MB model still downloads on first load() so the
 # image stays weights-free.
 RUN python -c "from fast_plate_ocr import LicensePlateRecognizer; from open_image_models import create_detector; import onnxruntime, cv2, numpy"
 
@@ -71,7 +71,7 @@ RUN pip install --no-cache-dir ./opennvr_adapter_sdk
 
 ENV PYTHONPATH=/app \
     OPENNVR_ADAPTER_TOKEN="" \
-    OPENNVR_LPR_MODEL=cct-xs-v1-global-model
+    OPENNVR_LPR_MODEL=cct-s-v2-global-model
 
 EXPOSE 9004
 

@@ -11,6 +11,14 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Plate OCR defaults to `cct-s-v2-global-model`** (was the v1 xs
+  build). The v2 generation is trained on ~3x the data, recognises the
+  plate's region for 65+ countries, and both v2 sizes exceed 0.99
+  region macro-F1 on a 114k-sample held-out split, for ~0.35 ms more
+  per plate and 3 MB more on disk. A more accurate single look is also
+  what shortens core's consensus sweep. The result gains an additive
+  `region: {code, confidence}` (None on v1 models). Override with
+  `OPENNVR_LPR_MODEL`; the v1 ids still work.
 - **Whisper decodes greedily by default** (`beam_size` 1, was 5). Beam 5
   costs 30-50% more CPU and buys nothing on a short, VAD-trimmed
   utterance — what a voice assistant sends. A request may still ask for

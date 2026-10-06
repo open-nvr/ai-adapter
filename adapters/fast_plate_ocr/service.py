@@ -53,10 +53,17 @@ from opennvr_adapter_sdk import (
 logger = logging.getLogger(__name__)
 
 # Default model identifier — ``fast-plate-ocr`` ships multiple weight
-# bundles tuned for different regions. ``cct-xs-v1-global-model`` is
-# the smallest and most general; operators can override via the
-# ``OPENNVR_LPR_MODEL`` env var without code changes.
-DEFAULT_MODEL_ID: str = "cct-xs-v1-global-model"
+# bundles. ``cct-s-v2-global-model`` is the library's recommended
+# default: the v2 generation is trained on ~3x the data of v1, adds
+# plate-REGION recognition for 65+ countries (surfaced below as
+# ``region``), and both v2 sizes exceed 0.99 region macro-F1 on a
+# 114k-sample held-out split. It costs ~0.35 ms more per plate than
+# the v1 xs model and 3 MB more on disk — nothing against the OCR call
+# that carries it. A more accurate single look is also what shortens
+# core's consensus sweep: fewer disagreeing reads, fewer looks spent.
+# Operators can override via ``OPENNVR_LPR_MODEL`` without code
+# changes (``cct-xs-v2-global-model`` for the smallest v2 build).
+DEFAULT_MODEL_ID: str = "cct-s-v2-global-model"
 # Overall confidence is the MIN per-character probability (see
 # _parse_recognizer_output): clean reads score ~0.99, misreads and
 # hallucinations cluster under ~0.45. Tunable per-install via
@@ -301,7 +308,8 @@ class FastPlateOcrService(AdapterService):
                 ],
                 "accepted": True,
                 "min_confidence_applied": 0.30,
-                "model_id": "cct-xs-v1-global-model",
+                "model_id": "cct-s-v2-global-model",
+                "region": {"code": "in", "confidence": 0.98},   # v2 models only
             }
         """
         if not self.is_ready():
@@ -503,6 +511,10 @@ class FastPlateOcrService(AdapterService):
                 "accepted": accepted,
                 "min_confidence_applied": effective_threshold,
                 "model_id": self._model_id,
+                # Additive: the plate's region (country/format family)
+                # when the model recognises one — the v2 generation does,
+                # v1 and the fake used in tests do not → None.
+                "region": _parse_recognizer_region(raw),
                 # Additive (v1.1): how the input was localized. found=
                 # False + a low read means "no plate visible here", not
                 # a broken adapter — consumers can tell the difference.
@@ -546,6 +558,22 @@ class FastPlateOcrService(AdapterService):
         # model swap, never spuriously.
         digest = hashlib.sha256(self._model_id.encode("utf-8")).hexdigest()
         return f"sha256-id:{digest}"
+
+
+def _parse_recognizer_region(raw: Any) -> dict[str, Any] | None:
+    """``{"code", "confidence"}`` from a v2 ``PlatePrediction``
+    (``.region`` / ``.region_prob``), else None. Tolerates every older
+    return shape the output parser does."""
+    first = raw[0] if isinstance(raw, (list, tuple)) and raw else raw
+    region = getattr(first, "region", None)
+    if not isinstance(region, str) or not region.strip():
+        return None
+    prob = getattr(first, "region_prob", None)
+    try:
+        confidence = round(float(prob), 4) if prob is not None else None
+    except (TypeError, ValueError):
+        confidence = None
+    return {"code": region.strip(), "confidence": confidence}
 
 
 def _parse_recognizer_output(raw: Any) -> tuple[str, list[dict[str, Any]], float]:

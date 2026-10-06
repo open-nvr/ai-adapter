@@ -42,12 +42,12 @@ curl -X POST http://localhost:9004/infer \
     ],
     "accepted": true,
     "min_confidence_applied": 0.30,
-    "model_id": "cct-xs-v1-global-model",
+    "model_id": "cct-s-v2-global-model",
     "inference_ms": 18
   },
   "model": {
-    "name": "cct-xs-v1-global-model",
-    "version": "fast-plate-ocr/cct-xs-v1-global-model",
+    "name": "cct-s-v2-global-model",
+    "version": "fast-plate-ocr/cct-s-v2-global-model",
     "framework": "onnx",
     "fingerprint": "sha256:..."
   }
@@ -97,8 +97,11 @@ curl -X POST http://localhost:9004/infer \
 ### Model swapping (no code change)
 
 `fast-plate-ocr` ships multiple weight bundles for different regions
-(EU, US, LATAM, global). The default (`cct-xs-v1-global-model`) is the
-most general. Swap via the `OPENNVR_LPR_MODEL` env var:
+(EU, US, LATAM, global). The default (`cct-s-v2-global-model`) is the
+library's recommended v2 build: ~3x the training data of v1, plate-region
+recognition for 65+ countries (reported as `region` in the result), under
+1 ms per plate. `cct-xs-v2-global-model` is the smaller v2; the v1 ids
+still work. Swap via the `OPENNVR_LPR_MODEL` env var:
 
 ```bash
 OPENNVR_LPR_MODEL=cct-s-v1-global-model uvicorn adapters.fast_plate_ocr.main:app
@@ -120,7 +123,7 @@ deployments, pre-warm the cache in your build pipeline:
 ```bash
 docker run --rm -v $(pwd)/fp-cache:/root/.cache \
   opennvr/fast-plate-ocr-adapter:1.0.0 \
-  python -c "from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('cct-xs-v1-global-model')"
+  python -c "from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('cct-s-v2-global-model')"
 ```
 
 Then mount the cache at runtime — the recognizer finds the weights locally
