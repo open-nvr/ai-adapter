@@ -130,7 +130,7 @@ def test_hardware_evaluation_ok_after_load(fast_plate_ocr_environment):
     svc.load()
     resp = svc.hardware_evaluation()
     assert resp.verdict == HardwareVerdict.OK
-    assert resp.details["model_id"] == "cct-xs-v1-global-model"
+    assert resp.details["model_id"] == "cct-s-v2-global-model"
 
 
 def test_hardware_evaluation_warn_before_load(fast_plate_ocr_environment):
@@ -154,11 +154,11 @@ def test_infer_returns_plate_text_and_characters(
     assert resp.result["min_confidence_applied"] == pytest.approx(0.45)
     assert len(resp.result["characters"]) == len("ABC1234")
     assert all("char" in c and "confidence" in c for c in resp.result["characters"])
-    assert resp.result["model_id"] == "cct-xs-v1-global-model"
+    assert resp.result["model_id"] == "cct-s-v2-global-model"
     # inference_ms is a top-level field on InferResponse (per §3.5),
     # not a nested result key.
     assert resp.inference_ms >= 0
-    assert resp.model_name == "cct-xs-v1-global-model"
+    assert resp.model_name == "cct-s-v2-global-model"
     assert resp.model_version.startswith("fast-plate-ocr/")
 
 
@@ -507,3 +507,32 @@ def test_edge_detection_box_clamps_to_frame(
     # margins: mx=2, my=2 → x1,y1 clamp at 0; x2=22, y2=12
     assert received.shape == (12, 22, 3)
     assert resp.result["plate_detection"]["found"] is True
+
+
+# ── v2 models: the plate's region rides along ────────────────────────
+
+def test_region_is_reported_when_the_model_knows_it():
+    from adapters.fast_plate_ocr.service import _parse_recognizer_region
+
+    class _V2Prediction:
+        plate = "KA01AB1234"
+        char_probs = [0.99] * 10
+        region = "in"
+        region_prob = 0.9812
+
+    class _V1Prediction:
+        plate = "KA01AB1234"
+        char_probs = [0.99] * 10
+
+    assert _parse_recognizer_region([_V2Prediction()]) == {"code": "in", "confidence": 0.9812}
+    assert _parse_recognizer_region([_V1Prediction()]) is None
+    assert _parse_recognizer_region((["KA01AB1234"], [0.99])) is None
+    assert _parse_recognizer_region([]) is None
+
+
+def test_infer_result_carries_region_field(fast_plate_ocr_environment, sample_jpeg):
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    resp = svc.infer({"__file__": sample_jpeg})
+    assert "region" in resp.result
+    assert resp.result["region"] is None      # the fake recognizer is v1-shaped
