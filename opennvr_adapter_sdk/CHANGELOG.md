@@ -7,6 +7,21 @@ the SDK uses semantic versioning aligned with the AI Adapter Contract major vers
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-11
+
+First published with OpenNVR 0.1.6. This section was written on
+2026-09-11 but the release was never uploaded, so the fix and the
+additions made since then ship as part of 1.3.0.
+
+### Fixed
+
+- **Inference runs off the event loop, bounded by `max_inflight`.** The
+  handler called the model inline, so for the seconds a model call takes
+  the adapter could not answer `/health` or `/capabilities`; on a busy site
+  KAI-C read a healthy captioner as down. The call now runs in a worker
+  thread, and the contract's declared `scheduling.max_inflight` becomes the
+  real limit: callers beyond it wait for a slot.
+
 ### Added
 
 - **Conformance kit knows `package_detection`** — a sample multipart frame
@@ -20,11 +35,6 @@ the SDK uses semantic versioning aligned with the AI Adapter Contract major vers
   answer a streaming client with the same two numbers over the WebSocket,
   and a stream handler should not have to keep a second, drifting copy of a
   counter the SDK is already maintaining. Purely additive.
-
-
-## [1.3.0] — 2026-09-11
-
-### Added
 
 - **`Adapter` — the front door.** Declare the model, decorate the loader
   and the inference handler; the SDK derives the fingerprint (from the

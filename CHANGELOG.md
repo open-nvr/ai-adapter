@@ -9,6 +9,19 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-10-11
+
+Better eyes and new senses. The plate reader moves to the v2 model and
+reports the plate's region; YOLOv8 draws one box per object; the voice
+adapters stop taking the whole box; and three capabilities arrive: parcel
+detection, human pose, and CLIP embeddings that let search match words to
+frames. `opennvr-adapter-sdk` is published as 1.3.0 alongside this release
+(its own changelog), with the `Adapter` front door and the `opennvr-adapter`
+CLI.
+
+Upgrading: the platform's `.env.example` pins `ADAPTER_TAG=0.1.6` from
+OpenNVR 0.1.6. InsightFace face files migrate on load.
+
 ### Changed
 
 - **Plate OCR defaults to `cct-s-v2-global-model`** (was the v1 xs
@@ -118,6 +131,27 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `permissions.network_egress` is derived from that setting, so the
   default deployment declares no egress at all and a configured fetch
   declares exactly its one host.
+
+- **CLIP embeds words as well as frames** — the `embed` task puts a
+  camera frame and an operator's query in the same space, which is what
+  lets OpenNVR's search fuse a similarity ranking with its keyword one: a
+  search for "truck" finds the visit a captioner described as "a lorry at
+  the loading bay". A request without a frame is the query half, so the
+  body shape is TEXT and the service decodes `frame_b64` itself, enforcing
+  its own size limit on the encoded length.
+
+- **InsightFace keeps several samples per person.** A record holds a list
+  of embeddings and a match is the best of them, so a porch-light,
+  30-degree view can still match a straight-on enrolment. `POST
+  /faces/register` gains `append` (add a sample; name, category and
+  metadata change only when given); `DELETE /faces/{id}/samples/{i}`
+  removes one bad capture. Up to 32 samples, oldest dropped first. The file
+  schema moves to 2 and a schema-1 file loads as one sample, so nobody
+  re-enrols.
+
+- **`PATCH /faces/{id}`** edits a person's name, category or metadata
+  without a new photo; absent fields are untouched, metadata merges, and a
+  key sent as null is removed. The embedding never changes here.
 
 ## [0.1.5] — 2026-09-10
 
