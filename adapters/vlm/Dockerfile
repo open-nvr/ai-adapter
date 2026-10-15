@@ -3,13 +3,13 @@
 # AI Adapter Contract v1.
 #
 # Build (from the ai-adapter repo root):
-#   docker build -f adapters/vlm/Dockerfile -t opennvr/vlm-adapter:1.0.0 .
+#   docker build -f adapters/vlm/Dockerfile -t ghcr.io/open-nvr/open-vocab-adapter:latest .
 #
 # Run (typical, CPU — slow; GPU strongly recommended for video rates):
 #   docker run --rm -p 9012:9012 \
 #     -e OPENNVR_ADAPTER_TOKEN=<token> \
 #     -v $(pwd)/hf_cache:/root/.cache/huggingface \
-#     opennvr/vlm-adapter:1.0.0
+#     ghcr.io/open-nvr/open-vocab-adapter:latest
 #
 # The HuggingFace cache mount lets the ~600 MB OWL-ViT weights persist
 # across container restarts.

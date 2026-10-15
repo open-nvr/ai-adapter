@@ -9,6 +9,21 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`open-vocab-adapter` is published** (`adapters/vlm`, port 9012). The
+  OWL-ViT v2 open-vocabulary detector has been in the tree since June
+  with its tests, its Dockerfile and its contract conformance, and no
+  row in the publish matrix, so nobody could pull it. It now builds
+  for amd64 and arm64 with the rest: `ghcr.io/open-nvr/open-vocab-adapter`.
+  One task, `open_vocab_detection`: a box and a score for any phrase
+  the caller writes — "red truck", "forklift", "person wearing a hard
+  hat" — where YOLOv8 knows only its eighty COCO classes. Weights
+  download from huggingface.co on first boot into the HF cache volume
+  (the whisper precedent), and the listing declares that egress; an
+  air-gapped site bakes them in. CPU inference takes a few seconds a
+  frame, so this is an on-demand adapter, not a per-frame one.
+
 ## [0.1.6] — 2026-10-11
 
 Better eyes and new senses. The plate reader moves to the v2 model and

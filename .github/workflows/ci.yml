@@ -73,7 +73,9 @@ jobs:
         # --frozen back here.
         run: uv sync --extra dev
       - name: Run pytest
-        run: uv run pytest tests/ -q
+        # No path: testpaths in pyproject.toml also names the two
+        # adapters that keep their tests beside their code.
+        run: uv run pytest -q
 
   # ── Docker smoke (matrix over all 6 SDK adapters) ────────────────
   # Builds + boots each per-adapter Docker image and hits the

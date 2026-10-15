@@ -281,5 +281,7 @@ explicit = true
 # separate (larger) cleanup.
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["tests"]
+# Two adapters keep their tests beside their code; without this line
+# the ci.yml ``pytest tests/`` never collected them.
+testpaths = ["tests", "adapters/ollamavlm/tests", "adapters/vlm/tests"]
 asyncio_mode = "auto"
