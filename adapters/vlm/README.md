@@ -23,11 +23,11 @@ captioner can only approximate. Two concrete uses:
 ## Call it
 
 ```bash
-# multipart: image + comma-separated queries
+# multipart: the frame plus a JSON `params` field (contract §3.5 — the
+# SDK reads params, not loose form fields)
 curl -H "Authorization: Bearer $OPENNVR_ADAPTER_TOKEN" \
   -F frame=@street.jpg \
-  -F 'queries=red truck, person on a bicycle' \
-  -F 'threshold=0.15' \
+  -F 'params={"queries": ["red truck", "person on a bicycle"], "threshold": 0.15}' \
   http://localhost:9012/infer
 ```
 
