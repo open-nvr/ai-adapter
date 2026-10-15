@@ -327,7 +327,14 @@ class VlmService(AdapterService):
         with torch.no_grad():
             outputs = self._model(**inputs)
         target_sizes = torch.tensor([[height, width]]).to(self._device)
-        results = self._processor.post_process_object_detection(
+        # transformers 5 dropped ``post_process_object_detection`` from the
+        # OWL-ViT processors; ``post_process_grounded_object_detection``
+        # (4.5x+) is the same call with the same scores/labels/boxes keys.
+        # The image pins transformers==5.0.0, so the new name is the one
+        # that exists there; the old one stays for a 4.x dev checkout.
+        post = getattr(self._processor, "post_process_grounded_object_detection", None) \
+            or self._processor.post_process_object_detection
+        results = post(
             outputs=outputs, target_sizes=target_sizes, threshold=threshold
         )[0]
 

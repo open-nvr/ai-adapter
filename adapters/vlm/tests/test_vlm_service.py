@@ -112,3 +112,57 @@ def test_not_ready_raises_model_error():
     with pytest.raises(ServiceError) as ei:
         svc.infer({"__file__": b"x", "queries": ["person"]})
     assert ei.value.category == ErrorCategory.MODEL_ERROR
+
+
+def test_run_detect_uses_the_post_processor_transformers_5_ships(monkeypatch):
+    """transformers 5 dropped ``post_process_object_detection`` from the
+    OWL-ViT processors (``post_process_grounded_object_detection`` since
+    4.5x). The first published image 500'd on every /infer with
+    ``'Owlv2Processor' object has no attribute
+    'post_process_object_detection'``; the stubbed tests never saw it.
+    This processor has only the new name, as the pinned image's does."""
+    import types
+
+    import adapters.vlm.service as mod
+
+    class _Box:
+        def __init__(self, v):
+            self._v = v
+
+        def tolist(self):
+            return self._v
+
+    class _Processor:
+        def __call__(self, *, text, images, return_tensors):
+            return types.SimpleNamespace(to=lambda device: {"pixel_values": None})
+
+        def post_process_grounded_object_detection(self, *, outputs, target_sizes, threshold):
+            return [{"scores": [0.7], "labels": [1], "boxes": [_Box([10.0, 20.0, 60.0, 80.0])]}]
+
+    class _Model:
+        def __call__(self, **inputs):
+            return object()
+
+    class _Tensor:
+        def to(self, device):
+            return self
+
+    fake_torch = types.SimpleNamespace(
+        no_grad=lambda: __import__("contextlib").nullcontext(),
+        tensor=lambda v: _Tensor(),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+
+    svc = VlmService()
+    svc._processor = _Processor()
+    svc._model = _Model()
+    svc._device = "cpu"
+    image = types.SimpleNamespace(size=(100, 200))
+
+    out = VlmService._run_detect(svc, image, queries=["car", "person"], threshold=0.1)
+
+    assert out == [{
+        "label": "person",
+        "confidence": 0.7,
+        "bbox": mod._to_normalized(10.0, 20.0, 60.0, 80.0, 100, 200),
+    }]
