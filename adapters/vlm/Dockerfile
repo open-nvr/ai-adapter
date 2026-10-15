@@ -29,11 +29,22 @@ RUN pip install --no-cache-dir \
         httpx==0.28.1 \
         python-multipart==0.0.20 \
         pillow==12.0.0 \
-        transformers==5.0.0 \
-    && pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.9.1+cpu \
-        torchvision==0.24.1+cpu
+        transformers==5.0.0
+
+# The torch pin is not arch-portable (the long version is in
+# adapters/blip/Dockerfile): download.pytorch.org/whl/cpu has no
+# ``+cpu`` aarch64 wheel, and PyPI's plain aarch64 wheel IS the CPU
+# build. Same upstream version either way; bump both arms together.
+ARG TARGETARCH
+RUN set -eux; \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        pip install --no-cache-dir torch==2.9.1 torchvision==0.24.1; \
+    else \
+        pip install --no-cache-dir \
+            --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.9.1+cpu \
+            torchvision==0.24.1+cpu; \
+    fi
 
 COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
 RUN pip install --no-cache-dir ./opennvr_adapter_sdk
