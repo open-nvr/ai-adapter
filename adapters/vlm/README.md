@@ -58,29 +58,35 @@ OPENNVR_ADAPTER_TOKEN=secret \
 # conformance
 python -m conformance http://localhost:9012 --token $OPENNVR_ADAPTER_TOKEN
 
-# docker
-docker build -f adapters/vlm/Dockerfile -t opennvr/vlm-adapter:1.0.0 .
+# docker — the published image, weights baked in, no volume, no network
 docker run --rm -p 9012:9012 -e OPENNVR_ADAPTER_TOKEN=secret \
-  -v $(pwd)/hf_cache:/root/.cache/huggingface opennvr/vlm-adapter:1.0.0
+  ghcr.io/open-nvr/open-vocab-adapter:latest
+
+# another OWL-ViT variant is a rebuild (the runtime is pinned offline)
+docker build -f adapters/vlm/Dockerfile \
+  --build-arg VLM_MODEL_ID=google/owlv2-large-patch14-ensemble \
+  -t open-vocab-adapter:large .
 ```
 
 ## Configure
 
-- **`OPENNVR_VLM_MODEL`** — swap the model id (`google/owlvit-base-patch32`
-  is smaller/faster, an `owlv2-large` variant is more accurate).
+- **`VLM_MODEL_ID`** (build arg) — the model baked into the image:
+  `google/owlvit-base-patch32` is smaller and faster, an `owlv2-large`
+  variant is more accurate. `OPENNVR_VLM_MODEL` defaults to it; the
+  runtime is offline, so pointing that at a model that is not baked
+  fails to load, by design.
 - **`queries`** (per request) — up to 32 text phrases to detect.
 - **`threshold`** (per request) — score floor, default 0.10. Open-vocab
   models are noisier than fixed-class ones; tune per scene.
 
 ## Sovereignty note
 
-The adapter declares `network_egress: ["huggingface.co", …]` for the
-first-run weight download. Under `AI_SOVEREIGNTY=local_only`, KAI-C
-**refuses to register an adapter that declares egress** — so for an
-air-gapped deployment, pre-bake the weights into the image (or mount a
-populated HF cache) and the declared egress can be removed. This is the
-contract's governance working as intended: a model that wants the network
-can't be admitted silently.
+The weights are baked into the image at build time and the runtime is
+pinned offline (`HF_HUB_OFFLINE=1`), so the adapter declares
+`network_egress: []` and never dials anything — the same posture as
+`blip` and `clip` (issue #79). It boots on a sealed box with no volume
+to pre-fill. The cost is image size (~600 MB of weights); a bigger
+image, bought for a container that needs no network at all.
 
 ## Performance
 

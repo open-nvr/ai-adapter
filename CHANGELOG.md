@@ -18,10 +18,10 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for amd64 and arm64 with the rest: `ghcr.io/open-nvr/open-vocab-adapter`.
   One task, `open_vocab_detection`: a box and a score for any phrase
   the caller writes — "red truck", "forklift", "person wearing a hard
-  hat" — where YOLOv8 knows only its eighty COCO classes. Weights
-  download from huggingface.co on first boot into the HF cache volume
-  (the whisper precedent), and the listing declares that egress; an
-  air-gapped site bakes them in. CPU inference takes a few seconds a
+  hat" — where YOLOv8 knows only its eighty COCO classes. The ~600 MB
+  weights are baked into the image and the runtime is pinned offline,
+  as blip and clip are (#79): no volume, no network, `network_egress:
+  []`, boots on a sealed box. CPU inference takes a few seconds a
   frame, so this is an on-demand adapter, not a per-frame one.
 
 ## [0.1.6] — 2026-10-11

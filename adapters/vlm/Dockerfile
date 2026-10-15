@@ -8,11 +8,13 @@
 # Run (typical, CPU — slow; GPU strongly recommended for video rates):
 #   docker run --rm -p 9012:9012 \
 #     -e OPENNVR_ADAPTER_TOKEN=<token> \
-#     -v $(pwd)/hf_cache:/root/.cache/huggingface \
 #     ghcr.io/open-nvr/open-vocab-adapter:latest
 #
-# The HuggingFace cache mount lets the ~600 MB OWL-ViT weights persist
-# across container restarts.
+# The ~600 MB OWL-ViT weights are BAKED IN (the blip/clip precedent,
+# issue #79): the container needs no volume and no network, which is
+# what lets the listing declare network_egress: [] and what makes it
+# boot on a sealed box. Another OWL-ViT variant is a rebuild:
+#   docker build --build-arg VLM_MODEL_ID=google/owlv2-large-patch14-ensemble ...
 
 FROM python:3.11-slim AS runtime
 
@@ -45,6 +47,24 @@ RUN set -eux; \
             torch==2.9.1+cpu \
             torchvision==0.24.1+cpu; \
     fi
+
+# Pre-bake the OWL-ViT weights so the adapter runs with NO network
+# egress (issue #79, as blip and clip). Without this the first boot
+# downloads ~600 MB from huggingface.co, which on an air-gapped site
+# never arrives and leaves the adapter unhealthy forever.
+ARG VLM_MODEL_ID=google/owlv2-base-patch16-ensemble
+ENV HF_HUB_DISABLE_TELEMETRY=1
+RUN python -c "from transformers import Owlv2ForObjectDetection, Owlv2Processor; \
+mid='${VLM_MODEL_ID}'; Owlv2Processor.from_pretrained(mid); Owlv2ForObjectDetection.from_pretrained(mid)"
+
+# Pin the RUNTIME fully offline so from_pretrained() loads only from the
+# baked cache and never makes the metadata check to huggingface.co. Set
+# AFTER the bake (the build needs the network; the container does not).
+# OPENNVR_VLM_MODEL defaults to the baked id; pointing it at a model
+# that is not baked fails to load, by design.
+ENV TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_OFFLINE=1 \
+    OPENNVR_VLM_MODEL=${VLM_MODEL_ID}
 
 COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
 RUN pip install --no-cache-dir ./opennvr_adapter_sdk

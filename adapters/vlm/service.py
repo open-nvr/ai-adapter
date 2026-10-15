@@ -21,9 +21,9 @@ matching; an application can detect site-specific objects without
 training a model.
 
 CPU-runnable (slow: ~3-8 s/image on a 4-core box, query-count dependent);
-much faster with CUDA passthrough. First inference triggers the
-HuggingFace download — pre-bake the model or mount a populated HF cache
-to avoid first-request latency.
+much faster with CUDA passthrough. The published image bakes the weights
+in and runs offline; a source checkout downloads them from HuggingFace
+on first load.
 
 Output bboxes are normalized (x, y, w, h in [0, 1], top-left origin) to
 match the contract's §5.1 ``NormalizedBBox`` — identical shape to the

@@ -55,11 +55,10 @@ _adapter_app = AdapterApp(
         # CPU works but is slow; GPU strongly recommended for video
         # rates. Auto-uses CUDA when torch.cuda.is_available() at load.
         gpu=False,
-        # First-run model download from huggingface.co. Strict-
-        # sovereignty operators pre-bake the model or run a local
-        # HF mirror; under AI_SOVEREIGNTY=local_only KAI-C refuses to
-        # register an adapter that declares egress, so bake the weights.
-        network_egress=["huggingface.co", "*.huggingface.co"],
+        # Genuinely empty: the weights are baked into the image and the
+        # runtime is pinned offline (HF_HUB_OFFLINE=1), so this adapter
+        # never dials anything. Same posture as blip and clip.
+        network_egress=[],
         host_filesystem=[],
         shared_memory_paths=[],
         host_metadata=False,
