@@ -196,6 +196,16 @@ jobs:
           # (issue #79): a bigger image, bought for a container that
           # declares no network egress at all and needs no volume.
           - { dir: clip,           image: clip-adapter,           port: 9011, platforms: "linux/amd64,linux/arm64" }
+          # Open-vocabulary detection — the `open_vocab_detection` task.
+          # A box and a score for any phrase the caller writes ("red
+          # truck", "forklift", "person wearing a hard hat"), where
+          # YOLOv8 knows only its eighty COCO classes. OWL-ViT v2 base
+          # on the CPU torch wheel; the ~600 MB weights are BAKED IN
+          # like blip and clip (issue #79), so the container needs no
+          # volume and no network and the listing declares no egress.
+          # Slow on CPU — a few seconds a frame — so it is an on-demand
+          # adapter, not a per-frame one.
+          - { dir: vlm,            image: open-vocab-adapter,     port: 9012, platforms: "linux/amd64,linux/arm64" }
           # Combined Whisper+Piper+BLIP in one image (issue #82): three voice
           # adapters, one container, same per-adapter /infer contract.
           - { dir: voice-bundle,   image: voice-adapter,          port: 9006, platforms: "linux/amd64,linux/arm64" }
