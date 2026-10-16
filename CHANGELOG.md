@@ -9,6 +9,17 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`parakeet-adapter`**: speech to text with NVIDIA Parakeet TDT 0.6B
+  v3 through onnx-asr (ONNX Runtime, int8, CPU first), port 9019. The
+  whisper adapter's §5.3 result shape and the same `audio_transcription`
+  task, so the camera agent's `whisper_url` points at either. Measured
+  on the agent's own phrasings: WER 1.4 % against faster-whisper
+  base.en's 3.3 %, 0.31 s against 1.42 s an utterance on four CPU
+  cores. Transcription only (no translation; 25 European languages, no
+  Hindi — whisper stays for those). Weights baked in, no egress.
+
 ## [0.1.7] — 2026-10-16
 
 Detect what you can describe, and a faster detector. The open-vocabulary
