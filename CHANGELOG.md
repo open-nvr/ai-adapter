@@ -9,6 +9,20 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-10-16
+
+Better ears and better memory. Speech to text moves to Parakeet (a third
+of whisper's errors at a fifth of the time on four cores) and the
+embedding adapter moves to SigLIP 2 (coco128 retrieval mAP 0.672
+against 0.571); both measured with harnesses that now live beside the
+camera agent in open-nvr. No SDK release: `opennvr-adapter-sdk` stays at
+1.3.0.
+
+Upgrading: the platform's `.env.example` pins `ADAPTER_TAG=0.1.8` and
+`STT_ADAPTER_TAG=0.1.8` from OpenNVR's next release. The `clip` image's
+vectors are 768 wide; the platform re-embeds history on its own
+(open-nvr#659). Nothing else migrates.
+
 ### Changed
 
 - **The embedding adapter is SigLIP 2** (`ViT-B-16-SigLIP2-256`, Google's
