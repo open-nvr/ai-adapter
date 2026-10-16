@@ -11,6 +11,12 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`YOLOV8_WEIGHTS_FILE`** names the ONNX file the yolov8 adapter loads
+  from its weights directory (default `yolov8n.onnx`). open-nvr's weights
+  image moves to YOLO26n — same `(1, 84, 8400)` tensor and decode, 17 %
+  faster on a 4-thread CPU and +3.6 COCO mAP — and names the file
+  through this variable, so an older install's `yolov8n.onnx` still
+  loads. The README recipe exports yolo26n.
 - **`open-vocab-adapter` is published** (`adapters/vlm`, port 9012). The
   OWL-ViT v2 open-vocabulary detector has been in the tree since June
   with its tests, its Dockerfile and its contract conformance, and no

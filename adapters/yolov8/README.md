@@ -29,18 +29,23 @@ This adapter declares its §8 permission scopes **build-accurately**. `gpu` foll
 # Install deps
 uv sync --extra yolo
 
-# Download yolov8n weights and export to ONNX (one-time).
-# Ultralytics retired its public pre-built ONNX, so we derive the
-# ONNX from the .pt checkpoint, which is still hosted upstream.
+# Download the weights and export to ONNX (one-time). Ultralytics
+# retired its public pre-built ONNX, so we derive the ONNX from the .pt
+# checkpoint, which is still hosted upstream. YOLO26n is what the
+# OpenNVR stack ships (measured on a 4-thread CPU: 62 ms a frame against
+# yolov8n's 75, COCO mAP 40.9 against 37.3); exported this way it emits
+# the same (1, 84, 8400) tensor as yolov8n and yolo11n, so the decode
+# here is unchanged and any of the three is a drop-in.
 mkdir -p model_weights
 cd model_weights
-curl -LO https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
-pip install --quiet "ultralytics==8.3.40" "onnx>=1.16,<2"
-yolo export model=yolov8n.pt format=onnx opset=12 imgsz=640 simplify=False
+curl -LO https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt
+pip install --quiet "ultralytics==8.4.177" "onnx>=1.16,<2"
+yolo export model=yolo26n.pt format=onnx opset=12 imgsz=640 simplify=False
 cd ..
 
-# Start the service
-OPENNVR_ADAPTER_TOKEN=dev-token \
+# Start the service. YOLOV8_WEIGHTS_FILE names the file inside the
+# weights dir; unset, the adapter looks for yolov8n.onnx.
+OPENNVR_ADAPTER_TOKEN=dev-token YOLOV8_WEIGHTS_FILE=yolo26n.onnx \
   uvicorn adapters.yolov8.main:app --host 0.0.0.0 --port 9002
 ```
 
