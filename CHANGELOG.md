@@ -9,6 +9,19 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-10-16
+
+Detect what you can describe, and a faster detector. The open-vocabulary
+adapter is published at last, with its weights baked in so it boots on a
+sealed box; the yolov8 adapter learns the name of its weights file so the
+platform can move to YOLO26n; and the published open-vocab image answers
+`/infer` on transformers 5. No SDK release: `opennvr-adapter-sdk` stays
+at 1.3.0.
+
+Upgrading: the platform's `.env.example` pins `ADAPTER_TAG=0.1.7`,
+`YOLO_POSE_ADAPTER_TAG=0.1.7` and `OPEN_VOCAB_ADAPTER_TAG=0.1.7` from
+OpenNVR's YOLO26n change (open-nvr#654). Nothing migrates.
+
 ### Added
 
 - **`YOLOV8_WEIGHTS_FILE`** names the ONNX file the yolov8 adapter loads
@@ -29,6 +42,16 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as blip and clip are (#79): no volume, no network, `network_egress:
   []`, boots on a sealed box. CPU inference takes a few seconds a
   frame, so this is an on-demand adapter, not a per-frame one.
+
+### Fixed
+
+- **`open-vocab-adapter` answered every `/infer` with a 500** on the first
+  published image: transformers 5.0 dropped
+  `Owlv2Processor.post_process_object_detection`
+  (`post_process_grounded_object_detection` since 4.5x). The stubbed
+  tests never reached it; found by running the image on a photo. The
+  README's multipart example also used loose form fields where the SDK
+  reads a JSON `params` field (contract §3.5). (#61)
 
 ## [0.1.6] — 2026-10-11
 
