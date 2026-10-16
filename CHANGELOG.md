@@ -9,6 +9,16 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The embedding adapter is SigLIP 2** (`ViT-B-16-SigLIP2-256`, Google's
+  `webli` weights, Apache-2.0, 768 dimensions) in place of CLIP
+  `ViT-B-32`. Measured on coco128 text-to-image retrieval: mAP 0.672
+  against 0.571, recall@5 1.00 against 0.94, 57 ms an image against 26
+  on a 4-thread CPU. Vectors are 768 wide and not comparable with the
+  old 512; the platform re-embeds when the model changes. `CLIP_MODEL`
+  / `CLIP_PRETRAINED` still choose any OpenCLIP checkpoint.
+
 ### Added
 
 - **`parakeet-adapter`**: speech to text with NVIDIA Parakeet TDT 0.6B

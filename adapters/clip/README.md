@@ -1,6 +1,6 @@
 # CLIP embedding adapter
 
-**Task:** `embed` · **Port:** 9011 · **Model:** OpenCLIP `ViT-B-32` (LAION `laion2b_s34b_b79k`) · **Dimensions:** 512 · **Weights licence:** MIT
+**Task:** `embed` · **Port:** 9011 · **Model:** OpenCLIP `ViT-B-16-SigLIP2-256` (Google `webli`, SigLIP 2) · **Dimensions:** 768 · **Weights licence:** MIT
 
 Turns a frame into a vector — and a **query in words** into a vector in
 the same space.
@@ -17,9 +17,9 @@ keyword query can make.
 ```jsonc
 {
   "result": {
-    "embedding": [0.0231, -0.0114, ...],   // 512 floats, unit length
-    "dim": 512,
-    "model": "open_clip/ViT-B-32/laion2b_s34b_b79k",
+    "embedding": [0.0231, -0.0114, ...],   // 768 floats, unit length
+    "dim": 768,
+    "model": "open_clip/ViT-B-16-SigLIP2-256/webli",
     "modality": "image",                   // or "text"
     "normalized": true
   }
@@ -96,8 +96,8 @@ is not having to.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `CLIP_MODEL` | `ViT-B-32` | Any OpenCLIP architecture. |
-| `CLIP_PRETRAINED` | `laion2b_s34b_b79k` | **Check the licence** before changing — several popular checkpoints are non-commercial. |
+| `CLIP_MODEL` | `ViT-B-16-SigLIP2-256` | Any OpenCLIP architecture. |
+| `CLIP_PRETRAINED` | `webli` | **Check the licence** before changing — several popular checkpoints are non-commercial. |
 | `CLIP_CACHE_DIR` | `/models/clip` | Where the baked weights live. Populated = no egress declared. |
 | `CLIP_THREADS` | `2` | Torch intra-op threads. Left to torch it takes every core it sees, and on an NVR it would be competing with the detector the box exists for. |
 | `CLIP_OFFLINE` | `1` in the image | Asserts the adapter will never dial out, which is stronger than a cache that happens to be full. |
@@ -109,17 +109,17 @@ than compare them, which is what `dim` is for.
 
 ## Why this model
 
-`ViT-B-32` is the small end of the CLIP family, on purpose. OpenNVR's
-floor is a mini-PC, and this runs there — ~88M parameters in the image
-tower, tens of milliseconds per frame on a couple of x86 cores. A
-larger tower ranks slightly better and moves the floor, which is the
-wrong trade for this project.
+`ViT-B-16-SigLIP2-256` (SigLIP 2, Google, Apache-2.0) replaced CLIP
+`ViT-B-32` in October 2026 on a measurement: coco128 text-to-image
+retrieval, 49 classes, mAP 0.672 against 0.571 and recall@5 1.00 against
+0.94, at 57 ms an image against 26 on a 4-thread CPU. It is the
+smallest SigLIP 2 that beats the old model by more than noise; the B/32
+SigLIP 2 ranks 0.630 at CLIP's speed, and larger towers rank better
+again but would move OpenNVR's mini-PC floor. MobileCLIP2-B ranked
+0.647 and was passed over for its weights licence.
 
-The weights licence was checked rather than assumed. Both the LAION
-`laion2b_s34b_b79k` and OpenAI `openai` checkpoints for this
-architecture are MIT; several otherwise-attractive embedding models
-ship under CC-BY-NC, which would quietly poison OpenNVR's commercial
-licensing.
+**Check the licence** before changing `CLIP_PRETRAINED`: several
+otherwise-attractive embedding checkpoints are non-commercial.
 
 ## Hardware
 

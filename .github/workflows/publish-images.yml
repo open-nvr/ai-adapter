@@ -188,13 +188,15 @@ jobs:
           # stream). Weights mounted or fetched once from
           # PACKAGE_DETECTION_MODEL_URL, never baked.
           - { dir: package_detection, image: package-detection-adapter, port: 9010, platforms: "linux/amd64,linux/arm64" }
-          # CLIP embeddings — the `embed` task. Turns a frame into a
-          # vector AND a query in words into a vector in the same space,
-          # which is what lets OpenNVR's search rank by meaning as well
-          # as by keyword. ViT-B-32, MIT-licensed LAION weights, 512
-          # dims, CPU torch wheel. Weights BAKED IN like adapters/blip
-          # (issue #79): a bigger image, bought for a container that
-          # declares no network egress at all and needs no volume.
+          # Embeddings — the `embed` task. Turns a frame into a vector
+          # AND a query in words into a vector in the same space, which
+          # is what lets OpenNVR's search rank by meaning as well as
+          # by keyword. SigLIP 2 ViT-B/16 at 256 px, Google's Apache-2.0
+          # webli weights, 768 dims, CPU torch wheel (CLIP ViT-B-32
+          # until October 2026; measured mAP 0.672 vs 0.571). Weights
+          # BAKED IN like adapters/blip (issue #79): a bigger image,
+          # bought for a container that declares no network egress at
+          # all and needs no volume.
           - { dir: clip,           image: clip-adapter,           port: 9011, platforms: "linux/amd64,linux/arm64" }
           # Open-vocabulary detection — the `open_vocab_detection` task.
           # A box and a score for any phrase the caller writes ("red

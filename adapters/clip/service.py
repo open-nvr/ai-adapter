@@ -38,19 +38,23 @@ Both call shapes OpenNVR already sends work unchanged:
 
 MODEL, AND WHY THIS ONE
 -----------------------
+``ViT-B-16-SigLIP2-256`` with Google's ``webli`` weights (SigLIP 2,
+February 2025), 768 dimensions, Apache-2.0 — checked, because a
+non-commercial weights licence would quietly poison OpenNVR's commercial
+licensing, and several popular embedding checkpoints carry one
+(MobileCLIP2 ranked nearly as well and was passed over for its licence).
 
-``ViT-B-32`` with LAION's ``laion2b_s34b_b79k`` weights, 512
-dimensions, MIT-licensed — checked, because a non-commercial weights
-licence would quietly poison OpenNVR's commercial licensing, and
-several popular embedding checkpoints carry one.
-
-It is the small end of the CLIP family on purpose. OpenNVR's floor is a
-mini-PC, and this runs there: the image tower is ~88M parameters and
-embeds a frame in tens of milliseconds on a couple of x86 cores. A
-larger tower would rank slightly better and would move the floor,
-which is the wrong trade for this project. ``CLIP_MODEL`` and
-``CLIP_PRETRAINED`` change it for anyone who disagrees, and the
-dimension is read from the model rather than assumed.
+Measured against the shipped ``ViT-B-32``/``laion2b_s34b_b79k`` on
+coco128 text-to-image retrieval (49 classes, 4-thread CPU): mAP 0.672
+against 0.571, recall@5 1.00 against 0.94, at 57 ms an image against
+26 ms. The B/16 at 256 px is the smallest SigLIP 2 that beats the
+B/32 (0.630, same speed as CLIP) by more than noise; a larger tower
+would rank better again and move OpenNVR's mini-PC floor, which is the
+wrong trade. ``CLIP_MODEL`` and ``CLIP_PRETRAINED`` change it for anyone
+who disagrees, and the dimension is read from the model rather than
+assumed. A store of 512-wide vectors from the old model is not
+comparable with these; the platform re-embeds when the model changes
+(open-nvr's ``embed_enrichment``).
 
 VECTORS COME BACK NORMALISED
 ----------------------------
@@ -90,11 +94,19 @@ logger = logging.getLogger(__name__)
 #: OpenCLIP architecture and pretrained tag. Both overridable.
 MODEL_ENV = "CLIP_MODEL"
 PRETRAINED_ENV = "CLIP_PRETRAINED"
-DEFAULT_MODEL = "ViT-B-32"
-DEFAULT_PRETRAINED = "laion2b_s34b_b79k"
+DEFAULT_MODEL = "ViT-B-16-SigLIP2-256"
+DEFAULT_PRETRAINED = "webli"
 
 #: Where weights are cached. A populated cache means no network at all.
 CACHE_DIR_ENV = "CLIP_CACHE_DIR"
+#: A directory holding the model's HuggingFace tokenizer files, saved at
+#: build time (``save_pretrained``). Set, the tokenizer is built from
+#: that path and never asks the hub for anything; unset, open_clip
+#: resolves it by name, which for a SigLIP 2 model means a transformers
+#: lookup that fails offline even with the files cached (transformers 5
+#: wants a ``config.json`` the tokenizer repo does not have, and offline
+#: it cannot tell "absent" from "not fetched"). The baked image sets it.
+TOKENIZER_DIR_ENV = "CLIP_TOKENIZER_DIR"
 DEFAULT_CACHE_DIR = "/models/clip"
 
 #: Torch intra-op threads. Left unset, torch grabs every core it can
@@ -174,7 +186,7 @@ class ClipEmbeddingService(AdapterService):
                 cache_dir=cache_dir or None,
             )
             model.eval().to(self._device)
-            tokenizer = open_clip.get_tokenizer(arch)
+            tokenizer = _tokenizer_for(open_clip, arch)
         except Exception as exc:
             self._load_state = HealthStatus.ERROR
             self._load_error = (
@@ -228,7 +240,7 @@ class ClipEmbeddingService(AdapterService):
                 reasoning = "CUDA available and in use; weights loaded."
             else:
                 reasoning = (
-                    f"Running on CPU with {cpu_count} cores. ViT-B-32 is the "
+                    f"Running on CPU with {cpu_count} cores. SigLIP 2 B/16 is the "
                     f"small end of the CLIP family and embeds a frame in tens "
                     f"of milliseconds here; a GPU makes it faster, not possible."
                 )
@@ -457,7 +469,7 @@ def _unit(tensor: Any) -> list[float]:
 def _embed_dim(model: Any) -> int | None:
     """The model's output width, asked of the model rather than assumed.
 
-    ViT-B-32 is 512 today. Hard-coding that would make ``CLIP_MODEL``
+    SigLIP 2 B/16 is 768 today (ViT-B-32 was 512). Hard-coding that would make ``CLIP_MODEL``
     a trap: point it at ViT-L-14, get 768-wide vectors, and a store
     told they were 512 wide.
     """
@@ -508,3 +520,25 @@ def _int_env(name: str, default: int) -> int:
         logger.warning("clip: %s=%r is not an integer; using %d",
                        name, raw, default)
         return default
+
+
+def _tokenizer_for(open_clip: Any, arch: str) -> Any:
+    """The model's tokenizer: from ``CLIP_TOKENIZER_DIR`` when it is set and
+    exists (the baked image), else open_clip's own lookup by name. The
+    local path takes the same context length, mode and kwargs open_clip
+    would give the hub name, read from the built-in model config."""
+    tok_dir = os.getenv(TOKENIZER_DIR_ENV, "").strip()
+    if not tok_dir or not os.path.isdir(tok_dir):
+        return open_clip.get_tokenizer(arch)
+    cfg = open_clip.get_model_config(arch) or {}
+    text_cfg = cfg.get("text_cfg", {}) if isinstance(cfg, dict) else {}
+    if not text_cfg.get("hf_tokenizer_name"):
+        # Not an HF tokenizer (plain CLIP's is built in); the dir is moot.
+        return open_clip.get_tokenizer(arch)
+    from open_clip.tokenizer import HFTokenizer
+    return HFTokenizer(
+        tok_dir,
+        context_length=text_cfg.get("context_length", 77),
+        tokenizer_mode=text_cfg.get("tokenizer_mode", None),
+        **(text_cfg.get("tokenizer_kwargs", {}) or {}),
+    )
