@@ -1,8 +1,8 @@
 """
 Parakeet ASR service — the model behind ``adapters/parakeet/main.py``.
 
-Speech in (16 kHz PCM WAV straight to the model; anything else through
-ffmpeg first), §5.3 ``AsrResult`` out: ``transcript``, ``language``,
+Speech in (a PCM WAV straight to the model, which resamples; anything
+else through ffmpeg first), §5.3 ``AsrResult`` out: ``transcript``, ``language``,
 ``segments`` with ``start_ms`` / ``end_ms``, plus the extras the whisper
 adapter also carries (``duration_seconds``, ``model``).
 
@@ -60,7 +60,7 @@ MODEL_NAME_ENV: str = "PARAKEET_MODEL"
 #: convenience, not the shipped posture.
 WEIGHTS_DIR_ENV: str = "PARAKEET_WEIGHTS_DIR"
 MAX_AUDIO_BYTES: int = 25 * 1024 * 1024
-SAMPLE_RATE: int = 16000
+SAMPLE_RATE: int = 16000  # what ffmpeg converts to
 #: A gap between tokens longer than this also ends a segment, so a
 #: pause reads as one in the transcript's timing.
 SEGMENT_GAP_S: float = 0.8
@@ -175,18 +175,15 @@ class ParakeetService(AdapterService):
         language = params.get("language")
 
         t0 = time.perf_counter()
-        wav_path, duration_s = _to_wav16k(bytes(audio))
+        waveform, rate, duration_s = _load_audio(bytes(audio))
         try:
-            try:
-                res = self._model.recognize(wav_path)
-            except Exception as exc:  # noqa: BLE001
-                raise ServiceError(
-                    ErrorCategory.MODEL_ERROR, code="inference_failed",
-                    message=f"Parakeet raised during recognition: {exc}",
-                    transient=True, http_status=500, retry_after_ms=1000,
-                ) from exc
-        finally:
-            shutil.rmtree(os.path.dirname(wav_path), ignore_errors=True)
+            res = self._model.recognize(waveform, sample_rate=rate)
+        except Exception as exc:  # noqa: BLE001
+            raise ServiceError(
+                ErrorCategory.MODEL_ERROR, code="inference_failed",
+                message=f"Parakeet raised during recognition: {exc}",
+                transient=True, http_status=500, retry_after_ms=1000,
+            ) from exc
 
         segments = _segments(res, duration_s)
         asr = AsrResult(
@@ -237,41 +234,56 @@ def _bad(code: str, message: str, status: int = 400) -> ServiceError:
                         transient=False, http_status=status)
 
 
-def _to_wav16k(audio: bytes) -> tuple[str, float]:
-    """The bytes as a 16 kHz mono 16-bit WAV on disk, and its duration.
-    A WAV that already is one is written as-is (the agent sends exactly
-    this); anything else goes through ffmpeg."""
-    tmp_dir = tempfile.mkdtemp(prefix="parakeet-svc-")
-    out = os.path.join(tmp_dir, "in16k.wav")
+#: The rates onnx-asr resamples from itself; a PCM WAV at one of these
+#: needs no ffmpeg.
+_NATIVE_RATES = (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000)
+
+
+def _load_audio(audio: bytes) -> tuple[Any, int, float]:
+    """``(waveform float32 mono, sample rate, duration s)``. A PCM WAV is
+    read with the standard library and handed to the model as samples
+    (onnx-asr resamples from any common rate), so the agent's 16 kHz
+    WAV and the conformance kit's 8 kHz probe both work with no ffmpeg
+    in the image; anything else (a browser's webm, an mp3) is converted
+    by ffmpeg, which the published image carries."""
+    import numpy as np
+
     if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
         try:
             with wave.open(io.BytesIO(audio), "rb") as w:
-                ok = (w.getnchannels() == 1 and w.getsampwidth() == 2
-                      and w.getframerate() == SAMPLE_RATE and w.getcomptype() == "NONE")
-                frames, rate = w.getnframes(), w.getframerate()
+                ch, width, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+                pcm = w.readframes(n) if w.getcomptype() == "NONE" else None
         except wave.Error:
-            ok = False
-        if ok:
-            with open(out, "wb") as fh:
-                fh.write(audio)
-            return out, frames / float(rate)
-    src = os.path.join(tmp_dir, "in.bin")
-    with open(src, "wb") as fh:
-        fh.write(audio)
+            pcm = None
+        if pcm is not None and width in (1, 2, 4) and rate in _NATIVE_RATES:
+            if width == 1:
+                x = (np.frombuffer(pcm, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+            elif width == 2:
+                x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+            else:
+                x = np.frombuffer(pcm, dtype="<i4").astype(np.float32) / 2147483648.0
+            if ch > 1:
+                x = x.reshape(-1, ch).mean(axis=1)
+            return np.ascontiguousarray(x), rate, len(x) / float(rate)
     if shutil.which("ffmpeg") is None:
+        raise _bad("malformed_input", "Audio must be a PCM WAV (ffmpeg is not installed to convert anything else).")
+    tmp_dir = tempfile.mkdtemp(prefix="parakeet-svc-")
+    try:
+        src = os.path.join(tmp_dir, "in.bin"); out = os.path.join(tmp_dir, "in16k.wav")
+        with open(src, "wb") as fh:
+            fh.write(audio)
+        proc = subprocess.run(
+            ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", src,
+             "-ac", "1", "-ar", str(SAMPLE_RATE), "-sample_fmt", "s16", "-f", "wav", out],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0 or not os.path.exists(out):
+            raise _bad("malformed_input", f"Audio could not be decoded: {proc.stderr.strip()[:200]}")
+        with open(out, "rb") as fh:
+            converted = fh.read()
+    finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise _bad("malformed_input", "Audio must be 16 kHz mono 16-bit PCM WAV (ffmpeg is not installed to convert it).")
-    proc = subprocess.run(
-        ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", src,
-         "-ac", "1", "-ar", str(SAMPLE_RATE), "-sample_fmt", "s16", "-f", "wav", out],
-        capture_output=True, text=True,
-    )
-    if proc.returncode != 0 or not os.path.exists(out):
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise _bad("malformed_input", f"Audio could not be decoded: {proc.stderr.strip()[:200]}")
-    with wave.open(out, "rb") as w:
-        duration = w.getnframes() / float(w.getframerate())
-    return out, duration
+    return _load_audio(converted)
 
 
 def _segments(res: Any, duration_s: float) -> list[AsrSegment]:

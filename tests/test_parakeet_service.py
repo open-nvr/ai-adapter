@@ -48,9 +48,10 @@ def test_infer_json_base64_is_what_the_agent_sends(parakeet_app, sample_wav):
     assert r.status_code == 200, r.text
     result = r.json()["result"]
     assert result["transcript"] == "Hello world. Thanks" and result["language"] == "en"
-    # The 16 kHz mono PCM WAV went to the model as-is, no ffmpeg.
+    # The 16 kHz mono PCM WAV went to the model as samples, no ffmpeg.
     from tests._parakeet_service_fixtures import _FakeModel
-    assert _FakeModel.last_call["path"].endswith("in16k.wav")
+    assert _FakeModel.last_call["sample_rate"] == 16000
+    assert _FakeModel.last_call["samples"] == 32000
 
 
 def test_translation_is_refused_and_names_whisper(parakeet_app, sample_wav):
@@ -84,3 +85,20 @@ def test_an_abbreviation_dot_does_not_split_a_segment():
     res = _FakeResult("after 6 p. m. Thanks", [" after", " 6", " p", ".", " m", ".", " Thanks"],
                       [0.0, 0.2, 0.4, 0.5, 0.6, 0.7, 1.2])
     assert [s.text for s in _segments(res, 1.5)] == ["after 6 p. m.", "Thanks"]
+
+
+def test_a_pcm_wav_at_another_rate_needs_no_ffmpeg(parakeet_app, monkeypatch):
+    """The conformance kit probes with an 8 kHz WAV and CI has no ffmpeg;
+    onnx-asr resamples a PCM waveform itself, so no conversion is run."""
+    import shutil
+    import wave, io
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(8000)
+        w.writeframes(b"\x00\x00\x00\x00" * 4000)
+    r = parakeet_app.post("/infer", files={"audio": ("c.wav", buf.getvalue(), "audio/wav")})
+    assert r.status_code == 200, r.text
+    from tests._parakeet_service_fixtures import _FakeModel
+    assert _FakeModel.last_call["sample_rate"] == 8000 and _FakeModel.last_call["samples"] == 4000
+    assert r.json()["result"]["duration_seconds"] == 0.5

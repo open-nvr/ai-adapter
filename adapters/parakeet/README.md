@@ -28,8 +28,9 @@ single largest cost in the voice loop's latency budget on CPU.
 - Languages: v3 detects 25 European languages itself (no Hindi — the
   whisper adapter covers that). A `language` param is echoed in the
   result, not enforced.
-- Input: 16 kHz mono 16-bit PCM WAV goes to the model as-is (what the
-  agent sends); anything else is converted by ffmpeg in the image.
+- Input: a PCM WAV at any common rate goes to the model as samples
+  (it resamples; the agent sends 16 kHz mono); anything else — a
+  browser's webm, an mp3 — is converted by ffmpeg in the image.
 - Segments: from the model's token timestamps, split at sentence
   punctuation and at pauses over 0.8 s. No `no_speech_prob` (a
   transducer has no such number); the agent only logs it.

@@ -27,8 +27,8 @@ class _FakeModel:
     def with_timestamps(self):
         return self
 
-    def recognize(self, path, **kw):
-        _FakeModel.last_call = {"path": path, **kw}
+    def recognize(self, waveform, **kw):
+        _FakeModel.last_call = {"samples": int(getattr(waveform, "shape", [0])[0]), **kw}
         return self.result
 
 
