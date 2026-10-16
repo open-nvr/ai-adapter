@@ -90,12 +90,12 @@ def _embed_text(svc, text):
     return svc.infer({"text": text}).result["embedding"]
 
 
-def test_the_model_is_512_dimensional(real_service):
+def test_the_model_is_768_dimensional(real_service):
     """The dimension OpenNVR's store will be built around. If a weights
     change moves it, a store full of 512-wide vectors stops being
     comparable and this is where that is caught."""
-    assert real_service._dim == 512
-    assert len(_embed_text(real_service, "a truck")) == 512
+    assert real_service._dim == 768
+    assert len(_embed_text(real_service, "a truck")) == 768
 
 
 def test_words_and_pictures_land_in_the_same_space(real_service):

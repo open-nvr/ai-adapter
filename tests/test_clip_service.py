@@ -301,3 +301,34 @@ def test_offline_is_an_assertion_stronger_than_an_empty_cache(monkeypatch, tmp_p
     importlib.reload(main_mod)
 
     assert main_mod._weights_fetch_egress() == []
+
+
+def test_tokenizer_comes_from_the_local_dir_when_the_model_names_an_hf_tokenizer(tmp_path, monkeypatch):
+    """The baked image saves SigLIP 2's tokenizer as files and points
+    CLIP_TOKENIZER_DIR at them; the service must build the tokenizer from
+    that path (no hub lookup) with the config's context length and
+    kwargs, and fall back to open_clip's lookup for a built-in one."""
+    import types
+    from adapters.clip.service import _tokenizer_for
+
+    made = {}
+
+    class _HF:
+        def __init__(self, source, **kw):
+            made.update(source=source, **kw)
+
+    fake_tok_mod = types.SimpleNamespace(HFTokenizer=_HF)
+    monkeypatch.setitem(__import__("sys").modules, "open_clip.tokenizer", fake_tok_mod)
+    oc = types.SimpleNamespace(
+        get_model_config=lambda arch: {"text_cfg": {"hf_tokenizer_name": "timm/x", "context_length": 64,
+                                                    "tokenizer_kwargs": {"clean": "canonicalize"}}}
+        if arch == "siglip" else {"text_cfg": {"context_length": 77}},
+        get_tokenizer=lambda arch: ("by-name", arch),
+    )
+    monkeypatch.setenv("CLIP_TOKENIZER_DIR", str(tmp_path))
+    tok = _tokenizer_for(oc, "siglip")
+    assert isinstance(tok, _HF)
+    assert made == {"source": str(tmp_path), "context_length": 64, "tokenizer_mode": None, "clean": "canonicalize"}
+    assert _tokenizer_for(oc, "ViT-B-32") == ("by-name", "ViT-B-32")
+    monkeypatch.delenv("CLIP_TOKENIZER_DIR")
+    assert _tokenizer_for(oc, "siglip") == ("by-name", "siglip")

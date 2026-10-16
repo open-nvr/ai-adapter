@@ -61,7 +61,9 @@ RUN set -eux; \
             torchvision==0.24.1+cpu; \
     fi
 
-RUN pip install --no-cache-dir open-clip-torch==3.3.0
+# transformers + sentencepiece + protobuf: SigLIP 2's tokenizer (a Gemma
+# tokenizer through HuggingFace), which open_clip loads lazily.
+RUN pip install --no-cache-dir open-clip-torch==3.3.0 transformers==5.0.0 sentencepiece protobuf
 
 # Pre-bake the weights so the adapter runs with NO network egress under
 # AI_SOVEREIGNTY=local_only (issue #79, the same call adapters/blip
@@ -70,12 +72,28 @@ RUN pip install --no-cache-dir open-clip-torch==3.3.0
 # on a box whose whole reason for existing is not having to. Baking
 # keeps the secure-by-default posture, and it is why main.py's
 # _weights_fetch_egress() reports an empty list on this image.
-ARG CLIP_MODEL=ViT-B-32
-ARG CLIP_PRETRAINED=laion2b_s34b_b79k
+ARG CLIP_MODEL=ViT-B-16-SigLIP2-256
+ARG CLIP_PRETRAINED=webli
 ENV HF_HUB_DISABLE_TELEMETRY=1
 RUN python -c "import open_clip; \
 open_clip.create_model_and_transforms('${CLIP_MODEL}', pretrained='${CLIP_PRETRAINED}', cache_dir='/models/clip'); \
 open_clip.get_tokenizer('${CLIP_MODEL}')"
+# The tokenizer as plain files, so the runtime never asks the hub for
+# it: open_clip resolves a SigLIP 2 tokenizer through transformers,
+# which offline fails on a config.json the repo does not have even with
+# every file cached. CLIP_TOKENIZER_DIR points the service at this dir;
+# a model with a built-in tokenizer (plain CLIP) leaves it empty.
+RUN python - <<'PY'
+import os, open_clip
+cfg = open_clip.get_model_config(os.environ["CLIP_MODEL"]) or {}
+name = (cfg.get("text_cfg") or {}).get("hf_tokenizer_name")
+if name:
+    from transformers import AutoTokenizer
+    AutoTokenizer.from_pretrained(name).save_pretrained("/models/clip/tokenizer")
+    print("tokenizer saved from", name, sorted(os.listdir("/models/clip/tokenizer")))
+else:
+    print("built-in tokenizer; nothing to save")
+PY
 
 # Pin the RUNTIME fully offline so a load never makes the default
 # metadata check to huggingface.co — which would contradict
@@ -92,9 +110,10 @@ COPY adapters/clip/                             ./adapters/clip/
 
 ENV PYTHONPATH=/app \
     OPENNVR_ADAPTER_TOKEN="" \
-    CLIP_MODEL=ViT-B-32 \
-    CLIP_PRETRAINED=laion2b_s34b_b79k \
+    CLIP_MODEL=ViT-B-16-SigLIP2-256 \
+    CLIP_PRETRAINED=webli \
     CLIP_CACHE_DIR=/models/clip \
+    CLIP_TOKENIZER_DIR=/models/clip/tokenizer \
     CLIP_THREADS=2
 
 EXPOSE 9011
