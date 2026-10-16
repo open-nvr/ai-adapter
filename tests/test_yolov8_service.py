@@ -590,3 +590,19 @@ def _parse_latency_count(prometheus_body: str) -> int:
         if line.startswith("adapter_infer_latency_seconds_count"):
             total += int(line.rsplit(" ", 1)[1])
     return total
+
+
+def test_weights_file_name_comes_from_the_environment(yolov8_environment, monkeypatch):
+    """open-nvr's weights image ships yolo26n.onnx and names it through
+    YOLOV8_WEIGHTS_FILE; before this the adapter looked for yolov8n.onnx
+    and nothing else, so a renamed file meant a dead detector."""
+    import importlib
+    import adapters.yolov8.service as service_module
+    importlib.reload(service_module)
+
+    monkeypatch.setenv("YOLOV8_WEIGHTS_FILE", "yolo26n.onnx")
+    svc = service_module.YoloV8Service()
+    assert svc._weights_path.endswith("yolo26n.onnx")
+
+    monkeypatch.delenv("YOLOV8_WEIGHTS_FILE")
+    assert service_module.YoloV8Service()._weights_path.endswith("yolov8n.onnx")

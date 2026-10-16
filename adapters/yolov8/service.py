@@ -84,7 +84,12 @@ class YoloV8Service(AdapterService):
     """Stateful façade around YOLOv8Adapter."""
 
     def __init__(self, weights_path: str | None = None) -> None:
-        self._weights_path = weights_path or os.path.join(MODEL_WEIGHTS_DIR, "yolov8n.onnx")
+        # The file name is the stack's to choose: open-nvr's weights image
+        # ships yolo26n.onnx (same (1, 84, 8400) tensor, same decode) and
+        # names it through YOLOV8_WEIGHTS_FILE; an install that predates it
+        # still has yolov8n.onnx in the volume and the default still finds it.
+        self._weights_path = weights_path or os.path.join(
+            MODEL_WEIGHTS_DIR, os.environ.get("YOLOV8_WEIGHTS_FILE") or "yolov8n.onnx")
         self._adapter: YOLOv8Adapter = YOLOv8Adapter(
             config={"enabled": True, "weights_path": self._weights_path}
         )
