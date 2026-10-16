@@ -206,6 +206,12 @@ jobs:
           # Slow on CPU — a few seconds a frame — so it is an on-demand
           # adapter, not a per-frame one.
           - { dir: vlm,            image: open-vocab-adapter,     port: 9012, platforms: "linux/amd64,linux/arm64" }
+          # Parakeet TDT 0.6B v3 speech-to-text (onnx-asr, int8, CPU
+          # first): the same §5.3 result as whisper at a third of the
+          # errors and a fifth of the time on four cores. ~670 MB of
+          # weights BAKED IN, no egress. The platform's STT_ADAPTER
+          # chooses between this and whisper for the agent's slot.
+          - { dir: parakeet,       image: parakeet-adapter,       port: 9019, platforms: "linux/amd64,linux/arm64" }
           # Combined Whisper+Piper+BLIP in one image (issue #82): three voice
           # adapters, one container, same per-adapter /infer contract.
           - { dir: voice-bundle,   image: voice-adapter,          port: 9006, platforms: "linux/amd64,linux/arm64" }

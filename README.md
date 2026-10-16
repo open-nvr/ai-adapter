@@ -89,6 +89,7 @@ ai-adapter/
 │   ├── yolov8/               Object detection — ONNX runtime, CPU + GPU
 │   ├── piper/                Text-to-speech — inline-audio response option
 │   ├── whisper/              Speech-to-text — faster-whisper, CPU + GPU
+│   ├── parakeet/             Speech-to-text — Parakeet TDT 0.6B v3 via onnx-asr; the CPU default (WER 1.4 % vs whisper base.en 3.3 %, 5× faster)
 │   ├── fast_plate_ocr/       License-plate recognition
 │   ├── insightface/          Face detection + recognition with REST face DB
 │   ├── blip/                 Scene captioning — used by the camera-agent
@@ -196,7 +197,7 @@ Apple Silicon Mac or a Raspberry Pi 5 pulls a native image with no
 
 | Adapter images | amd64 | arm64 |
 |---|:---:|:---:|
-| `yolov8`, `piper`, `whisper`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm`, `yolo-pose`, `package-detection`, `clip`, `open-vocab` | ✓ | ✓ |
+| `yolov8`, `piper`, `whisper`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm`, `yolo-pose`, `package-detection`, `clip`, `open-vocab`, `parakeet` | ✓ | ✓ |
 
 (The former amd64-only pair — `llamacpp` and `smolvlm`, blocked on
 [ggml-org/llama.cpp#19177](https://github.com/ggml-org/llama.cpp/issues/19177) —
