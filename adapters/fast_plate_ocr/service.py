@@ -64,6 +64,16 @@ logger = logging.getLogger(__name__)
 # Operators can override via ``OPENNVR_LPR_MODEL`` without code
 # changes (``cct-xs-v2-global-model`` for the smallest v2 build).
 DEFAULT_MODEL_ID: str = "cct-s-v2-global-model"
+# Custom (fine-tuned) models. Two ways in, both resolved at construction:
+#   * ``OPENNVR_LPR_MODEL_PATH`` + ``OPENNVR_LPR_PLATE_CONFIG`` — explicit
+#     ONNX file and its plate config (what ``fast-plate-ocr export`` writes).
+#   * ``OPENNVR_LPR_MODEL=<name>`` where ``models/<name>/model.onnx`` and
+#     ``models/<name>/plate_config.yaml`` exist beside this file — a model
+#     baked into the image. Names that match no such directory are hub
+#     model ids, exactly as before, so nothing changes for existing installs.
+BUNDLED_MODELS_DIR: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+BUNDLED_MODEL_FILE: str = "model.onnx"
+BUNDLED_CONFIG_FILE: str = "plate_config.yaml"
 # Overall confidence is the MIN per-character probability (see
 # _parse_recognizer_output): clean reads score ~0.99, misreads and
 # hallucinations cluster under ~0.45. Tunable per-install via
@@ -116,6 +126,27 @@ class FastPlateOcrService(AdapterService):
         self._model_id: str = model_id or os.getenv(
             "OPENNVR_LPR_MODEL", DEFAULT_MODEL_ID
         )
+        # A custom model is a pair of files; ``None`` means a hub id.
+        self._model_path: str | None = None
+        self._plate_config_path: str | None = None
+        explicit = os.getenv("OPENNVR_LPR_MODEL_PATH", "").strip()
+        if explicit:
+            cfg = os.getenv("OPENNVR_LPR_PLATE_CONFIG", "").strip()
+            if not cfg:
+                raise ValueError(
+                    "OPENNVR_LPR_MODEL_PATH needs OPENNVR_LPR_PLATE_CONFIG: a "
+                    "custom plate model is an ONNX file plus the plate config "
+                    "it was trained with")
+            self._model_path, self._plate_config_path = explicit, cfg
+            if not model_id and not os.getenv("OPENNVR_LPR_MODEL"):
+                self._model_id = os.path.splitext(os.path.basename(explicit))[0]
+        else:
+            bundled = os.path.join(
+                os.getenv("OPENNVR_LPR_MODELS_DIR", BUNDLED_MODELS_DIR), self._model_id)
+            onnx = os.path.join(bundled, BUNDLED_MODEL_FILE)
+            cfg = os.path.join(bundled, BUNDLED_CONFIG_FILE)
+            if os.path.isfile(onnx) and os.path.isfile(cfg):
+                self._model_path, self._plate_config_path = onnx, cfg
         try:
             self._min_confidence: float = float(os.getenv(
                 "OPENNVR_LPR_MIN_CONFIDENCE", "") or min_confidence)
@@ -181,7 +212,13 @@ class FastPlateOcrService(AdapterService):
                 # discovery-only code paths.
                 from fast_plate_ocr import LicensePlateRecognizer
 
-                self._recognizer = LicensePlateRecognizer(self._model_id)
+                if self._model_path:
+                    self._recognizer = LicensePlateRecognizer(
+                        onnx_model_path=self._model_path,
+                        plate_config_path=self._plate_config_path,
+                    )
+                else:
+                    self._recognizer = LicensePlateRecognizer(self._model_id)
                 self._fingerprint_cache = self._compute_fingerprint()
                 self._load_state = HealthStatus.OK
                 self._load_error = None
@@ -245,7 +282,8 @@ class FastPlateOcrService(AdapterService):
     def model_info(self) -> ModelInfo:
         return ModelInfo(
             name=self._model_id,
-            version=f"fast-plate-ocr/{self._model_id}",
+            version=(f"custom/{self._model_id}" if self._model_path
+                     else f"fast-plate-ocr/{self._model_id}"),
             framework="onnx",
             modalities_in=["image"],
             modalities_out=["text"],
@@ -535,7 +573,7 @@ class FastPlateOcrService(AdapterService):
         polls /capabilities. The §11.3 drift event still fires on
         file rotation — the stat key changes, the hash gets
         recomputed, and the returned fingerprint differs."""
-        path = _recognizer_model_path(self._recognizer)
+        path = self._model_path or _recognizer_model_path(self._recognizer)
         if path and os.path.isfile(path):
             stat = os.stat(path)
             stat_key = (path, stat.st_size, stat.st_mtime_ns)

@@ -62,6 +62,20 @@ RUN python -c "from fast_plate_ocr import LicensePlateRecognizer; from open_imag
 
 COPY adapters/fast_plate_ocr/  ./adapters/fast_plate_ocr/
 
+# Baked custom models (selected with OPENNVR_LPR_MODEL=<name>; the hub
+# model stays the default). Fetched from this repo's releases at build
+# time and checksum-verified, so the image is reproducible and the
+# weights never go through git. See adapters/fast_plate_ocr/models/README.md.
+ARG INDIAN_PLATES_RELEASE=indian-plates-v1
+ARG INDIAN_PLATES_ONNX_SHA256=4c5cc1b784728312ddb01dac88cc81e8c330a1cd6e8de5f73df7c0713c5812bc
+ARG INDIAN_PLATES_CONFIG_SHA256=236af234cfd64b85a3993f37504c6c2d3c0de066aaaa61d3e37993508ea8b243
+RUN set -eux; d=./adapters/fast_plate_ocr/models/indian-plates-v1; mkdir -p "$d"; \
+    base="https://github.com/open-nvr/ai-adapter/releases/download/${INDIAN_PLATES_RELEASE}"; \
+    python -c "import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "$base/indian-plates-v1.onnx" "$d/model.onnx"; \
+    python -c "import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "$base/plate_config.yaml" "$d/plate_config.yaml"; \
+    echo "${INDIAN_PLATES_ONNX_SHA256}  $d/model.onnx" | sha256sum -c -; \
+    echo "${INDIAN_PLATES_CONFIG_SHA256}  $d/plate_config.yaml" | sha256sum -c -
+
 # The SDK lives in this same repo; copy the sdist-style source so the
 # container is self-contained. (Once the SDK is published on PyPI we
 # can replace this with `pip install opennvr-adapter-sdk` for parity

@@ -536,3 +536,68 @@ def test_infer_result_carries_region_field(fast_plate_ocr_environment, sample_jp
     resp = svc.infer({"__file__": sample_jpeg})
     assert "region" in resp.result
     assert resp.result["region"] is None      # the fake recognizer is v1-shaped
+
+
+# ── custom (fine-tuned) models ───────────────────────────────────────
+
+
+def test_explicit_model_path_builds_recognizer_from_files(
+    fast_plate_ocr_environment, tmp_path, monkeypatch
+):
+    """OPENNVR_LPR_MODEL_PATH + OPENNVR_LPR_PLATE_CONFIG: the recognizer
+    is built from the two files, the fingerprint hashes that file, and
+    model_info says the model is custom."""
+    import hashlib
+    onnx = tmp_path / "indian.onnx"; onnx.write_bytes(b"INDIAN-PLATES-" * 100)
+    cfg = tmp_path / "plate_config.yaml"; cfg.write_text("max_plate_slots: 10\n")
+    monkeypatch.setenv("OPENNVR_LPR_MODEL_PATH", str(onnx))
+    monkeypatch.setenv("OPENNVR_LPR_PLATE_CONFIG", str(cfg))
+    monkeypatch.delenv("OPENNVR_LPR_MODEL", raising=False)
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    assert svc.is_ready()
+    kwargs = fast_plate_ocr_environment["fake_recognizer_cls"].last_init_kwargs
+    assert kwargs["onnx_model_path"] == str(onnx)
+    assert kwargs["plate_config_path"] == str(cfg)
+    assert svc.fingerprint() == "sha256:" + hashlib.sha256(onnx.read_bytes()).hexdigest()
+    info = svc.model_info()
+    assert info.name == "indian" and info.version == "custom/indian"
+
+
+def test_explicit_model_path_without_config_is_refused(
+    fast_plate_ocr_environment, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENNVR_LPR_MODEL_PATH", str(tmp_path / "x.onnx"))
+    monkeypatch.delenv("OPENNVR_LPR_PLATE_CONFIG", raising=False)
+    with pytest.raises(ValueError):
+        _build_service(fast_plate_ocr_environment)
+
+
+def test_bundled_model_name_resolves_to_files_beside_the_adapter(
+    fast_plate_ocr_environment, tmp_path, monkeypatch
+):
+    """OPENNVR_LPR_MODEL=<name> with models/<name>/{model.onnx,
+    plate_config.yaml} present is a baked-in custom model."""
+    d = tmp_path / "models" / "indian-plates-v1"; d.mkdir(parents=True)
+    (d / "model.onnx").write_bytes(b"BAKED" * 50); (d / "plate_config.yaml").write_text("max_plate_slots: 10\n")
+    monkeypatch.setenv("OPENNVR_LPR_MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("OPENNVR_LPR_MODEL", "indian-plates-v1")
+    monkeypatch.delenv("OPENNVR_LPR_MODEL_PATH", raising=False)
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    kwargs = fast_plate_ocr_environment["fake_recognizer_cls"].last_init_kwargs
+    assert kwargs["onnx_model_path"] == str(d / "model.onnx")
+    assert svc.model_info().version == "custom/indian-plates-v1"
+
+
+def test_hub_model_name_still_loads_by_id(fast_plate_ocr_environment, tmp_path, monkeypatch):
+    """A name with no bundled directory is a hub id, exactly as before."""
+    monkeypatch.setenv("OPENNVR_LPR_MODELS_DIR", str(tmp_path / "empty"))
+    monkeypatch.setenv("OPENNVR_LPR_MODEL", "cct-xs-v2-global-model")
+    monkeypatch.delenv("OPENNVR_LPR_MODEL_PATH", raising=False)
+    svc = _build_service(fast_plate_ocr_environment)
+    svc.load()
+    cls = fast_plate_ocr_environment["fake_recognizer_cls"]
+    assert cls.last_init_args == ("cct-xs-v2-global-model",)
+    assert "onnx_model_path" not in cls.last_init_kwargs
+    assert svc.model_info().version == "fast-plate-ocr/cct-xs-v2-global-model"

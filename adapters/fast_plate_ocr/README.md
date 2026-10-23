@@ -112,6 +112,32 @@ that as an `adapter.fingerprint_mismatch` audit event, which is exactly the
 intended behaviour (the operator approved a specific model; a swap requires
 re-approval).
 
+### Custom (fine-tuned) models
+
+The global model reads Indian plates poorly (39% exact on a held-out set
+of real crops; the fonts and the state-code layout are not in its training
+data). A model fine-tuned with `fast-plate-ocr train` on Indian plates
+reads 84%+ on the same crops. Two ways to run such a model, no code change:
+
+* **Explicit files:** the ONNX that `fast-plate-ocr export` wrote and the
+  plate config it was trained with.
+
+  ```bash
+  OPENNVR_LPR_MODEL_PATH=/models/indian/model.onnx \
+  OPENNVR_LPR_PLATE_CONFIG=/models/indian/plate_config.yaml \
+  uvicorn adapters.fast_plate_ocr.main:app
+  ```
+
+* **Baked into the image:** put `model.onnx` and `plate_config.yaml` under
+  `adapters/fast_plate_ocr/models/<name>/` and select it with
+  `OPENNVR_LPR_MODEL=<name>`. A name with no such directory is a hub model
+  id, as before, so existing installs are unaffected.
+
+The `/capabilities` fingerprint is the sha256 of the ONNX file either way,
+and `model_info.version` reads `custom/<name>` so the AI Adapters page shows
+which weights are answering. The localisation stage, the ANPR app and KAI-C
+are untouched: they never see which weights are behind the OCR call.
+
 ### Sovereignty (`local_only` deployments)
 
 The adapter declares `permissions.network_egress=[]` — no inference-time
