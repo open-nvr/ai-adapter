@@ -45,7 +45,7 @@ def install_fake_fast_plate_ocr(model_file_path: Path | None = None):
         # Allow tests to mutate the next return value before /infer.
         next_output: tuple[str, float] = _DEFAULT_FAKE_OUTPUT
 
-        def __init__(self, model_id, *args, **kwargs):
+        def __init__(self, model_id=None, *args, **kwargs):
             _FakeLicensePlateRecognizer.last_init_args = (model_id,) + args
             _FakeLicensePlateRecognizer.last_init_kwargs = kwargs
             self.model_id = model_id
