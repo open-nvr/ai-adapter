@@ -244,7 +244,10 @@ class PackageDetectionService(AdapterService):
         if self._load_state == HealthStatus.OK:
             if self._gpu_in_use:
                 verdict = HardwareVerdict.OK
-                reasoning = "GPU detected and in use; weights loaded."
+                reasoning = (
+                    f"Accelerator in use ({self._provider_report.get('requested_providers')}); "
+                    "weights loaded."
+                )
             else:
                 # CPU is the design target: the adapter is called a few
                 # times a day per door, so even two cores serve it.

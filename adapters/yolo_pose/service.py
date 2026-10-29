@@ -301,7 +301,10 @@ class YoloPoseService(AdapterService):
         if self._load_state == HealthStatus.OK:
             if self._gpu_in_use:
                 verdict = HardwareVerdict.OK
-                reasoning = "GPU detected and in use; weights loaded."
+                reasoning = (
+                    f"Accelerator in use ({self._provider_report.get('requested_providers')}); "
+                    "weights loaded."
+                )
             elif cpu_count >= 4:
                 # Unlike adapters/yolov8/, CPU is not a degraded mode
                 # here — the model and the default 448 px input were
