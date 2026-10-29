@@ -251,7 +251,11 @@ provider it cannot initialise silently; the SDK logs one warning and
 `/hardware/evaluation` reports `requested_providers`, `effective_providers`
 and `accelerator_in_use`, so "accelerated on paper, running on CPU" is never
 hidden. Your own adapter gets the same with
-`ort.InferenceSession(path, providers=session_providers())`. The stack side
+`ort.InferenceSession(path, providers=session_providers())`. On an OpenVINO
+accelerator device the graph is compiled static (the NPU needs that, and it
+avoids a dynamic compile on the iGPU); an export with dynamic axes should
+be pinned first — `static_shapes(session_providers(), {"images": [1, 3, 448, 448]})`
+when `wants_static_shapes(...)` — as `yolo_pose` does. The stack side
 (`OPENNVR_ACCEL=auto|cpu|intel`, overlays, benchmarks) is in open-nvr's
 [`docs/HARDWARE.md`](https://github.com/open-nvr/open-nvr/blob/main/docs/HARDWARE.md).
 

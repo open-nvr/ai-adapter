@@ -215,19 +215,40 @@ class YoloPoseService(AdapterService):
             # sibling on the same host, for no measured gain.
             # Providers from ADAPTER_ONNX_PROVIDERS resolved against this
             # build (OpenNVR Accelerate flavours); never a hardcoded list.
-            from opennvr_adapter_sdk.providers import effective_providers, session_providers
+            from opennvr_adapter_sdk.providers import (
+                effective_providers, session_providers, static_shapes, wants_static_shapes)
 
             self._requested_providers = session_providers()
+            self._pinned_shape: list[int] | None = None
+            if wants_static_shapes(self._requested_providers):
+                # OpenVINO on an accelerator (iGPU/NPU): a dynamic-axes
+                # export is pinned to DEFAULT_IMGSZ before the graph is
+                # compiled. The NPU plugin has no dynamic-shape support
+                # and an Intel iGPU driver has hard-reset a host on a
+                # dynamic compile; a fixed-size export is left alone.
+                probe = ort.InferenceSession(
+                    self._weights_path, providers=["CPUExecutionProvider"])
+                meta = probe.get_inputs()[0]
+                if _static_input_size(getattr(meta, "shape", None)) is None:
+                    self._pinned_shape = [1, 3, DEFAULT_IMGSZ, DEFAULT_IMGSZ]
+                    self._requested_providers = static_shapes(
+                        self._requested_providers, {meta.name: self._pinned_shape})
+                del probe
             self._session = ort.InferenceSession(
                 self._weights_path,
                 providers=self._requested_providers,
             )
             self._provider_report = effective_providers(
                 self._session, self._requested_providers, adapter="yolo-pose")
+            if self._pinned_shape:
+                self._provider_report["input_shape_pinned"] = list(self._pinned_shape)
             input_meta = self._session.get_inputs()[0]
             self._input_name = input_meta.name
-            self._static_imgsz = _static_input_size(
-                getattr(input_meta, "shape", None)
+            # onnxruntime keeps reporting the export's symbolic dims after
+            # a reshape_input, so the pinned size is recorded explicitly.
+            self._static_imgsz = (
+                self._pinned_shape[-1] if self._pinned_shape
+                else _static_input_size(getattr(input_meta, "shape", None))
             )
             self._fingerprint_cache = self._compute_fingerprint()
             self._gpu_in_use = bool(self._provider_report.get("accelerator_in_use"))

@@ -25,3 +25,7 @@ difference between one dropped frame and a retry storm.
 ::: opennvr_adapter_sdk.resolve_providers
 
 ::: opennvr_adapter_sdk.session_providers
+
+::: opennvr_adapter_sdk.static_shapes
+
+::: opennvr_adapter_sdk.wants_static_shapes

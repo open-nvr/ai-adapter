@@ -40,7 +40,13 @@ from typing import Any
 log = logging.getLogger("opennvr_adapter_sdk.providers")
 
 ENV_VAR = "ADAPTER_ONNX_PROVIDERS"
+#: Set to ``1`` to let OpenVINO accelerator devices compile dynamic-shape
+#: graphs as they are. Off by default: the NPU plugin cannot run dynamic
+#: shapes at all, and an Intel iGPU driver has been seen to hard-reset the
+#: host on a dynamic compile — static compiles are the safe default.
+DYNAMIC_SHAPES_ENV = "ADAPTER_ONNX_DYNAMIC_SHAPES"
 CPU_EP = "CPUExecutionProvider"
+OPENVINO_EP = "OpenVINOExecutionProvider"
 # Providers that are *not* an accelerator even though they are not CPU.
 _NOT_ACCELERATORS = {CPU_EP, "AzureExecutionProvider"}
 # The device option each provider takes; others refuse the shorthand.
@@ -97,7 +103,12 @@ def provider_entry(name: str, device: str | None) -> ProviderEntry:
     if option is None:
         log.warning("ORT provider %s takes no device; ignoring %r", name, device)
         return name
-    return (name, {option: device})
+    options = {option: device}
+    if name == OPENVINO_EP and device.upper() != "CPU" and os.getenv(DYNAMIC_SHAPES_ENV) != "1":
+        # Compile the graph for the shapes of the first inference instead
+        # of as a dynamic graph (recompiled if a later shape differs).
+        options["disable_dynamic_shapes"] = "True"
+    return (name, options)
 
 
 def provider_name(entry: ProviderEntry) -> str:
@@ -125,6 +136,44 @@ def resolve_providers(requested, available) -> list[ProviderEntry]:
     if CPU_EP not in [provider_name(p) for p in provs]:
         provs.append(CPU_EP)
     return provs
+
+
+def wants_static_shapes(entries) -> bool:
+    """True when the first provider is an OpenVINO accelerator device (anything
+    but ``CPU``): a dynamic-shape graph should be pinned with
+    :func:`static_shapes` before the session is built."""
+    for entry in entries or []:
+        if provider_name(entry) != OPENVINO_EP:
+            return False
+        device = entry[1].get("device_type", "") if isinstance(entry, tuple) else ""
+        return bool(device) and device.upper() != "CPU"
+    return False
+
+
+def static_shapes(entries, shapes) -> list[ProviderEntry]:
+    """Pin a dynamic-shape graph for OpenVINO: ``shapes`` maps each input name
+    to its full shape, e.g. ``{"images": [1, 3, 448, 448]}``.
+
+    Returns a new provider list in which every OpenVINO entry carries
+    ``reshape_input`` (the plugin reshapes the graph once, before compiling)
+    and non-OpenVINO entries are untouched. The session then accepts ONLY
+    those shapes — the adapter must size its frames to match. Needed for
+    the NPU, which has no dynamic-shape support, and the safe choice on an
+    iGPU.
+    """
+    spec = ",".join(
+        f"{name}[{','.join(str(int(d)) for d in dims)}]" for name, dims in dict(shapes).items()
+    )
+    out: list[ProviderEntry] = []
+    for entry in entries or []:
+        if provider_name(entry) != OPENVINO_EP:
+            out.append(entry)
+            continue
+        options = dict(entry[1]) if isinstance(entry, tuple) else {}
+        options.pop("disable_dynamic_shapes", None)
+        options["reshape_input"] = spec
+        out.append((OPENVINO_EP, options))
+    return out
 
 
 def describe_providers(entries) -> str:
