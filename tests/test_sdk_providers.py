@@ -32,7 +32,8 @@ def test_parse_shorthand_and_multi_device_continuation():
 def test_resolve_carries_device_options_and_keeps_cpu_last():
     provs = resolve_providers("OpenVINOExecutionProvider:NPU",
                               available=["OpenVINOExecutionProvider", "CPUExecutionProvider"])
-    assert provs == [("OpenVINOExecutionProvider", {"device_type": "NPU"}), "CPUExecutionProvider"]
+    assert provs == [("OpenVINOExecutionProvider", {"device_type": "NPU", "disable_dynamic_shapes": "True"}),
+                     "CPUExecutionProvider"]
     assert resolve_providers("CUDAExecutionProvider:1", available=["CUDAExecutionProvider"]) == [
         ("CUDAExecutionProvider", {"device_id": "1"}), "CPUExecutionProvider"]
 
@@ -95,7 +96,32 @@ def test_session_providers_uses_env_against_this_build(monkeypatch):
     import opennvr_adapter_sdk.providers as m
     monkeypatch.setattr(m, "available_providers", lambda: ["OpenVINOExecutionProvider", "CPUExecutionProvider"])
     monkeypatch.setenv("ADAPTER_ONNX_PROVIDERS", "OpenVINOExecutionProvider:GPU")
-    assert session_providers() == [("OpenVINOExecutionProvider", {"device_type": "GPU"}), "CPUExecutionProvider"]
+    assert session_providers() == [
+        ("OpenVINOExecutionProvider", {"device_type": "GPU", "disable_dynamic_shapes": "True"}),
+        "CPUExecutionProvider"]
     monkeypatch.delenv("ADAPTER_ONNX_PROVIDERS")
     assert session_providers() == ["OpenVINOExecutionProvider", "CPUExecutionProvider"]  # ORT's order
     assert session_providers("CUDAExecutionProvider") == ["CPUExecutionProvider"]        # not in this build
+
+
+def test_openvino_accelerator_devices_compile_static(monkeypatch):
+    from opennvr_adapter_sdk.providers import DYNAMIC_SHAPES_ENV, static_shapes, wants_static_shapes
+
+    monkeypatch.delenv(DYNAMIC_SHAPES_ENV, raising=False)
+    gpu = resolve_providers("OpenVINOExecutionProvider:GPU", ["OpenVINOExecutionProvider", "CPUExecutionProvider"])
+    assert gpu[0] == ("OpenVINOExecutionProvider", {"device_type": "GPU", "disable_dynamic_shapes": "True"})
+    assert wants_static_shapes(gpu)
+    cpu = resolve_providers("OpenVINOExecutionProvider:CPU", ["OpenVINOExecutionProvider", "CPUExecutionProvider"])
+    assert cpu[0] == ("OpenVINOExecutionProvider", {"device_type": "CPU"})
+    assert not wants_static_shapes(cpu)
+    assert not wants_static_shapes(["CPUExecutionProvider"])
+    monkeypatch.setenv(DYNAMIC_SHAPES_ENV, "1")
+    npu = resolve_providers("OpenVINOExecutionProvider:NPU", ["OpenVINOExecutionProvider", "CPUExecutionProvider"])
+    assert npu[0] == ("OpenVINOExecutionProvider", {"device_type": "NPU"})
+    # pinning the shape replaces the first-inference compile with one reshape
+    pinned = static_shapes(gpu, {"images": [1, 3, 448, 448]})
+    assert pinned == [
+        ("OpenVINOExecutionProvider", {"device_type": "GPU", "reshape_input": "images[1,3,448,448]"}),
+        "CPUExecutionProvider",
+    ]
+    assert gpu[0][1] == {"device_type": "GPU", "disable_dynamic_shapes": "True"}  # input untouched

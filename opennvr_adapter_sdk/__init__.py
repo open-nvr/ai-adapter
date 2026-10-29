@@ -164,6 +164,8 @@ ANSWERS: tuple[str, ...] = (
     "effective_providers",
     "resolve_providers",
     "session_providers",
+    "static_shapes",
+    "wants_static_shapes",
 )
 
 #: The documents the adapter publishes about itself.
@@ -186,6 +188,8 @@ from .providers import (  # noqa: E402
     effective_providers,
     resolve_providers,
     session_providers,
+    static_shapes,
+    wants_static_shapes,
 )
 
 __all__ = ["API_TIERS", "__version__",

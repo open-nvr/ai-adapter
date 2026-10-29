@@ -11,6 +11,16 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Static shapes on OpenVINO accelerators.** `ADAPTER_ONNX_PROVIDERS` with an
+  OpenVINO device other than `CPU` now compiles the graph for the shapes of
+  the first inference (`disable_dynamic_shapes`) instead of as a dynamic
+  graph; `ADAPTER_ONNX_DYNAMIC_SHAPES=1` restores the old behaviour. The
+  NPU plugin cannot run dynamic shapes at all, and an Intel iGPU driver was
+  seen to hard-reset the host while compiling one. `yolo_pose`, whose
+  export has dynamic axes, pins its input to `DEFAULT_IMGSZ` on such a device
+  (`static_shapes` / `wants_static_shapes` in `opennvr_adapter_sdk.providers`)
+  and reports `input_shape_pinned` in `/hardware/evaluation`; `imgsz` is then
+  fixed, as it already was for fixed-size exports.
 - **OpenNVR Accelerate: hardware flavours for the ONNX adapters.** `yolov8`,
   `yolo_pose`, `insightface`, `fast_plate_ocr` and `package_detection` build
   from one Dockerfile each with `ACCEL=cpu|intel`; the `-intel` tags carry

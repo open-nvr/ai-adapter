@@ -807,3 +807,55 @@ def test_configured_model_url_is_declared_as_egress(monkeypatch):
         "YOLO_POSE_MODEL_URL", "https://artifacts.example.com/pose/yolo11n-pose.onnx"
     )
     assert pose_main._model_fetch_egress() == ["artifacts.example.com"]
+
+
+def test_dynamic_export_is_pinned_for_openvino_accelerators(yolo_pose_environment, monkeypatch):
+    """On an OpenVINO accelerator device the dynamic-axes export is reshaped to
+    DEFAULT_IMGSZ before compiling (NPU: required; iGPU: safe), and the
+    adapter then serves that size only."""
+    import importlib
+    import sys
+
+    monkeypatch.setenv("ADAPTER_ONNX_PROVIDERS", "OpenVINOExecutionProvider:NPU")
+    from tests._yolo_pose_service_fixtures import install_fake_onnxruntime
+    module = install_fake_onnxruntime(providers=["OpenVINOExecutionProvider", "CPUExecutionProvider"])
+    seen: list = []
+    real = module.InferenceSession
+
+    class Recording(real):
+        def __init__(self, *args, **kwargs):
+            seen.append(kwargs.get("providers"))
+            super().__init__(*args, **kwargs)
+
+    module.InferenceSession = Recording
+    sys.modules["onnxruntime"] = module
+    import adapters.yolo_pose.service as service_module
+    importlib.reload(service_module)
+    svc = service_module.YoloPoseService()
+    svc.load()
+    assert svc.is_ready(), svc._load_error
+    size = service_module.DEFAULT_IMGSZ
+    assert seen[0] == ["CPUExecutionProvider"]  # the signature probe
+    assert seen[1][0] == ("OpenVINOExecutionProvider",
+                          {"device_type": "NPU", "reshape_input": f"images[1,3,{size},{size}]"})
+    assert svc._static_imgsz == size
+    assert svc._provider_report["input_shape_pinned"] == [1, 3, size, size]
+    with pytest.raises(Exception, match="fixed"):
+        svc._resolve_imgsz({"imgsz": 320})
+
+
+def test_cpu_path_keeps_dynamic_export(yolo_pose_environment, monkeypatch):
+    import importlib
+    import sys
+
+    monkeypatch.setenv("ADAPTER_ONNX_PROVIDERS", "OpenVINOExecutionProvider:CPU")
+    from tests._yolo_pose_service_fixtures import install_fake_onnxruntime
+    module = install_fake_onnxruntime(providers=["OpenVINOExecutionProvider", "CPUExecutionProvider"])
+    sys.modules["onnxruntime"] = module
+    import adapters.yolo_pose.service as service_module
+    importlib.reload(service_module)
+    svc = service_module.YoloPoseService()
+    svc.load()
+    assert svc.is_ready(), svc._load_error
+    assert svc._static_imgsz is None
+    assert "input_shape_pinned" not in svc._provider_report
