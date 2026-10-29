@@ -58,12 +58,9 @@ def _cuda_provider_available() -> bool:
     """True only when the installed onnxruntime build ships the CUDA
     execution provider. The default image pins the CPU-only wheel, so
     it declares gpu=False and registers without a GPU-grant prompt."""
-    try:
-        import onnxruntime as ort
+    from opennvr_adapter_sdk.providers import accelerator_available
 
-        return "CUDAExecutionProvider" in ort.get_available_providers()
-    except Exception:
-        return False
+    return accelerator_available()
 
 
 _adapter_app = AdapterApp(

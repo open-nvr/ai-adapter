@@ -156,12 +156,17 @@ class YoloV8Service(AdapterService):
         if self._load_state == HealthStatus.OK:
             if self._gpu_in_use:
                 verdict = HardwareVerdict.OK
-                reasoning = "GPU detected and in use; weights loaded."
+                reasoning = (
+                    "Accelerator in use ("
+                    f"{self._provider_details().get('requested_providers') or 'GPU'}); "
+                    "weights loaded."
+                )
             else:
                 verdict = HardwareVerdict.WARN
                 reasoning = (
-                    "Weights loaded but no CUDA device — running on CPU "
-                    "(expect 5-20x slower inference)."
+                    "Weights loaded but running on CPU (no accelerator in "
+                    "this build, or its device was not reachable — see "
+                    "effective_providers; expect 5-20x slower inference)."
                 )
         elif self._load_state == HealthStatus.LOADING:
             verdict = HardwareVerdict.WARN
@@ -185,6 +190,7 @@ class YoloV8Service(AdapterService):
                 "gpu_required": False,
                 "gpu_in_use": self._gpu_in_use,
                 "onnxruntime_providers": providers,
+                **self._provider_details(),
                 "cpu_count": os.cpu_count() or 0,
                 "platform": platform.platform(),
                 "python_version": platform.python_version(),
@@ -622,12 +628,20 @@ class YoloV8Service(AdapterService):
         return f"sha256:{digest.hexdigest()}"
 
     def _detect_gpu_in_use(self) -> bool:
-        """True if onnxruntime picked CUDAExecutionProvider over CPU."""
+        """True if the session runs on an accelerator provider (CUDA,
+        OpenVINO on the iGPU/NPU, TensorRT …) rather than CPU."""
+        report = getattr(self._adapter, "provider_report", None)
+        if report:
+            return bool(report.get("accelerator_in_use"))
         try:
-            providers = self._adapter.session.get_providers()
-            return "CUDAExecutionProvider" in providers
+            from opennvr_adapter_sdk.providers import effective_providers
+            return bool(effective_providers(self._adapter.session, None)["accelerator_in_use"])
         except Exception:
             return False
+
+    def _provider_details(self) -> dict:
+        """The requested/effective provider payload for /hardware/evaluation."""
+        return dict(getattr(self._adapter, "provider_report", None) or {})
 
 
 # ── Request parameter helpers ───────────────────────────────────────

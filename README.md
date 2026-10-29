@@ -225,6 +225,36 @@ docker run -p 9100:9100 -v ./model_weights:/app/model_weights ai-adapter
 
 Built-in healthcheck pings `/health` every 30 seconds.
 
+## Hardware flavours (OpenNVR Accelerate)
+
+The ONNX adapters — `yolov8`, `yolo_pose`, `insightface`, `fast_plate_ocr`,
+`package_detection` — ship in hardware *flavours* from one Dockerfile each.
+The code is identical; the `ACCEL` build argument picks the inference runtime
+and the vendor user-space, and one env var picks the device at run time.
+
+| Flavour | Tag | Arch | Runtime |
+|---|---|---|---|
+| `cpu` (default) | `<tag>` | amd64, arm64 | `onnxruntime` |
+| `intel` | `<tag>-intel` | amd64 | `onnxruntime-openvino` + Intel OpenCL / NPU user-space (`scripts/install-intel-runtime.sh`) → OpenVINO on the iGPU or NPU |
+
+```bash
+docker build --build-arg ACCEL=intel -f adapters/yolov8/Dockerfile -t yolov8-adapter:intel .
+docker run --device /dev/dri --device /dev/accel \
+  -e ADAPTER_ONNX_PROVIDERS=OpenVINOExecutionProvider:GPU ... yolov8-adapter:intel
+```
+
+`ADAPTER_ONNX_PROVIDERS` is a comma-separated provider list, each with an
+optional `:device` — `OpenVINOExecutionProvider:GPU`, `:NPU`,
+`CUDAExecutionProvider:1` — resolved by `opennvr_adapter_sdk.providers`
+against what the build has, CPU always kept as the fallback. ORT drops a
+provider it cannot initialise silently; the SDK logs one warning and
+`/hardware/evaluation` reports `requested_providers`, `effective_providers`
+and `accelerator_in_use`, so "accelerated on paper, running on CPU" is never
+hidden. Your own adapter gets the same with
+`ort.InferenceSession(path, providers=session_providers())`. The stack side
+(`OPENNVR_ACCEL=auto|cpu|intel`, overlays, benchmarks) is in open-nvr's
+[`docs/HARDWARE.md`](https://github.com/open-nvr/open-nvr/blob/main/docs/HARDWARE.md).
+
 ## Community
 
 Adapter proposals and design discussions go in [Discussions](https://github.com/open-nvr/ai-adapter/discussions); bug reports and feature requests in [Issues](https://github.com/open-nvr/ai-adapter/issues) — look for `good first issue` if you're new. The parent project is [open-nvr/open-nvr](https://github.com/open-nvr/open-nvr) — the NVR that consumes these adapters.

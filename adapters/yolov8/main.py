@@ -33,8 +33,9 @@ from opennvr_adapter_sdk import (
 
 
 def _cuda_provider_available() -> bool:
-    """True only when the installed onnxruntime build ships the CUDA
-    execution provider — i.e. a GPU image built with ``onnxruntime-gpu``.
+    """True only when the installed onnxruntime build ships an accelerator
+    execution provider — CUDA (``onnxruntime-gpu``), OpenVINO (the
+    ``-intel`` flavour, iGPU/NPU), TensorRT, ROCm …
 
     Same signal family as ``YoloV8Service._detect_gpu_in_use()`` /
     ``hardware_evaluation()`` (onnxruntime provider inspection), but
@@ -44,12 +45,9 @@ def _cuda_provider_available() -> bool:
     wheel, which never lists CUDAExecutionProvider — so the CPU image
     declares gpu=False and only a GPU build declares gpu=True.
     """
-    try:
-        import onnxruntime as ort
+    from opennvr_adapter_sdk.providers import accelerator_available
 
-        return "CUDAExecutionProvider" in ort.get_available_providers()
-    except Exception:
-        return False
+    return accelerator_available()
 
 
 _adapter_app = AdapterApp(

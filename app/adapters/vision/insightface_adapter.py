@@ -90,10 +90,12 @@ class InsightFaceAdapter(BaseAdapter):
 
         os.makedirs(self._model_path, exist_ok=True)
 
+        from opennvr_adapter_sdk.providers import session_providers
+
         self._face_model = FaceAnalysis(
             name="buffalo_l",
             root=self._model_path,
-            providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+            providers=session_providers(),
         )
         self._face_model.prepare(ctx_id=0, det_size=(640, 640))
 

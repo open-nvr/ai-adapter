@@ -217,11 +217,18 @@ class YOLOv8Adapter(BaseAdapter):
         if not os.path.exists(self._model_path):
             raise FileNotFoundError(f"YOLOv8 model not found at {self._model_path}")
 
+        # Providers come from ADAPTER_ONNX_PROVIDERS resolved against this
+        # build (OpenNVR Accelerate flavours); never a hardcoded list.
+        from opennvr_adapter_sdk.providers import effective_providers, session_providers
+
+        self.requested_providers = session_providers()
         self.session = ort.InferenceSession(
             self._model_path,
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            providers=self.requested_providers,
         )
         self.model = self.session
+        self.provider_report = effective_providers(
+            self.session, self.requested_providers, adapter="yolov8")
         logger.info("YOLOv8 model loaded from %s", self._model_path)
 
     def _preprocess(self, img: Any) -> tuple[Any, LetterboxGeometry]:

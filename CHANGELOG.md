@@ -9,6 +9,21 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **OpenNVR Accelerate: hardware flavours for the ONNX adapters.** `yolov8`,
+  `yolo_pose`, `insightface`, `fast_plate_ocr` and `package_detection` build
+  from one Dockerfile each with `ACCEL=cpu|intel`; the `-intel` tags carry
+  `onnxruntime-openvino` plus Intel's OpenCL, graphics-compiler, Level Zero
+  and NPU user-space, so inference runs on an Intel iGPU or NPU. One SDK
+  resolver (`opennvr_adapter_sdk.providers`) replaces every hardcoded
+  `["CUDAExecutionProvider", "CPUExecutionProvider"]`: `ADAPTER_ONNX_PROVIDERS`
+  takes a `:device` per provider, CPU is always the fallback, ORT's silent
+  fallback is logged once, and `/hardware/evaluation` reports requested vs
+  effective providers. InsightFace no longer forces CPU on an accelerated
+  build (its `ctx_id` now follows the build). The §8 `gpu` permission is
+  declared truthfully for any accelerator provider, not only CUDA.
+
 ## [0.1.8] — 2026-10-16
 
 Better ears and better memory. Speech to text moves to Parakeet (a third
