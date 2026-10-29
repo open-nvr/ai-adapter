@@ -428,7 +428,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "== Intel user-space + OpenVINO provider =="
-          docker run --rm --entrypoint sh "$ADAPTER_IMAGE" -c "ls /etc/OpenCL/vendors/intel.icd /usr/lib/x86_64-linux-gnu/libze_intel_npu.so.1 /usr/local/lib/libigc.so.2 && python -c 'import onnxruntime as o; p=o.get_available_providers(); assert "OpenVINOExecutionProvider" in p, p; print(p)'"
+          docker run --rm --entrypoint ls "$ADAPTER_IMAGE" /etc/OpenCL/vendors/intel.icd /usr/lib/x86_64-linux-gnu/libze_intel_npu.so.1 /usr/local/lib/libigc.so.2
+          docker run --rm --entrypoint python "$ADAPTER_IMAGE" -c 'import onnxruntime as o; p = o.get_available_providers(); assert "OpenVINOExecutionProvider" in p, p; print(p)'
           echo "== adapter boots =="
           CID=$(docker run -d             -e OPENNVR_ADAPTER_TOKEN=smoke-token             -p 127.0.0.1:${ADAPTER_PORT}:${ADAPTER_PORT}             "$ADAPTER_IMAGE")
           trap "docker rm -f $CID >/dev/null 2>&1 || true" EXIT
