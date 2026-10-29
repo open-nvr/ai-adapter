@@ -39,6 +39,7 @@ from adapters.insightface.service import (
     MAX_IMAGE_BYTES,
     InsightFaceService,
 )
+from opennvr_adapter_sdk.providers import accelerator_available  # noqa: E402
 from opennvr_adapter_sdk import (
     AdapterApp,
     BodyShape,
@@ -87,7 +88,9 @@ _adapter_app = AdapterApp(
         # env var. We declare gpu=False here so KAI-C registers us
         # without a GPU-grant prompt; operators with GPU upgrade can
         # add the permission grant via a config edit.
-        gpu=False,
+        # §8 — truthful for the build: the -intel flavour (OpenVINO on the
+        # iGPU/NPU) or a CUDA build declares gpu=True, the cpu image False.
+        gpu=accelerator_available(),
         network_egress=[],
         # The face DB file path on disk — declared so KAI-C
         # sovereignty knows the adapter writes here. Absolute path

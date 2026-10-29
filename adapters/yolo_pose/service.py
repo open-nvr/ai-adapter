@@ -213,17 +213,24 @@ class YoloPoseService(AdapterService):
             # throughput expectations assume; pinning thread counts
             # here would make this adapter behave differently from its
             # sibling on the same host, for no measured gain.
+            # Providers from ADAPTER_ONNX_PROVIDERS resolved against this
+            # build (OpenNVR Accelerate flavours); never a hardcoded list.
+            from opennvr_adapter_sdk.providers import effective_providers, session_providers
+
+            self._requested_providers = session_providers()
             self._session = ort.InferenceSession(
                 self._weights_path,
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                providers=self._requested_providers,
             )
+            self._provider_report = effective_providers(
+                self._session, self._requested_providers, adapter="yolo-pose")
             input_meta = self._session.get_inputs()[0]
             self._input_name = input_meta.name
             self._static_imgsz = _static_input_size(
                 getattr(input_meta, "shape", None)
             )
             self._fingerprint_cache = self._compute_fingerprint()
-            self._gpu_in_use = self._detect_gpu_in_use()
+            self._gpu_in_use = bool(self._provider_report.get("accelerator_in_use"))
             self._warm_up()
             self._load_state = HealthStatus.OK
             self._load_error = None
@@ -317,6 +324,7 @@ class YoloPoseService(AdapterService):
                 "gpu_required": False,
                 "gpu_in_use": self._gpu_in_use,
                 "onnxruntime_providers": providers,
+                **(getattr(self, "_provider_report", None) or {}),
                 "cpu_count": cpu_count,
                 "platform": platform.platform(),
                 "python_version": platform.python_version(),

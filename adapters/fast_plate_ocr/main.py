@@ -22,6 +22,7 @@ from adapters.fast_plate_ocr.service import (
     MAX_IMAGE_BYTES,
     FastPlateOcrService,
 )
+from opennvr_adapter_sdk.providers import accelerator_available  # noqa: E402
 from opennvr_adapter_sdk import (
     AdapterApp,
     BodyShape,
@@ -46,9 +47,9 @@ _adapter_app = AdapterApp(
     body_shape=BodyShape.IMAGE,
     max_body_bytes=MAX_IMAGE_BYTES,
     permissions=Permissions(
-        # No GPU — fast-plate-ocr runs on CPU via onnxruntime, which
-        # is the whole point of picking it for the LPR adapter.
-        gpu=False,
+        # §8 — truthful for the build: the cpu image declares False; the
+        # -intel flavour (OpenVINO on the iGPU/NPU) or a CUDA build True.
+        gpu=accelerator_available(),
         # No outbound calls at inference time. The model file is
         # downloaded on first ``load()`` by fast-plate-ocr itself
         # (~3 MB) and cached locally; subsequent runs are offline.

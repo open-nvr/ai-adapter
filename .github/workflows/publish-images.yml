@@ -349,3 +349,98 @@ jobs:
           echo "::error::Adapter $ADAPTER_IMAGE never reached /health within 5 minutes." >&2
           docker logs "$CID" >&2 || true
           exit 1
+
+  # OpenNVR Accelerate — the Intel flavour of the ONNX adapters: same
+  # Dockerfile, ACCEL=intel (onnxruntime-openvino + Intel OpenCL/NPU
+  # user-space, scripts/install-intel-runtime.sh), every tag with an -intel
+  # suffix, amd64 only. A separate job so the cpu checks keep their names.
+  build-and-push-intel:
+    name: ${{ matrix.adapter.image }} (intel)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - { dir: yolov8,            image: yolov8-adapter,            port: 9002 }
+          - { dir: yolo_pose,         image: yolo-pose-adapter,         port: 9009 }
+          - { dir: insightface,       image: insightface-adapter,       port: 9005 }
+          - { dir: fast_plate_ocr,    image: fast-plate-ocr-adapter,    port: 9004 }
+          - { dir: package_detection, image: package-detection-adapter, port: 9010 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/open-nvr/${{ matrix.adapter.image }}
+          flavor: |
+            suffix=-intel,onlatest=true
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=OpenNVR ${{ matrix.adapter.image }} (intel)
+            org.opencontainers.image.description=OpenNVR AI Adapter Contract v1 — ${{ matrix.adapter.dir }} adapter, Intel flavour (OpenVINO on iGPU/NPU), port ${{ matrix.adapter.port }}
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+            org.opencontainers.image.vendor=OpenNVR
+            org.opencontainers.image.documentation=https://github.com/open-nvr/ai-adapter/blob/main/adapters/${{ matrix.adapter.dir }}/README.md
+      - name: Build${{ github.event_name != 'pull_request' && ' + push' || ' (no push)' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: adapters/${{ matrix.adapter.dir }}/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            ACCEL=intel
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ github.event_name == 'pull_request' && format('ghcr.io/open-nvr/{0}:local-smoke-intel', matrix.adapter.image) || '' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.adapter.image }}-intel
+          cache-to: type=gha,scope=${{ matrix.adapter.image }}-intel,mode=max
+      # The runner has no Intel GPU: prove the flavour is wired (OpenVINO
+      # provider present, Intel user-space installed) and the adapter still
+      # comes up healthy on CPU. Device inference is the benchmark's job.
+      - name: Smoke-test the built image (PR only)
+        if: github.event_name == 'pull_request'
+        env:
+          ADAPTER_IMAGE: ghcr.io/open-nvr/${{ matrix.adapter.image }}:local-smoke-intel
+          ADAPTER_PORT: ${{ matrix.adapter.port }}
+        run: |
+          set -euo pipefail
+          echo "== Intel user-space + OpenVINO provider =="
+          docker run --rm --entrypoint ls "$ADAPTER_IMAGE" /etc/OpenCL/vendors/intel.icd /usr/lib/x86_64-linux-gnu/libze_intel_npu.so.1 /usr/local/lib/libigc.so.2
+          docker run --rm --entrypoint python "$ADAPTER_IMAGE" -c 'import onnxruntime as o; p = o.get_available_providers(); assert "OpenVINOExecutionProvider" in p, p; print(p)'
+          echo "== adapter boots =="
+          CID=$(docker run -d             -e OPENNVR_ADAPTER_TOKEN=smoke-token             -p 127.0.0.1:${ADAPTER_PORT}:${ADAPTER_PORT}             "$ADAPTER_IMAGE")
+          trap "docker rm -f $CID >/dev/null 2>&1 || true" EXIT
+          for i in $(seq 1 60); do
+            if curl -sf "http://127.0.0.1:${ADAPTER_PORT}/health" >/dev/null; then
+              echo "Adapter $ADAPTER_IMAGE healthy after ${i}x5s."
+              curl -sf "http://127.0.0.1:${ADAPTER_PORT}/hardware/evaluation" | head -c 600 || true
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Adapter $ADAPTER_IMAGE never reached /health within 5 minutes." >&2
+          docker logs "$CID" >&2 || true
+          exit 1

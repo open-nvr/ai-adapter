@@ -158,6 +158,12 @@ ANSWERS: tuple[str, ...] = (
     "ErrorDetail",
     "FailureEnvelope",
     "FairQueuing",
+    # ONNX Runtime providers (OpenNVR Accelerate flavours)
+    "accelerator_available",
+    "describe_providers",
+    "effective_providers",
+    "resolve_providers",
+    "session_providers",
 )
 
 #: The documents the adapter publishes about itself.
@@ -173,6 +179,14 @@ API_TIERS: dict[str, tuple[str, ...]] = {
     "answers": ANSWERS,
     "specs": SPECS,
 }
+
+from .providers import (  # noqa: E402
+    accelerator_available,
+    describe_providers,
+    effective_providers,
+    resolve_providers,
+    session_providers,
+)
 
 __all__ = ["API_TIERS", "__version__",
            *(name for tier in API_TIERS.values() for name in tier)]

@@ -121,11 +121,24 @@ class InsightFaceService(AdapterService):
                 # discovery time" convention.
                 from insightface.app import FaceAnalysis
 
-                self._face_app = FaceAnalysis(name=self._model_pack)
+                from opennvr_adapter_sdk.providers import (
+                    accelerator_available, session_providers)
+                # Providers from ADAPTER_ONNX_PROVIDERS resolved against this build
+                # (OpenNVR Accelerate flavours). InsightFace's own default is
+                # CUDA-then-CPU, which on the -intel flavour silently means CPU.
+                self._requested_providers = session_providers()
+                self._face_app = FaceAnalysis(
+                    name=self._model_pack, providers=self._requested_providers)
                 # ctx_id=-1 keeps it on CPU. GPU users override via
                 # the OPENNVR_INSIGHTFACE_CTX env var.
-                ctx_id = int(os.getenv("OPENNVR_INSIGHTFACE_CTX", "-1"))
+                # ctx_id < 0 makes InsightFace force CPUExecutionProvider on every
+                # model, whatever providers were given — so the default follows the
+                # build: 0 when an accelerator provider exists, -1 on the plain cpu
+                # image. OPENNVR_INSIGHTFACE_CTX overrides either way.
+                default_ctx = "0" if accelerator_available() else "-1"
+                ctx_id = int(os.getenv("OPENNVR_INSIGHTFACE_CTX", default_ctx))
                 self._face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+                self._provider_report = self._insightface_provider_report()
                 self._fingerprint_cache = self._compute_fingerprint()
                 self._load_state = HealthStatus.OK
                 self._load_error = None
@@ -160,11 +173,28 @@ class InsightFaceService(AdapterService):
             fingerprint=self.fingerprint(),
         )
 
+    def _insightface_provider_report(self) -> dict:
+        """What the pack's sessions really run on: InsightFace builds one
+        onnxruntime session per model, so ask the first one."""
+        from opennvr_adapter_sdk.providers import effective_providers
+        models = getattr(self._face_app, "models", None) or {}
+        for model in models.values():
+            session = getattr(model, "session", None)
+            if session is not None and hasattr(session, "get_providers"):
+                return effective_providers(
+                    session, getattr(self, "_requested_providers", None), adapter="insightface")
+        return {}
+
     def hardware_evaluation(self) -> HardwareEvaluationResponse:
+        report = getattr(self, "_provider_report", None) or {}
         if self._load_state == HealthStatus.OK:
             verdict = HardwareVerdict.OK
+            where = (
+                f"accelerator in use ({report.get('requested_providers')})"
+                if report.get("accelerator_in_use") else "CPU"
+            )
             reasoning = (
-                f"InsightFace runs on onnxruntime; pack "
+                f"InsightFace runs on onnxruntime ({where}); pack "
                 f"{self._model_pack!r} loaded."
             )
         elif self._load_state == HealthStatus.LOADING:
@@ -183,6 +213,8 @@ class InsightFaceService(AdapterService):
             checked_at=datetime.now(timezone.utc),
             details={
                 "gpu_required": False,
+                "gpu_in_use": bool(report.get("accelerator_in_use")),
+                **report,
                 "cpu_count": os.cpu_count() or 0,
                 "platform": platform.platform(),
                 "python_version": platform.python_version(),

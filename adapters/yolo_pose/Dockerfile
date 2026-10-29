@@ -22,6 +22,15 @@
 # `python download_models.py`). Set YOLO_POSE_MODEL_URL to have the
 # adapter fetch it once on first boot instead.
 
+#
+# OpenNVR Accelerate flavours — one Dockerfile, ACCEL picks the runtime:
+#   cpu   (default)  plain onnxruntime; amd64 + arm64
+#   intel            onnxruntime-openvino + Intel OpenCL/NPU user-space
+#                    (scripts/install-intel-runtime.sh); amd64 only
+#   docker build --build-arg ACCEL=intel -f adapters/<dir>/Dockerfile .
+# Select the device at run time with ADAPTER_ONNX_PROVIDERS
+# (e.g. OpenVINOExecutionProvider:NPU); see opennvr_adapter_sdk/providers.py.
+
 FROM python:3.11-slim AS runtime
 
 # System deps: ca-certificates for the optional first-boot weights
@@ -62,6 +71,20 @@ RUN pip install --no-cache-dir \
 # ModuleNotFoundError: opennvr_adapter_sdk.
 COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
 RUN pip install --no-cache-dir ./opennvr_adapter_sdk
+
+# Flavour step (ACCEL). The accelerator wheels CONFLICT with plain onnxruntime
+# (same import name), so swap rather than add; the Intel user-space comes from
+# Intel's pinned GitHub releases because Debian carries none of it.
+ARG ACCEL=cpu
+COPY scripts/install-intel-runtime.sh /tmp/install-intel-runtime.sh
+RUN case "${ACCEL}" in \
+      cpu) ;; \
+      intel) sh /tmp/install-intel-runtime.sh \
+             && pip uninstall -y onnxruntime \
+             && pip install --no-cache-dir onnxruntime-openvino==1.24.1 ;; \
+      *) echo "unknown ACCEL=${ACCEL} (cpu|intel)" >&2; exit 1 ;; \
+    esac && rm -f /tmp/install-intel-runtime.sh
+ENV OPENNVR_ACCEL_FLAVOUR=${ACCEL}
 
 # Unlike adapters/yolov8/, nothing from the legacy ``app/`` package is
 # copied: this adapter owns its ONNX session and post-processing, so

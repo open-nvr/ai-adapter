@@ -15,3 +15,13 @@ difference between one dropped frame and a retry storm.
 ::: opennvr_adapter_sdk.FailureEnvelope
 
 ::: opennvr_adapter_sdk.FairQueuing
+
+::: opennvr_adapter_sdk.accelerator_available
+
+::: opennvr_adapter_sdk.describe_providers
+
+::: opennvr_adapter_sdk.effective_providers
+
+::: opennvr_adapter_sdk.resolve_providers
+
+::: opennvr_adapter_sdk.session_providers

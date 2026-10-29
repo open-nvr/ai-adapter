@@ -115,6 +115,24 @@ DEFAULT_MIN_PLATE_PX: int = 40
 MAX_IMAGE_BYTES: int = 2 * 1024 * 1024
 
 
+
+def _session_of(obj):
+    """Best-effort: the onnxruntime session a library object wraps (itself,
+    or one attribute deep). ``None`` when it cannot be found — the provider
+    report is then empty rather than wrong."""
+    if obj is None:
+        return None
+    if hasattr(obj, "get_providers"):
+        return obj
+    for value in list(vars(obj).values()) if hasattr(obj, "__dict__") else []:
+        if hasattr(value, "get_providers"):
+            return value
+        if hasattr(value, "__dict__"):
+            for inner in vars(value).values():
+                if hasattr(inner, "get_providers"):
+                    return inner
+    return None
+
 class FastPlateOcrService(AdapterService):
     """Stateful façade around ``fast_plate_ocr.LicensePlateRecognizer``."""
 
@@ -211,15 +229,25 @@ class FastPlateOcrService(AdapterService):
                 # discovery fast and avoids pulling onnxruntime into
                 # discovery-only code paths.
                 from fast_plate_ocr import LicensePlateRecognizer
+                from opennvr_adapter_sdk.providers import effective_providers, session_providers
+
+                # Providers from ADAPTER_ONNX_PROVIDERS resolved against this build
+                # (OpenNVR Accelerate flavours): both the recogniser and the plate
+                # detector take the same onnxruntime provider list.
+                self._requested_providers = session_providers()
 
                 if self._model_path:
                     self._recognizer = LicensePlateRecognizer(
                         onnx_model_path=self._model_path,
                         plate_config_path=self._plate_config_path,
+                        providers=self._requested_providers,
                     )
                 else:
-                    self._recognizer = LicensePlateRecognizer(self._model_id)
+                    self._recognizer = LicensePlateRecognizer(
+                        self._model_id, providers=self._requested_providers)
                 self._fingerprint_cache = self._compute_fingerprint()
+                self._provider_report = effective_providers(
+                    _session_of(self._recognizer), self._requested_providers, adapter="fast-plate-ocr")
                 self._load_state = HealthStatus.OK
                 self._load_error = None
                 logger.info(
@@ -237,6 +265,7 @@ class FastPlateOcrService(AdapterService):
                         self._detector = create_detector(
                             self._detector_id,
                             conf_thresh=self._detect_confidence,
+                            providers=self._requested_providers,
                         )
                         logger.info(
                             "plate localization ready: detector=%s "
@@ -291,10 +320,15 @@ class FastPlateOcrService(AdapterService):
         )
 
     def hardware_evaluation(self) -> HardwareEvaluationResponse:
+        report = getattr(self, "_provider_report", None) or {}
         if self._load_state == HealthStatus.OK:
             verdict = HardwareVerdict.OK
+            where = (
+                f"accelerator in use ({report.get('requested_providers')})"
+                if report.get("accelerator_in_use") else "CPU"
+            )
             reasoning = (
-                f"fast-plate-ocr runs on CPU via onnxruntime; "
+                f"fast-plate-ocr runs on onnxruntime ({where}); "
                 f"model {self._model_id!r} loaded."
             )
         elif self._load_state == HealthStatus.LOADING:
@@ -313,6 +347,8 @@ class FastPlateOcrService(AdapterService):
             checked_at=datetime.now(timezone.utc),
             details={
                 "gpu_required": False,
+                "gpu_in_use": bool(report.get("accelerator_in_use")),
+                **report,
                 "cpu_count": os.cpu_count() or 0,
                 "platform": platform.platform(),
                 "python_version": platform.python_version(),
