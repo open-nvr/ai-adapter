@@ -351,7 +351,8 @@ def plugin_context_path(model, provider: str) -> str:
 
 def fixed_shape_model(model, spec: str, provider: str, *, adapter: str = "adapter"):
     """A copy of ``model`` with the inputs in ``spec`` (``name[1,3,448,448],…``;
-    ``*`` is the first input, pinned only if it is dynamic) made static, written next to the model (or under the temp dir) as
+    ``*`` is the first input: its symbolic dims take the spec's values, its
+    fixed dims stay) made static, written next to the model (or under the temp dir) as
     ``<model>.<provider>.fixed.onnx`` and reused while the model is older
     than it. QNN compiles for fixed shapes only; a dynamic-axes export
     otherwise falls back to CPU node by node. Needs the ``onnx`` package
@@ -380,17 +381,26 @@ def fixed_shape_model(model, spec: str, provider: str, *, adapter: str = "adapte
             if not item:
                 continue
             name, _, dims = item.partition("[")
+            values = [int(d) for d in dims.split(",")]
             if name == "*":
-                # "the first input, if it is dynamic" — for a library that
-                # builds several sessions from one provider list (InsightFace:
-                # one dynamic detector, four fixed-size models) the one spec
-                # pins exactly the graph that needs it.
-                name = proto.graph.input[0].name
-                if not _dynamic(inputs[name]):
+                # "the first input's SYMBOLIC dims take these values; its fixed
+                # dims stay" — for a library that builds several sessions from
+                # one provider list (InsightFace: a detector with dynamic
+                # height/width, a recogniser and landmark nets with a dynamic
+                # batch and fixed 112/192/96 sizes) the one spec pins each
+                # graph to the shape it really takes. A fixed input is left alone.
+                inp = proto.graph.input[0]
+                name = inp.name
+                model_dims = inp.type.tensor_type.shape.dim
+                if not _dynamic(inp) or len(model_dims) != len(values):
                     continue
+                values = [
+                    (v if (d.dim_param or d.dim_value <= 0) else d.dim_value)
+                    for d, v in zip(model_dims, values)
+                ]
             if name not in inputs:
                 continue  # another model built from the same list
-            u.make_input_shape_fixed(proto.graph, name, [int(d) for d in dims.split(",")])
+            u.make_input_shape_fixed(proto.graph, name, values)
             pinned += 1
         if not pinned:
             return model

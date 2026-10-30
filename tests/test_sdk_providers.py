@@ -388,5 +388,10 @@ def test_fixed_shape_model_wildcard_pins_only_a_dynamic_first_input(monkeypatch,
         (tmp_path / n).write_bytes(b"m")
     out = fixed_shape_model(str(tmp_path / "det.onnx"), "*[1,3,640,640]", "QNNExecutionProvider")
     assert out.endswith("det.onnx.QNNExecutionProvider.fixed.onnx") and fixed_calls == [("input.1", [1, 3, 640, 640])]
+    # a fixed-size model is left alone; one with only a dynamic batch keeps its own sizes
     assert fixed_shape_model(str(tmp_path / "rec.onnx"), "*[1,3,640,640]", "QNNExecutionProvider") == str(tmp_path / "rec.onnx")
-    assert fixed_shape_model(str(tmp_path / "rec.onnx"), "images[1,3,448,448]", "QNNExecutionProvider") == str(tmp_path / "rec.onnx")
+    protos["rec.onnx"] = types.SimpleNamespace(graph=types.SimpleNamespace(input=[_input("input.1", [_Dim(p="None"), _Dim(3), _Dim(112), _Dim(112)])]))
+    (tmp_path / "rec.onnx").write_bytes(b"m2")
+    out = fixed_shape_model(str(tmp_path / "rec.onnx"), "*[1,3,640,640]", "QNNExecutionProvider")
+    assert out.endswith("rec.onnx.QNNExecutionProvider.fixed.onnx") and fixed_calls[-1] == ("input.1", [1, 3, 112, 112])
+    assert fixed_shape_model(str(tmp_path / "det.onnx"), "images[1,3,448,448]", "QNNExecutionProvider") == str(tmp_path / "det.onnx")
