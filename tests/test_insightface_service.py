@@ -361,3 +361,11 @@ def test_face_db_matches_the_best_of_several_samples(tmp_path):
     old = FaceDB(str(legacy))
     assert old.get("bob").embeddings == [[0.0, 0.0, 0.0, 1.0]]
     assert old.best_match([0, 0, 0, 1], threshold=0.9)["person_id"] == "bob"
+
+
+def test_face_analysis_loads_only_detection_and_recognition(insightface_environment):
+    """Recognition needs the detector (with its 5 keypoints) and the
+    recogniser; the landmark and gender/age nets are never used here."""
+    svc = _build_service(insightface_environment)
+    svc.load()
+    assert svc._face_app.init_kwargs["allowed_modules"] == ["detection", "recognition"]
