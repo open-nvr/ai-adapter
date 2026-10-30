@@ -464,7 +464,10 @@ jobs:
           - { dir: insightface,       image: insightface-adapter,       port: 9005 }
           - { dir: fast_plate_ocr,    image: fast-plate-ocr-adapter,    port: 9004 }
           - { dir: package_detection, image: package-detection-adapter, port: 9010 }
-          - { dir: parakeet,          image: parakeet-adapter,          port: 9019 }
+          # parakeet keeps its ACCEL=qualcomm block but is not published: the
+          # dynamic-length encoder/decoder graphs partition onto the HTP and
+          # then fail at inference (Expand: invalid expand shape) — CPU is
+          # the device for it on this platform (0.6 s per 3 s of audio).
     steps:
       - name: Checkout
         uses: actions/checkout@v4

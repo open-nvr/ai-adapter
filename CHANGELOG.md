@@ -21,7 +21,12 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   open-nvr's `docker-compose.accel-qualcomm.yml` sets that per adapter and
   lends the container the DSP. Parakeet now honours
   `ADAPTER_ONNX_PROVIDERS` like the other ONNX adapters (CUDA-when-present
-  stays the default).
+  stays the default). Measured on an Arduino Ventuno Q (QCS8275), `/infer`
+  end-to-end, NPU vs the eight ARM cores: yolov8 59–67 vs 152 ms, pose
+  48–69 vs 113 ms, package detection 55 vs 103 ms, plate OCR 66–84 vs
+  272 ms. Parakeet loads on the HTP but its dynamic-length graphs fail at
+  inference (Expand node), so it is not published in this flavour and
+  stays on CPU (0.6 s per 3 s of audio).
 
 ### Added
 
