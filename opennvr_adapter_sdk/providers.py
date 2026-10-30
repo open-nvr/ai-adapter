@@ -330,9 +330,9 @@ def _qnn_backend_path(backend: str) -> str | None:
 
 
 def plugin_context_path(model, provider: str) -> str:
-    """Where a plugin provider's compiled graph for ``model`` is cached: next
-    to the model when its directory is writable, else under the temp dir;
-    the name carries the provider so flavours never share one. QNN compiles
+    """Where a plugin provider's compiled graph for ``model`` is cached: in
+    :func:`accel_cache_dir` (a hidden directory inside the model's, else the
+    temp dir); the name carries the provider so flavours never share one. QNN compiles
     the graph at session build (seconds); the EP-context dump loads in a
     fraction of that for every later session. A model given as bytes is
     keyed by its hash."""
@@ -340,13 +340,30 @@ def plugin_context_path(model, provider: str) -> str:
     import tempfile
 
     if isinstance(model, (bytes, bytearray)):
-        return os.path.join(tempfile.gettempdir(),
+        return os.path.join(accel_cache_dir(None),
                             f"{hashlib.sha256(model).hexdigest()[:16]}.{provider}.ctx.onnx")
     path = str(model)
-    d = os.path.dirname(os.path.abspath(path))
-    if not os.access(d, os.W_OK):
-        d = tempfile.gettempdir()
-    return os.path.join(d, f"{os.path.basename(path)}.{provider}.ctx.onnx")
+    return os.path.join(accel_cache_dir(path), f"{os.path.basename(path)}.{provider}.ctx.onnx")
+
+
+#: Where the SDK keeps a provider's derived files (compiled graphs, pinned
+#: copies). Default: ``.opennvr-accel/`` INSIDE the model's directory — never
+#: beside the model, because libraries glob ``*.onnx`` there (InsightFace
+#: loads every file in its pack directory as a model; measured); a model
+#: given as bytes, or a read-only directory, goes under the temp dir.
+ACCEL_CACHE_ENV = "ADAPTER_ACCEL_CACHE_DIR"
+
+
+def accel_cache_dir(model_path: str | None) -> str:
+    import tempfile
+
+    d = os.environ.get(ACCEL_CACHE_ENV, "").strip()
+    if not d:
+        base = os.path.dirname(os.path.abspath(model_path)) if model_path else tempfile.gettempdir()
+        d = os.path.join(base, ".opennvr-accel") if model_path and os.access(base, os.W_OK) \
+            else os.path.join(tempfile.gettempdir(), "opennvr-accel")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def fixed_shape_model(model, spec: str, provider: str, *, adapter: str = "adapter"):
@@ -361,7 +378,7 @@ def fixed_shape_model(model, spec: str, provider: str, *, adapter: str = "adapte
     if not isinstance(model, str):
         log.warning("%s: cannot pin shapes of an in-memory model for %s; compiling the dynamic graph", adapter, provider)
         return model
-    base = plugin_context_path(model, provider)[: -len(".ctx.onnx")] + ".fixed.onnx"
+    base = os.path.join(accel_cache_dir(model), f"{os.path.basename(model)}.{provider}.fixed.onnx")
     try:
         if os.path.exists(base) and os.path.getmtime(base) >= os.path.getmtime(model):
             return base
@@ -674,6 +691,7 @@ __all__ = [
     "ENV_VAR", "CPU_EP", "DEVICE_OPTION", "QNN_EP", "PLUGIN_EPS", "PROVIDER_OPTIONS_ENV",
     "PROVIDER_DEFAULTS", "register_plugin_providers", "provider_options", "plugin_context_path",
     "plugin_session", "install_plugin_shim", "fixed_shape_model", "FIXED_SHAPES_KEY",
+    "accel_cache_dir", "ACCEL_CACHE_ENV",
     "parse_provider_specs", "provider_entry", "provider_name", "resolve_providers",
     "describe_providers", "requested_providers", "available_providers",
     "accelerator_available", "session_providers", "effective_providers",

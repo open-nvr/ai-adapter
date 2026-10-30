@@ -280,7 +280,7 @@ def test_shim_routes_a_library_providers_list_through_the_plugin_api(monkeypatch
     assert calls["opts"].added == [("QNNExecutionProvider", {
         "backend_path": "/x/libQnnHtp.so", "htp_performance_mode": "sustained_high_performance",
         "enable_htp_fp16_precision": "1", "htp_graph_finalization_optimization_mode": "3"})]
-    ctx = tmp_path / "det.onnx.QNNExecutionProvider.ctx.onnx"
+    ctx = tmp_path / ".opennvr-accel" / "det.onnx.QNNExecutionProvider.ctx.onnx"
     assert ctx.exists() and sess._opennvr_plugin_compiled is True
     assert effective_providers(sess, provs, adapter="t")["accelerator_in_use"] is True
     # second session: the cache is the model now
@@ -307,7 +307,7 @@ def test_plugin_that_compiled_nothing_is_reported_as_cpu(monkeypatch, tmp_path, 
     assert report["effective_providers"] == ["CPUExecutionProvider"]
     assert report["accelerator_in_use"] is False and report["accelerator_requested"] is True
     assert "could not use QNNExecutionProvider(htp)" in caplog.text
-    assert not (tmp_path / "m.onnx.QNNExecutionProvider.ctx.onnx").exists()
+    assert not (tmp_path / ".opennvr-accel" / "m.onnx.QNNExecutionProvider.ctx.onnx").exists()
 
 
 def test_plugin_without_a_device_builds_the_classic_session(monkeypatch, tmp_path, caplog):
@@ -335,13 +335,13 @@ def test_qnn_wants_static_shapes_and_pins_through_a_fixed_copy(monkeypatch, tmp_
     assert pinned[0][1][p.FIXED_SHAPES_KEY] == "images[1,3,448,448]" and pinned[1] == "CPUExecutionProvider"
     model = tmp_path / "pose.onnx"; model.write_bytes(b"dyn")
     seen = {}
-    fixed = str(tmp_path / "pose.onnx.QNNExecutionProvider.fixed.onnx")
+    fixed = str(tmp_path / ".opennvr-accel" / "pose.onnx.QNNExecutionProvider.fixed.onnx")
 
     def _pin(m, spec, prov, adapter="adapter"):
         seen["call"] = (m, spec, prov)
         return fixed
     monkeypatch.setattr(p, "fixed_shape_model", _pin)
-    (tmp_path / "pose.onnx.QNNExecutionProvider.fixed.onnx").write_bytes(b"fixed")
+    (tmp_path / ".opennvr-accel").mkdir(exist_ok=True); (tmp_path / ".opennvr-accel" / "pose.onnx.QNNExecutionProvider.fixed.onnx").write_bytes(b"fixed")
     fake.InferenceSession(str(model), providers=pinned)
     assert seen["call"] == (str(model), "images[1,3,448,448]", "QNNExecutionProvider")
     assert calls["models"][-1].endswith("pose.onnx.QNNExecutionProvider.fixed.onnx")
@@ -387,13 +387,13 @@ def test_fixed_shape_model_wildcard_pins_only_a_dynamic_first_input(monkeypatch,
     for n in protos:
         (tmp_path / n).write_bytes(b"m")
     out = fixed_shape_model(str(tmp_path / "det.onnx"), "*[1,3,640,640]", "QNNExecutionProvider")
-    assert out.endswith("det.onnx.QNNExecutionProvider.fixed.onnx") and fixed_calls == [("input.1", [1, 3, 640, 640])]
+    assert out.endswith(".opennvr-accel/det.onnx.QNNExecutionProvider.fixed.onnx") and fixed_calls == [("input.1", [1, 3, 640, 640])]
     # a fixed-size model is left alone; one with only a dynamic batch keeps its own sizes
     assert fixed_shape_model(str(tmp_path / "rec.onnx"), "*[1,3,640,640]", "QNNExecutionProvider") == str(tmp_path / "rec.onnx")
     protos["rec.onnx"] = types.SimpleNamespace(graph=types.SimpleNamespace(input=[_input("input.1", [_Dim(p="None"), _Dim(3), _Dim(112), _Dim(112)])]))
     (tmp_path / "rec.onnx").write_bytes(b"m2")
     out = fixed_shape_model(str(tmp_path / "rec.onnx"), "*[1,3,640,640]", "QNNExecutionProvider")
-    assert out.endswith("rec.onnx.QNNExecutionProvider.fixed.onnx") and fixed_calls[-1] == ("input.1", [1, 3, 112, 112])
+    assert out.endswith(".opennvr-accel/rec.onnx.QNNExecutionProvider.fixed.onnx") and fixed_calls[-1] == ("input.1", [1, 3, 112, 112])
     # a named input the model lacks: nothing to pin (fresh file: the det copy above is cached)
     protos["det2.onnx"] = protos["det.onnx"]; (tmp_path / "det2.onnx").write_bytes(b"m")
     assert fixed_shape_model(str(tmp_path / "det2.onnx"), "images[1,3,448,448]", "QNNExecutionProvider") == str(tmp_path / "det2.onnx")
@@ -417,3 +417,15 @@ def test_shim_is_a_subclass_libraries_can_subclass_and_isinstance(monkeypatch, t
     assert isinstance(sess, original) and sess._opennvr_plugin_compiled is True
     plain = Pickable(str(model), providers=["CPUExecutionProvider"])
     assert plain._opennvr_plugin_compiled is None if hasattr(plain, "_opennvr_plugin_compiled") else True
+
+
+def test_accel_cache_dir_is_hidden_inside_the_model_dir_never_beside_the_model(monkeypatch, tmp_path):
+    """InsightFace globs *.onnx in its pack directory and loads every file as
+    a model — a compiled graph written beside the pack broke the next start."""
+    from opennvr_adapter_sdk.providers import accel_cache_dir, plugin_context_path
+    monkeypatch.delenv("ADAPTER_ACCEL_CACHE_DIR", raising=False)
+    model = tmp_path / "pack" / "det.onnx"; model.parent.mkdir(); model.write_bytes(b"m")
+    assert accel_cache_dir(str(model)) == str(tmp_path / "pack" / ".opennvr-accel")
+    assert plugin_context_path(str(model), "QNNExecutionProvider") == str(tmp_path / "pack" / ".opennvr-accel" / "det.onnx.QNNExecutionProvider.ctx.onnx")
+    monkeypatch.setenv("ADAPTER_ACCEL_CACHE_DIR", str(tmp_path / "elsewhere"))
+    assert accel_cache_dir(str(model)) == str(tmp_path / "elsewhere") and (tmp_path / "elsewhere").is_dir()
