@@ -57,12 +57,6 @@ RUN pip install --no-cache-dir \
         opencv-python-headless==4.10.0.84 \
         onnxruntime==1.23.2
 
-COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
-RUN pip install --no-cache-dir ./opennvr_adapter_sdk
-
-# Flavour step (ACCEL). The accelerator wheels CONFLICT with plain onnxruntime
-# (same import name), so swap rather than add; the Intel user-space comes from
-# Intel's pinned GitHub releases because Debian carries none of it.
 ARG ACCEL=cpu
 COPY scripts/install-intel-runtime.sh /tmp/install-intel-runtime.sh
 RUN case "${ACCEL}" in \
@@ -72,10 +66,17 @@ RUN case "${ACCEL}" in \
              && pip install --no-cache-dir onnxruntime-openvino==1.24.1 ;; \
       qualcomm) apt-get update && apt-get install -y --no-install-recommends libatomic1 \
              && rm -rf /var/lib/apt/lists/* \
-             && pip install --no-cache-dir "onnxruntime>=1.24.2,<2" onnxruntime-qnn==2.7.0 ;; \
+             && pip install --no-cache-dir "onnxruntime>=1.24.2,<2" onnxruntime-qnn==2.7.0 "onnx>=1.16" ;; \
       *) echo "unknown ACCEL=${ACCEL} (cpu|intel|qualcomm)" >&2; exit 1 ;; \
     esac && rm -f /tmp/install-intel-runtime.sh
 ENV OPENNVR_ACCEL_FLAVOUR=${ACCEL}
+
+COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
+RUN pip install --no-cache-dir ./opennvr_adapter_sdk
+
+# Flavour step (ACCEL). The accelerator wheels CONFLICT with plain onnxruntime
+# (same import name), so swap rather than add; the Intel user-space comes from
+# Intel's pinned GitHub releases because Debian carries none of it.
 
 # Self-contained: the SDK and this one package, nothing from app/.
 COPY adapters/package_detection/                ./adapters/package_detection/

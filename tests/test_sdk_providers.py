@@ -319,3 +319,41 @@ def test_plugin_without_a_device_builds_the_classic_session(monkeypatch, tmp_pat
         sess = fake.InferenceSession(str(model), providers=provs)
     assert calls["providers"] == ["CPUExecutionProvider"] and sess._opennvr_plugin_compiled is None
     assert "reports no device" in caplog.text
+
+
+def test_qnn_wants_static_shapes_and_pins_through_a_fixed_copy(monkeypatch, tmp_path):
+    """QNN compiles for fixed shapes only: static_shapes() leaves the spec on
+    the entry and plugin_session writes a pinned copy of the model first."""
+    import opennvr_adapter_sdk.providers as p
+    from opennvr_adapter_sdk.providers import static_shapes, wants_static_shapes
+    _reset_plugins(monkeypatch)
+    fake, calls = _fake_ort(monkeypatch)
+    provs = session_providers("QNNExecutionProvider:htp")
+    assert wants_static_shapes(provs) is True
+    assert wants_static_shapes(resolve_providers("QNNExecutionProvider:cpu", ["QNNExecutionProvider"])) is False
+    pinned = static_shapes(provs, {"images": [1, 3, 448, 448]})
+    assert pinned[0][1][p.FIXED_SHAPES_KEY] == "images[1,3,448,448]" and pinned[1] == "CPUExecutionProvider"
+    model = tmp_path / "pose.onnx"; model.write_bytes(b"dyn")
+    seen = {}
+    fixed = str(tmp_path / "pose.onnx.QNNExecutionProvider.fixed.onnx")
+
+    def _pin(m, spec, prov, adapter="adapter"):
+        seen["call"] = (m, spec, prov)
+        return fixed
+    monkeypatch.setattr(p, "fixed_shape_model", _pin)
+    (tmp_path / "pose.onnx.QNNExecutionProvider.fixed.onnx").write_bytes(b"fixed")
+    fake.InferenceSession(str(model), providers=pinned)
+    assert seen["call"] == (str(model), "images[1,3,448,448]", "QNNExecutionProvider")
+    assert calls["models"][-1].endswith("pose.onnx.QNNExecutionProvider.fixed.onnx")
+    assert p.FIXED_SHAPES_KEY not in calls["opts"].added[-1][1]        # never handed to the runtime
+
+
+def test_fixed_shape_model_without_onnx_keeps_the_dynamic_model(monkeypatch, tmp_path, caplog):
+    import sys
+    from opennvr_adapter_sdk.providers import fixed_shape_model
+    model = tmp_path / "m.onnx"; model.write_bytes(b"dyn")
+    monkeypatch.setitem(sys.modules, "onnx", None)                # import fails
+    with caplog.at_level(logging.WARNING):
+        out = fixed_shape_model(str(model), "images[1,3,448,448]", "QNNExecutionProvider", adapter="t")
+    assert out == str(model) and "onnx package is not installed" in caplog.text
+    assert fixed_shape_model(b"bytes", "x[1]", "QNNExecutionProvider") == b"bytes"

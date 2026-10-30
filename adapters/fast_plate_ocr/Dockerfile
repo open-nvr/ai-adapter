@@ -90,6 +90,20 @@ RUN set -eux; d=./adapters/fast_plate_ocr/models/indian-plates-v1; mkdir -p "$d"
     echo "${INDIAN_PLATES_ONNX_SHA256}  $d/model.onnx" | sha256sum -c -; \
     echo "${INDIAN_PLATES_CONFIG_SHA256}  $d/plate_config.yaml" | sha256sum -c -
 
+ARG ACCEL=cpu
+COPY scripts/install-intel-runtime.sh /tmp/install-intel-runtime.sh
+RUN case "${ACCEL}" in \
+      cpu) ;; \
+      intel) sh /tmp/install-intel-runtime.sh \
+             && pip uninstall -y onnxruntime \
+             && pip install --no-cache-dir onnxruntime-openvino==1.24.1 ;; \
+      qualcomm) apt-get update && apt-get install -y --no-install-recommends libatomic1 \
+             && rm -rf /var/lib/apt/lists/* \
+             && pip install --no-cache-dir "onnxruntime>=1.24.2,<2" onnxruntime-qnn==2.7.0 "onnx>=1.16" ;; \
+      *) echo "unknown ACCEL=${ACCEL} (cpu|intel|qualcomm)" >&2; exit 1 ;; \
+    esac && rm -f /tmp/install-intel-runtime.sh
+ENV OPENNVR_ACCEL_FLAVOUR=${ACCEL}
+
 # The SDK lives in this same repo; copy the sdist-style source so the
 # container is self-contained. (Once the SDK is published on PyPI we
 # can replace this with `pip install opennvr-adapter-sdk` for parity
@@ -100,19 +114,6 @@ RUN pip install --no-cache-dir ./opennvr_adapter_sdk
 # Flavour step (ACCEL). The accelerator wheels CONFLICT with plain onnxruntime
 # (same import name), so swap rather than add; the Intel user-space comes from
 # Intel's pinned GitHub releases because Debian carries none of it.
-ARG ACCEL=cpu
-COPY scripts/install-intel-runtime.sh /tmp/install-intel-runtime.sh
-RUN case "${ACCEL}" in \
-      cpu) ;; \
-      intel) sh /tmp/install-intel-runtime.sh \
-             && pip uninstall -y onnxruntime \
-             && pip install --no-cache-dir onnxruntime-openvino==1.24.1 ;; \
-      qualcomm) apt-get update && apt-get install -y --no-install-recommends libatomic1 \
-             && rm -rf /var/lib/apt/lists/* \
-             && pip install --no-cache-dir "onnxruntime>=1.24.2,<2" onnxruntime-qnn==2.7.0 ;; \
-      *) echo "unknown ACCEL=${ACCEL} (cpu|intel|qualcomm)" >&2; exit 1 ;; \
-    esac && rm -f /tmp/install-intel-runtime.sh
-ENV OPENNVR_ACCEL_FLAVOUR=${ACCEL}
 
 ENV PYTHONPATH=/app \
     OPENNVR_ADAPTER_TOKEN="" \

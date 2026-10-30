@@ -87,6 +87,10 @@ PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     },
 }
 
+#: Private option static_shapes() leaves on a QNN entry: ``name[1,3,448,448],…``.
+#: plugin_session() consumes it (never handed to the runtime).
+FIXED_SHAPES_KEY = "_opennvr_fixed_shapes"
+
 ProviderEntry = Any  # str | tuple[str, dict[str, str]]
 
 
@@ -168,14 +172,19 @@ def resolve_providers(requested, available) -> list[ProviderEntry]:
 
 
 def wants_static_shapes(entries) -> bool:
-    """True when the first provider is an OpenVINO accelerator device (anything
-    but ``CPU``): a dynamic-shape graph should be pinned with
-    :func:`static_shapes` before the session is built."""
+    """True when the first provider is an accelerator that compiles the graph
+    for fixed shapes — an OpenVINO device other than ``CPU``, or the QNN HTP
+    — so a dynamic-shape graph should be pinned with :func:`static_shapes`
+    before the session is built."""
     for entry in entries or []:
-        if provider_name(entry) != OPENVINO_EP:
-            return False
-        device = entry[1].get("device_type", "") if isinstance(entry, tuple) else ""
-        return bool(device) and device.upper() != "CPU"
+        name = provider_name(entry)
+        opts = entry[1] if isinstance(entry, tuple) and isinstance(entry[1], dict) else {}
+        if name == OPENVINO_EP:
+            device = opts.get("device_type", "")
+            return bool(device) and device.upper() != "CPU"
+        if name == QNN_EP:
+            return opts.get("backend_type", "htp").lower() != "cpu"
+        return False
     return False
 
 
@@ -195,7 +204,15 @@ def static_shapes(entries, shapes) -> list[ProviderEntry]:
     )
     out: list[ProviderEntry] = []
     for entry in entries or []:
-        if provider_name(entry) != OPENVINO_EP:
+        name = provider_name(entry)
+        if name == QNN_EP:
+            # QNN has no reshape option: plugin_session writes a fixed-shape
+            # copy of the model before compiling (FIXED_SHAPES_KEY).
+            options = dict(entry[1]) if isinstance(entry, tuple) else {}
+            options[FIXED_SHAPES_KEY] = spec
+            out.append((QNN_EP, options))
+            continue
+        if name != OPENVINO_EP:
             out.append(entry)
             continue
         options = dict(entry[1]) if isinstance(entry, tuple) else {}
@@ -332,6 +349,45 @@ def plugin_context_path(model, provider: str) -> str:
     return os.path.join(d, f"{os.path.basename(path)}.{provider}.ctx.onnx")
 
 
+def fixed_shape_model(model, spec: str, provider: str, *, adapter: str = "adapter"):
+    """A copy of ``model`` with the inputs in ``spec`` (``name[1,3,448,448],…``)
+    made static, written next to the model (or under the temp dir) as
+    ``<model>.<provider>.fixed.onnx`` and reused while the model is older
+    than it. QNN compiles for fixed shapes only; a dynamic-axes export
+    otherwise falls back to CPU node by node. Needs the ``onnx`` package
+    (in the qualcomm flavour); without it, or for a model given as bytes,
+    the model is returned as is with a warning."""
+    if not isinstance(model, str):
+        log.warning("%s: cannot pin shapes of an in-memory model for %s; compiling the dynamic graph", adapter, provider)
+        return model
+    base = plugin_context_path(model, provider)[: -len(".ctx.onnx")] + ".fixed.onnx"
+    try:
+        if os.path.exists(base) and os.path.getmtime(base) >= os.path.getmtime(model):
+            return base
+        import onnx  # noqa: F401 — the tool below needs it
+        from onnxruntime.tools import onnx_model_utils as u
+
+        proto = onnx.load(model)
+        for item in spec.split("]"):
+            item = item.strip(", ")
+            if not item:
+                continue
+            name, _, dims = item.partition("[")
+            u.make_input_shape_fixed(proto.graph, name, [int(d) for d in dims.split(",")])
+        u.fix_output_shapes(proto)
+        tmp = f"{base}.{os.getpid()}.tmp"
+        onnx.save(proto, tmp)
+        os.replace(tmp, base)
+        log.info("%s: pinned %s to %s for %s -> %s", adapter, os.path.basename(model), spec, provider, base)
+        return base
+    except ImportError:
+        log.warning("%s: the onnx package is not installed; cannot pin %s for %s, compiling the dynamic graph",
+                    adapter, os.path.basename(model), provider)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("%s: could not pin %s to %s (%s); compiling the dynamic graph", adapter, os.path.basename(model), spec, exc)
+    return model
+
+
 def plugin_session(model, entries, sess_options=None, *, adapter: str = "adapter", **kw):
     """Build an ``InferenceSession`` with the plugin provider(s) in ``entries``
     attached BY DEVICE (``add_provider_for_devices``: a plugin named in
@@ -357,7 +413,11 @@ def plugin_session(model, entries, sess_options=None, *, adapter: str = "adapter
         if not devices:
             log.warning("%s: ORT plugin provider %s reports no device on this host; skipping", adapter, name)
             continue
-        opts.add_provider_for_devices(devices, provider_options(e))
+        popts = provider_options(e)
+        spec = popts.pop(FIXED_SHAPES_KEY, None)
+        if spec:
+            model = fixed_shape_model(model, spec, name, adapter=adapter)
+        opts.add_provider_for_devices(devices, popts)
         attached.append(name)
     if not attached:
         sess = original(model, sess_options=opts, providers=classic or None, **kw)
@@ -531,7 +591,7 @@ def effective_providers(session, requested=None, *, adapter: str = "adapter",
 __all__ = [
     "ENV_VAR", "CPU_EP", "DEVICE_OPTION", "QNN_EP", "PLUGIN_EPS", "PROVIDER_OPTIONS_ENV",
     "PROVIDER_DEFAULTS", "register_plugin_providers", "provider_options", "plugin_context_path",
-    "plugin_session", "install_plugin_shim",
+    "plugin_session", "install_plugin_shim", "fixed_shape_model", "FIXED_SHAPES_KEY",
     "parse_provider_specs", "provider_entry", "provider_name", "resolve_providers",
     "describe_providers", "requested_providers", "available_providers",
     "accelerator_available", "session_providers", "effective_providers",
