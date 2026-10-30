@@ -65,6 +65,24 @@ ENV HF_HUB_OFFLINE=1
 COPY opennvr_adapter_sdk/                       ./opennvr_adapter_sdk/
 RUN pip install --no-cache-dir ./opennvr_adapter_sdk
 
+# OpenNVR Accelerate flavours — one Dockerfile, ACCEL picks the runtime:
+#   cpu   (default)  plain onnxruntime (onnx-asr[cpu])
+#   qualcomm         + onnxruntime-qnn, the Qualcomm AI Runtime PLUGIN provider
+#                    (+ libatomic1: the HTP backend dlopens it and python:slim
+#                    lacks it — "Unable to load backend" otherwise)
+#                    (next to plain onnxruntime >= 1.24.2); arm64 only. The
+#                    encoder/decoder graphs are dynamic-shape, so what the
+#                    HTP takes is measured per release (docs/HARDWARE.md).
+ARG ACCEL=cpu
+RUN case "${ACCEL}" in \
+      cpu) ;; \
+      qualcomm) apt-get update && apt-get install -y --no-install-recommends libatomic1 \
+             && rm -rf /var/lib/apt/lists/* \
+             && pip install --no-cache-dir "onnxruntime>=1.24.2,<2" onnxruntime-qnn==2.7.0 ;; \
+      *) echo "unknown ACCEL=${ACCEL} (cpu|qualcomm)" >&2; exit 1 ;; \
+    esac
+ENV OPENNVR_ACCEL_FLAVOUR=${ACCEL}
+
 COPY app/__init__.py                            ./app/__init__.py
 COPY app/config/                                ./app/config/
 COPY adapters/parakeet/                         ./adapters/parakeet/

@@ -11,6 +11,20 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **OpenNVR Accelerate: Qualcomm flavour (`-qualcomm`) of the ONNX
+  adapters.** yolov8, yolo-pose, insightface, fast-plate-ocr,
+  package-detection and parakeet build with `ACCEL=qualcomm`: plain
+  onnxruntime plus `onnxruntime-qnn`, the Qualcomm AI Runtime *plugin*
+  provider (bundles the HTP user-space), arm64 only. The SDK registers it
+  and routes every session — the adapter's own and its libraries' — to the
+  Hexagon NPU for `ADAPTER_ONNX_PROVIDERS=QNNExecutionProvider:htp`;
+  open-nvr's `docker-compose.accel-qualcomm.yml` sets that per adapter and
+  lends the container the DSP. Parakeet now honours
+  `ADAPTER_ONNX_PROVIDERS` like the other ONNX adapters (CUDA-when-present
+  stays the default).
+
+### Added
+
 - **An accelerator that cannot start never takes an adapter down.**
   `build_with_fallback()` in `opennvr_adapter_sdk.providers` builds the
   session (or InsightFace / fast-plate-ocr model object) with the requested
