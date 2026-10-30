@@ -122,11 +122,20 @@ class InsightFaceService(AdapterService):
                 from insightface.app import FaceAnalysis
 
                 from opennvr_adapter_sdk.providers import (
-                    accelerator_available, build_with_fallback, session_providers)
+                    accelerator_available, build_with_fallback, session_providers,
+                    static_shapes, wants_static_shapes)
                 # Providers from ADAPTER_ONNX_PROVIDERS resolved against this build
                 # (OpenNVR Accelerate flavours). InsightFace's own default is
                 # CUDA-then-CPU, which on the -intel flavour silently means CPU.
                 self._requested_providers = session_providers()
+                if wants_static_shapes(self._requested_providers):
+                    # An accelerator that compiles fixed shapes (OpenVINO
+                    # device, QNN HTP): the pack's detector is a dynamic
+                    # export and prepare() always feeds it det_size, so pin
+                    # the first dynamic input to that; the fixed-size
+                    # recogniser built from the same list is left alone.
+                    self._requested_providers = static_shapes(
+                        self._requested_providers, {"*": [1, 3, 640, 640]})
                 # Only the two models recognition needs. FaceAnalysis's
                 # default loads five (detector, 3D-68 and 2D-106 landmark
                 # nets, gender/age, recogniser) and runs four of them per

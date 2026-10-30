@@ -357,3 +357,36 @@ def test_fixed_shape_model_without_onnx_keeps_the_dynamic_model(monkeypatch, tmp
         out = fixed_shape_model(str(model), "images[1,3,448,448]", "QNNExecutionProvider", adapter="t")
     assert out == str(model) and "onnx package is not installed" in caplog.text
     assert fixed_shape_model(b"bytes", "x[1]", "QNNExecutionProvider") == b"bytes"
+
+
+def test_fixed_shape_model_wildcard_pins_only_a_dynamic_first_input(monkeypatch, tmp_path):
+    """InsightFace builds five sessions from one provider list: '*' pins the
+    dynamic detector and leaves the fixed-size models alone."""
+    import sys
+    import types
+    from opennvr_adapter_sdk.providers import fixed_shape_model
+
+    class _Dim:
+        def __init__(self, v=None, p=""):
+            self.dim_value = v or 0; self.dim_param = p
+
+    def _input(name, dims):
+        i = types.SimpleNamespace(name=name); i.type = types.SimpleNamespace(tensor_type=types.SimpleNamespace(shape=types.SimpleNamespace(dim=dims)))
+        return i
+
+    protos = {
+        "det.onnx": types.SimpleNamespace(graph=types.SimpleNamespace(input=[_input("input.1", [_Dim(p="batch"), _Dim(3), _Dim(p="h"), _Dim(p="w")])])),
+        "rec.onnx": types.SimpleNamespace(graph=types.SimpleNamespace(input=[_input("input.1", [_Dim(1), _Dim(3), _Dim(112), _Dim(112)])])),
+    }
+    fixed_calls = []
+    fake_onnx = types.SimpleNamespace(load=lambda path: protos[path.split("/")[-1]], save=lambda proto, path: open(path, "wb").write(b"fixed"))
+    fake_utils = types.SimpleNamespace(make_input_shape_fixed=lambda g, n, d: fixed_calls.append((n, d)), fix_output_shapes=lambda p: None)
+    monkeypatch.setitem(sys.modules, "onnx", fake_onnx)
+    monkeypatch.setitem(sys.modules, "onnxruntime.tools", types.SimpleNamespace(onnx_model_utils=fake_utils))
+    monkeypatch.setitem(sys.modules, "onnxruntime.tools.onnx_model_utils", fake_utils)
+    for n in protos:
+        (tmp_path / n).write_bytes(b"m")
+    out = fixed_shape_model(str(tmp_path / "det.onnx"), "*[1,3,640,640]", "QNNExecutionProvider")
+    assert out.endswith("det.onnx.QNNExecutionProvider.fixed.onnx") and fixed_calls == [("input.1", [1, 3, 640, 640])]
+    assert fixed_shape_model(str(tmp_path / "rec.onnx"), "*[1,3,640,640]", "QNNExecutionProvider") == str(tmp_path / "rec.onnx")
+    assert fixed_shape_model(str(tmp_path / "rec.onnx"), "images[1,3,448,448]", "QNNExecutionProvider") == str(tmp_path / "rec.onnx")
