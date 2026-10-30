@@ -427,5 +427,8 @@ def test_accel_cache_dir_is_hidden_inside_the_model_dir_never_beside_the_model(m
     model = tmp_path / "pack" / "det.onnx"; model.parent.mkdir(); model.write_bytes(b"m")
     assert accel_cache_dir(str(model)) == str(tmp_path / "pack" / ".opennvr-accel")
     assert plugin_context_path(str(model), "QNNExecutionProvider") == str(tmp_path / "pack" / ".opennvr-accel" / "det.onnx.QNNExecutionProvider.ctx.onnx")
+    # the pinned copy's own compiled graph stays in the same directory, not nested
+    fixed = tmp_path / "pack" / ".opennvr-accel" / "det.onnx.QNNExecutionProvider.fixed.onnx"
+    assert plugin_context_path(str(fixed), "QNNExecutionProvider") == str(fixed.parent / (fixed.name + ".QNNExecutionProvider.ctx.onnx"))
     monkeypatch.setenv("ADAPTER_ACCEL_CACHE_DIR", str(tmp_path / "elsewhere"))
     assert accel_cache_dir(str(model)) == str(tmp_path / "elsewhere") and (tmp_path / "elsewhere").is_dir()

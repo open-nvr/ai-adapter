@@ -360,8 +360,12 @@ def accel_cache_dir(model_path: str | None) -> str:
     d = os.environ.get(ACCEL_CACHE_ENV, "").strip()
     if not d:
         base = os.path.dirname(os.path.abspath(model_path)) if model_path else tempfile.gettempdir()
-        d = os.path.join(base, ".opennvr-accel") if model_path and os.access(base, os.W_OK) \
-            else os.path.join(tempfile.gettempdir(), "opennvr-accel")
+        if os.path.basename(base) == ".opennvr-accel":
+            d = base  # a derived file's own derivatives (the pinned copy's compiled graph) stay flat
+        elif model_path and os.access(base, os.W_OK):
+            d = os.path.join(base, ".opennvr-accel")
+        else:
+            d = os.path.join(tempfile.gettempdir(), "opennvr-accel")
     os.makedirs(d, exist_ok=True)
     return d
 
