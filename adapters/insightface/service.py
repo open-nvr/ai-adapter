@@ -119,14 +119,14 @@ class InsightFaceService(AdapterService):
             try:
                 # Lazy import per the project's "no heavy imports at
                 # discovery time" convention.
-                from insightface.app import FaceAnalysis
-
                 from opennvr_adapter_sdk.providers import (
                     accelerator_available, build_with_fallback, session_providers,
                     static_shapes, wants_static_shapes)
-                # Providers from ADAPTER_ONNX_PROVIDERS resolved against this build
-                # (OpenNVR Accelerate flavours). InsightFace's own default is
-                # CUDA-then-CPU, which on the -intel flavour silently means CPU.
+                # Providers first, insightface second: registering a plugin
+                # provider installs the SDK's InferenceSession shim, and
+                # insightface's model_zoo captures the constructor at import
+                # time — imported earlier, it would build its sessions past
+                # the shim and the NPU would never see them.
                 self._requested_providers = session_providers()
                 if wants_static_shapes(self._requested_providers):
                     # An accelerator that compiles fixed shapes (OpenVINO
@@ -136,6 +136,11 @@ class InsightFaceService(AdapterService):
                     # recogniser built from the same list is left alone.
                     self._requested_providers = static_shapes(
                         self._requested_providers, {"*": [1, 3, 640, 640]})
+                from insightface.app import FaceAnalysis
+
+                # Providers from ADAPTER_ONNX_PROVIDERS resolved against this build
+                # (OpenNVR Accelerate flavours). InsightFace's own default is
+                # CUDA-then-CPU, which on the -intel flavour silently means CPU.
                 # Only the two models recognition needs. FaceAnalysis's
                 # default loads five (detector, 3D-68 and 2D-106 landmark
                 # nets, gender/age, recogniser) and runs four of them per
