@@ -216,7 +216,8 @@ class YoloPoseService(AdapterService):
             # Providers from ADAPTER_ONNX_PROVIDERS resolved against this
             # build (OpenNVR Accelerate flavours); never a hardcoded list.
             from opennvr_adapter_sdk.providers import (
-                effective_providers, session_providers, static_shapes, wants_static_shapes)
+                build_with_fallback, effective_providers, session_providers,
+                static_shapes, wants_static_shapes)
 
             self._requested_providers = session_providers()
             self._pinned_shape: list[int] | None = None
@@ -234,12 +235,14 @@ class YoloPoseService(AdapterService):
                     self._requested_providers = static_shapes(
                         self._requested_providers, {meta.name: self._pinned_shape})
                 del probe
-            self._session = ort.InferenceSession(
-                self._weights_path,
-                providers=self._requested_providers,
-            )
+            self._session, self._requested_providers, fallback = build_with_fallback(
+                lambda providers: ort.InferenceSession(self._weights_path, providers=providers),
+                self._requested_providers, adapter="yolo-pose")
+            if fallback:
+                self._pinned_shape = None  # the CPU session takes the export as is
             self._provider_report = effective_providers(
-                self._session, self._requested_providers, adapter="yolo-pose")
+                self._session, self._requested_providers, adapter="yolo-pose",
+                fallback_error=fallback)
             if self._pinned_shape:
                 self._provider_report["input_shape_pinned"] = list(self._pinned_shape)
             input_meta = self._session.get_inputs()[0]

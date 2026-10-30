@@ -125,3 +125,43 @@ def test_openvino_accelerator_devices_compile_static(monkeypatch):
         "CPUExecutionProvider",
     ]
     assert gpu[0][1] == {"device_type": "GPU", "disable_dynamic_shapes": "True"}  # input untouched
+
+
+def test_build_with_fallback_rebuilds_on_cpu_and_reports(caplog):
+    from opennvr_adapter_sdk.providers import build_with_fallback
+
+    calls = []
+
+    def build(providers):
+        calls.append(list(providers))
+        if providers[0] != "CPUExecutionProvider":
+            raise RuntimeError("no OpenCL device")
+        return "cpu-session"
+
+    gpu = [("OpenVINOExecutionProvider", {"device_type": "GPU"}), "CPUExecutionProvider"]
+    with caplog.at_level(logging.ERROR, logger="opennvr_adapter_sdk.providers"):
+        obj, used, err = build_with_fallback(build, gpu, adapter="t")
+    assert obj == "cpu-session" and used == ["CPUExecutionProvider"]
+    assert err.startswith("RuntimeError: no OpenCL device")
+    assert calls == [gpu, ["CPUExecutionProvider"]]
+    assert "could not start on OpenVINOExecutionProvider(GPU)" in caplog.text
+
+    class Sess:
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+    report = effective_providers(Sess(), used, adapter="t", fallback_error=err)
+    assert report["accelerator_in_use"] is False
+    assert report["accelerator_requested"] is True
+    assert report["accelerator_fallback_error"] == err
+
+
+def test_build_with_fallback_propagates_cpu_failures():
+    from opennvr_adapter_sdk.providers import build_with_fallback
+
+    def build(_providers):
+        raise ValueError("bad model")
+
+    with pytest.raises(ValueError):
+        build_with_fallback(build, ["CPUExecutionProvider"], adapter="t")
+    assert build_with_fallback(lambda p: "ok", None)[1] == ["CPUExecutionProvider"]

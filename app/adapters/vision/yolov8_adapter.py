@@ -219,16 +219,17 @@ class YOLOv8Adapter(BaseAdapter):
 
         # Providers come from ADAPTER_ONNX_PROVIDERS resolved against this
         # build (OpenNVR Accelerate flavours); never a hardcoded list.
-        from opennvr_adapter_sdk.providers import effective_providers, session_providers
+        from opennvr_adapter_sdk.providers import (
+            build_with_fallback, effective_providers, session_providers)
 
         self.requested_providers = session_providers()
-        self.session = ort.InferenceSession(
-            self._model_path,
-            providers=self.requested_providers,
-        )
+        self.session, self.requested_providers, fallback = build_with_fallback(
+            lambda providers: ort.InferenceSession(self._model_path, providers=providers),
+            self.requested_providers, adapter="yolov8")
         self.model = self.session
         self.provider_report = effective_providers(
-            self.session, self.requested_providers, adapter="yolov8")
+            self.session, self.requested_providers, adapter="yolov8",
+            fallback_error=fallback)
         logger.info("YOLOv8 model loaded from %s", self._model_path)
 
     def _preprocess(self, img: Any) -> tuple[Any, LetterboxGeometry]:
