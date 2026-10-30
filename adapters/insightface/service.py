@@ -127,8 +127,15 @@ class InsightFaceService(AdapterService):
                 # (OpenNVR Accelerate flavours). InsightFace's own default is
                 # CUDA-then-CPU, which on the -intel flavour silently means CPU.
                 self._requested_providers = session_providers()
+                # Only the two models recognition needs. FaceAnalysis's
+                # default loads five (detector, 3D-68 and 2D-106 landmark
+                # nets, gender/age, recogniser) and runs four of them per
+                # detected face; the detector's own 5 keypoints are what
+                # the ArcFace alignment uses, so the landmark and
+                # attribute nets were pure waste on every face.
                 self._face_app = FaceAnalysis(
-                    name=self._model_pack, providers=self._requested_providers)
+                    name=self._model_pack, providers=self._requested_providers,
+                    allowed_modules=["detection", "recognition"])
                 # ctx_id=-1 keeps it on CPU. GPU users override via
                 # the OPENNVR_INSIGHTFACE_CTX env var.
                 # ctx_id < 0 makes InsightFace force CPUExecutionProvider on every
