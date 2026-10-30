@@ -20,6 +20,9 @@
 # OpenNVR Accelerate flavours — one Dockerfile, ACCEL picks the runtime:
 #   cpu   (default)  plain onnxruntime; amd64 + arm64
 #   intel            onnxruntime-openvino + Intel OpenCL/NPU user-space
+#   qualcomm         + onnxruntime-qnn, the Qualcomm AI Runtime PLUGIN provider
+#                    (Hexagon NPU; next to plain onnxruntime, which it needs
+#                    >= 1.24.2 — the plugin API); arm64 only
 #                    (scripts/install-intel-runtime.sh); amd64 only
 #   docker build --build-arg ACCEL=intel -f adapters/<dir>/Dockerfile .
 # Select the device at run time with ADAPTER_ONNX_PROVIDERS
@@ -64,7 +67,8 @@ RUN case "${ACCEL}" in \
       intel) sh /tmp/install-intel-runtime.sh \
              && pip uninstall -y onnxruntime \
              && pip install --no-cache-dir onnxruntime-openvino==1.24.1 ;; \
-      *) echo "unknown ACCEL=${ACCEL} (cpu|intel)" >&2; exit 1 ;; \
+      qualcomm) pip install --no-cache-dir "onnxruntime>=1.24.2,<2" onnxruntime-qnn==2.7.0 ;; \
+      *) echo "unknown ACCEL=${ACCEL} (cpu|intel|qualcomm)" >&2; exit 1 ;; \
     esac && rm -f /tmp/install-intel-runtime.sh
 ENV OPENNVR_ACCEL_FLAVOUR=${ACCEL}
 

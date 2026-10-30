@@ -444,3 +444,118 @@ jobs:
           echo "::error::Adapter $ADAPTER_IMAGE never reached /health within 5 minutes." >&2
           docker logs "$CID" >&2 || true
           exit 1
+
+  # OpenNVR Accelerate — the Qualcomm flavour of the ONNX adapters: same
+  # Dockerfile, ACCEL=qualcomm (plain onnxruntime + the onnxruntime-qnn
+  # user-space, scripts/install-intel-runtime.sh), every tag with an -intel
+  # suffix, amd64 only. A separate job so the cpu checks keep their names.
+  build-and-push-qualcomm:
+    name: ${{ matrix.adapter.image }} (qualcomm)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - { dir: yolov8,            image: yolov8-adapter,            port: 9002 }
+          - { dir: yolo_pose,         image: yolo-pose-adapter,         port: 9009 }
+          - { dir: insightface,       image: insightface-adapter,       port: 9005 }
+          - { dir: fast_plate_ocr,    image: fast-plate-ocr-adapter,    port: 9004 }
+          - { dir: package_detection, image: package-detection-adapter, port: 9010 }
+          - { dir: parakeet,          image: parakeet-adapter,          port: 9019 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU (arm64 build + smoke)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/open-nvr/${{ matrix.adapter.image }}
+          flavor: |
+            suffix=-qualcomm,onlatest=true
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=OpenNVR ${{ matrix.adapter.image }} (qualcomm)
+            org.opencontainers.image.description=OpenNVR AI Adapter Contract v1 — ${{ matrix.adapter.dir }} adapter, Qualcomm flavour (QNN plugin on the Hexagon NPU), port ${{ matrix.adapter.port }}
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+            org.opencontainers.image.vendor=OpenNVR
+            org.opencontainers.image.documentation=https://github.com/open-nvr/ai-adapter/blob/main/adapters/${{ matrix.adapter.dir }}/README.md
+      - name: Build${{ github.event_name != 'pull_request' && ' + push' || ' (no push)' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: adapters/${{ matrix.adapter.dir }}/Dockerfile
+          platforms: linux/arm64
+          build-args: |
+            ACCEL=qualcomm
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ github.event_name == 'pull_request' && format('ghcr.io/open-nvr/{0}:local-smoke-qualcomm', matrix.adapter.image) || '' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.adapter.image }}-qualcomm
+          cache-to: type=gha,scope=${{ matrix.adapter.image }}-qualcomm,mode=max
+      # The runner has no Hexagon DSP, and the image is arm64 (run under
+      # QEMU): prove the flavour is wired — the QNN plugin wheel with its HTP
+      # runtime is present, the SDK registers it and installs the shim — and
+      # the adapter still boots. Device inference is measured on real
+      # hardware (open-nvr docs/HARDWARE.md).
+      - name: Smoke-test the built image (PR only)
+        if: github.event_name == 'pull_request'
+        env:
+          ADAPTER_IMAGE: ghcr.io/open-nvr/${{ matrix.adapter.image }}:local-smoke-qualcomm
+          ADAPTER_PORT: ${{ matrix.adapter.port }}
+        run: |
+          set -euo pipefail
+          echo "== QNN plugin wheel present, with the HTP runtime =="
+          docker run --rm --platform linux/arm64 --entrypoint python "$ADAPTER_IMAGE" -c '
+          import os, onnxruntime as ort, onnxruntime_qnn as q
+          print("onnxruntime", ort.__version__, "onnxruntime-qnn", q.__version__)
+          for p in (q.get_library_path(), q.get_qnn_htp_path()):
+              assert os.path.exists(p), p
+          '
+          echo "== the SDK registers the plugin, resolves the shorthand and installs the shim =="
+          docker run --rm --platform linux/arm64 --entrypoint python "$ADAPTER_IMAGE" -c '
+          import onnxruntime as ort
+          from opennvr_adapter_sdk.providers import session_providers, describe_providers
+          p = session_providers("QNNExecutionProvider:htp")
+          assert p[0] == ("QNNExecutionProvider", {"backend_type": "htp"}), p
+          assert hasattr(ort.InferenceSession, "__wrapped__"), "shim not installed"
+          print(describe_providers(p))
+          '
+          echo "== adapter boots (cpu, no device) =="
+          CID=$(docker run -d --platform linux/arm64             -e OPENNVR_ADAPTER_TOKEN=smoke-token             -p 127.0.0.1:${ADAPTER_PORT}:${ADAPTER_PORT}             "$ADAPTER_IMAGE")
+          trap "docker rm -f $CID >/dev/null 2>&1 || true" EXIT
+          for i in $(seq 1 60); do
+            if curl -sf "http://127.0.0.1:${ADAPTER_PORT}/health" >/dev/null; then
+              echo "Adapter $ADAPTER_IMAGE healthy after ${i}x5s."
+              curl -sf "http://127.0.0.1:${ADAPTER_PORT}/hardware/evaluation" | head -c 600 || true
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Adapter $ADAPTER_IMAGE never reached /health within 5 minutes." >&2
+          docker logs "$CID" >&2 || true
+          exit 1

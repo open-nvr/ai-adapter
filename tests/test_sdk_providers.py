@@ -165,3 +165,157 @@ def test_build_with_fallback_propagates_cpu_failures():
     with pytest.raises(ValueError):
         build_with_fallback(build, ["CPUExecutionProvider"], adapter="t")
     assert build_with_fallback(lambda p: "ok", None)[1] == ["CPUExecutionProvider"]
+
+
+# ── plugin execution providers (QNN, the qualcomm flavour) ───────────────
+
+def _reset_plugins(monkeypatch):
+    import opennvr_adapter_sdk.providers as p
+    monkeypatch.setattr(p, "_registered_plugin_eps", set())
+    monkeypatch.setattr(p, "_ORIGINAL_SESSION", None)
+    return p
+
+
+class _Dev:
+    def __init__(self, ep_name):
+        self.ep_name = ep_name
+
+
+class _Opts:
+    def __init__(self):
+        self.added = []
+        self.config = {}
+
+    def add_provider(self, name, opts):          # by name: refused for plugins by ORT
+        raise AssertionError("plugin providers must be attached by device")
+
+    def add_provider_for_devices(self, devices, opts):
+        self.added.append((devices[0].ep_name, dict(opts)))
+
+    def add_session_config_entry(self, k, v):
+        self.config[k] = v
+
+
+def _fake_ort(monkeypatch, *, devices=("QNNExecutionProvider",), compiles=True, record=None):
+    """A fake onnxruntime module whose InferenceSession dumps the compiled
+    graph where the session options say (as the real runtime does)."""
+    import sys
+    import types
+
+    calls = record if record is not None else {}
+
+    class _Session:
+        def __init__(self, model, sess_options=None, providers=None, provider_options=None, **kw):
+            calls.setdefault("models", []).append(model)
+            calls["providers"] = providers
+            calls["opts"] = sess_options
+            dump = (getattr(sess_options, "config", {}) or {}).get("ep.context_file_path")
+            if dump and compiles:
+                open(dump, "wb").write(b"ctx")
+
+        def get_providers(self):
+            return ["QNNExecutionProvider", "CPUExecutionProvider"]
+
+        def get_inputs(self):
+            return []
+
+    fake = types.ModuleType("onnxruntime")
+    fake.InferenceSession = _Session
+    fake.SessionOptions = _Opts
+    fake.get_available_providers = lambda: ["CPUExecutionProvider"]
+    fake.register_execution_provider_library = lambda name, path: calls.setdefault("registered", []).append(name)
+    fake.get_ep_devices = lambda: [_Dev(d) for d in devices]
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake)
+    monkeypatch.setitem(sys.modules, "onnxruntime_qnn", types.SimpleNamespace(
+        get_library_path=lambda: "/x/libonnxruntime_providers_qnn.so",
+        get_qnn_htp_path=lambda: "/x/libQnnHtp.so", get_qnn_cpu_path=lambda: "/x/libQnnCpu.so"))
+    return fake, calls
+
+
+def test_qnn_shorthand_is_the_backend_and_options_layer(monkeypatch):
+    from opennvr_adapter_sdk.providers import provider_options
+    _reset_plugins(monkeypatch)
+    _fake_ort(monkeypatch)
+    provs = resolve_providers("QNNExecutionProvider:htp", ["QNNExecutionProvider", "CPUExecutionProvider"])
+    assert provs == [("QNNExecutionProvider", {"backend_type": "htp"}), "CPUExecutionProvider"]
+    opts = provider_options(provs[0], env={})
+    assert opts["backend_path"] == "/x/libQnnHtp.so" and "backend_type" not in opts
+    assert opts["enable_htp_fp16_precision"] == "1"
+    assert opts["htp_performance_mode"] == "sustained_high_performance"
+    assert provider_options(("QNNExecutionProvider", {"backend_type": "cpu"}), env={})["backend_path"] == "/x/libQnnCpu.so"
+    over = provider_options(provs[0], env={"ADAPTER_ONNX_PROVIDER_OPTIONS": "htp_performance_mode=burst, vtcm_mb=8"})
+    assert over["htp_performance_mode"] == "burst" and over["vtcm_mb"] == "8"
+    assert provider_options(("CUDAExecutionProvider", {"device_id": "1"}), env={}) == {"device_id": "1"}
+
+
+def test_session_providers_registers_the_plugin_once_and_installs_the_shim(monkeypatch, caplog):
+    p = _reset_plugins(monkeypatch)
+    fake, calls = _fake_ort(monkeypatch)
+    monkeypatch.setenv("ADAPTER_ONNX_PROVIDERS", "QNNExecutionProvider:htp")
+    assert session_providers()[0] == ("QNNExecutionProvider", {"backend_type": "htp"})
+    assert session_providers()[0][0] == "QNNExecutionProvider"
+    assert calls["registered"] == ["QNNExecutionProvider"]            # once
+    assert fake.InferenceSession.__name__ == "InferenceSession" and hasattr(fake.InferenceSession, "__wrapped__")
+    # a build without the package: the request degrades to CPU, said out loud
+    p2 = _reset_plugins(monkeypatch)
+    import sys
+    monkeypatch.delitem(sys.modules, "onnxruntime_qnn")
+    monkeypatch.setattr("importlib.import_module", lambda name: (_ for _ in ()).throw(ImportError(name)))
+    with caplog.at_level(logging.WARNING):
+        assert session_providers("QNNExecutionProvider:htp") == ["CPUExecutionProvider"]
+    assert "needs the onnxruntime_qnn package" in caplog.text
+
+
+def test_shim_routes_a_library_providers_list_through_the_plugin_api(monkeypatch, tmp_path):
+    """InsightFace / fast-plate-ocr / onnx-asr call ort.InferenceSession(path,
+    providers=[...]) themselves; the shim attaches the plugin by device,
+    caches the compiled graph next to the model, and loads it next time."""
+    from opennvr_adapter_sdk.providers import effective_providers
+    _reset_plugins(monkeypatch)
+    fake, calls = _fake_ort(monkeypatch)
+    model = tmp_path / "det.onnx"; model.write_bytes(b"m")
+    provs = session_providers("QNNExecutionProvider:htp")
+    sess = fake.InferenceSession(str(model), providers=provs)       # what the library does
+    assert calls["providers"] is None                                # the plugin never reaches ORT's list
+    assert calls["opts"].added == [("QNNExecutionProvider", {
+        "backend_path": "/x/libQnnHtp.so", "htp_performance_mode": "sustained_high_performance",
+        "enable_htp_fp16_precision": "1", "htp_graph_finalization_optimization_mode": "3"})]
+    ctx = tmp_path / "det.onnx.QNNExecutionProvider.ctx.onnx"
+    assert ctx.exists() and sess._opennvr_plugin_compiled is True
+    assert effective_providers(sess, provs, adapter="t")["accelerator_in_use"] is True
+    # second session: the cache is the model now
+    fake.InferenceSession(str(model), providers=provs)
+    assert calls["models"][-1] == str(ctx)
+    # the parallel provider_options form (fast-plate-ocr) and a plain CPU list pass through
+    fake.InferenceSession(str(model), providers=["QNNExecutionProvider", "CPUExecutionProvider"],
+                          provider_options=[{"vtcm_mb": "4"}, {}])
+    assert calls["opts"].added[-1][1]["vtcm_mb"] == "4"
+    fake.InferenceSession(str(model), providers=["CPUExecutionProvider"])
+    assert calls["providers"] == ["CPUExecutionProvider"]
+
+
+def test_plugin_that_compiled_nothing_is_reported_as_cpu(monkeypatch, tmp_path, caplog):
+    from opennvr_adapter_sdk.providers import effective_providers
+    _reset_plugins(monkeypatch)
+    fake, calls = _fake_ort(monkeypatch, compiles=False)
+    model = tmp_path / "m.onnx"; model.write_bytes(b"m")
+    provs = session_providers("QNNExecutionProvider:htp")
+    sess = fake.InferenceSession(str(model), providers=provs)
+    assert sess._opennvr_plugin_compiled is False
+    with caplog.at_level(logging.WARNING):
+        report = effective_providers(sess, provs, adapter="t")
+    assert report["effective_providers"] == ["CPUExecutionProvider"]
+    assert report["accelerator_in_use"] is False and report["accelerator_requested"] is True
+    assert "could not use QNNExecutionProvider(htp)" in caplog.text
+    assert not (tmp_path / "m.onnx.QNNExecutionProvider.ctx.onnx").exists()
+
+
+def test_plugin_without_a_device_builds_the_classic_session(monkeypatch, tmp_path, caplog):
+    _reset_plugins(monkeypatch)
+    fake, calls = _fake_ort(monkeypatch, devices=())
+    model = tmp_path / "m.onnx"; model.write_bytes(b"m")
+    provs = session_providers("QNNExecutionProvider:htp")
+    with caplog.at_level(logging.WARNING):
+        sess = fake.InferenceSession(str(model), providers=provs)
+    assert calls["providers"] == ["CPUExecutionProvider"] and sess._opennvr_plugin_compiled is None
+    assert "reports no device" in caplog.text

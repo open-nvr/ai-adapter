@@ -56,6 +56,35 @@ DEVICE_OPTION = {
     "TensorrtExecutionProvider": "device_id",
     "ROCMExecutionProvider": "device_id",
     "MIGraphXExecutionProvider": "device_id",
+    # Qualcomm AI Runtime: ``QNNExecutionProvider:htp`` is the Hexagon NPU,
+    # ``:gpu`` the Adreno, ``:cpu`` QNN's reference backend (debugging only).
+    "QNNExecutionProvider": "backend_type",
+}
+QNN_EP = "QNNExecutionProvider"
+
+# Plugin execution providers (ONNX Runtime >= 1.23): a separately installed
+# wheel the runtime must REGISTER before a session can use it, and that
+# ``get_available_providers()`` never lists. Provider name -> the package
+# that ships the library. The ``qualcomm`` flavour installs onnxruntime-qnn
+# next to plain onnxruntime (it is a plugin, not a replacement wheel).
+PLUGIN_EPS = {QNN_EP: "onnxruntime_qnn"}
+_registered_plugin_eps: set[str] = set()
+
+#: Extra provider options, ``key=value,key=value``, on top of the flavour's
+#: defaults (QNN: htp_performance_mode, vtcm_mb, enable_htp_fp16_precision …).
+PROVIDER_OPTIONS_ENV = "ADAPTER_ONNX_PROVIDER_OPTIONS"
+# What a plugin provider gets under the ``:device`` shorthand. QNN's HTP:
+# sustained clocks (burst throttles under steady load), fp16 for an fp32
+# model (the HTP has no fp32 path; without it every node falls back to
+# CPU), the slowest graph finalisation (once per session, cached — see
+# ``plugin_context_path``). Measured on a QCS8275: yolo26n 8.6 ms.
+PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
+    QNN_EP: {
+        "backend_type": "htp",
+        "htp_performance_mode": "sustained_high_performance",
+        "enable_htp_fp16_precision": "1",
+        "htp_graph_finalization_optimization_mode": "3",
+    },
 }
 
 ProviderEntry = Any  # str | tuple[str, dict[str, str]]
@@ -195,13 +224,212 @@ def requested_providers(default: str | None = None) -> str | None:
     return value or default
 
 
-def available_providers() -> list[str]:
+def available_providers(requested=None) -> list[str]:
+    """This build's providers — plus the plugin providers ``requested`` names,
+    registered on the way (``get_available_providers()`` never lists those)."""
     try:
         import onnxruntime as ort  # lazy: optional dependency
 
-        return list(ort.get_available_providers())
+        avail = list(ort.get_available_providers())
     except Exception:
         return []
+    for name in register_plugin_providers(requested) | _registered_plugin_eps:
+        if name not in avail:
+            avail.append(name)
+    return avail
+
+
+def register_plugin_providers(requested) -> set[str]:
+    """Register the plugin EP libraries ``requested`` names (see ``PLUGIN_EPS``)
+    and return the names now usable, the already-registered ones included.
+
+    Process-wide and idempotent. A plugin whose package is not in this
+    build (the cpu flavour asked for QNN) is reported once and skipped, so
+    the request degrades to the next provider like a built-in one the
+    wheel lacks. Registering also installs :func:`install_plugin_shim`, so
+    a library that builds its own sessions from a ``providers=`` list
+    (InsightFace, fast-plate-ocr, onnx-asr) gets the plugin too.
+    """
+    usable: set[str] = set()
+    for name, _device in parse_provider_specs(requested):
+        if name not in PLUGIN_EPS:
+            continue
+        if name in _registered_plugin_eps:
+            usable.add(name)
+            continue
+        pkg = PLUGIN_EPS[name]
+        try:
+            import importlib
+
+            import onnxruntime as ort
+
+            mod = importlib.import_module(pkg)
+            ort.register_execution_provider_library(name, mod.get_library_path())
+        except ImportError:
+            log.warning("ORT provider %s needs the %s package (the matching image flavour); "
+                        "not installed — skipping", name, pkg)
+            continue
+        except Exception as exc:  # the runtime refused the library
+            log.warning("ORT could not register plugin provider %s: %s", name, exc)
+            continue
+        _registered_plugin_eps.add(name)
+        usable.add(name)
+        log.info("ORT plugin provider %s registered from %s", name, pkg)
+    if usable:
+        install_plugin_shim()
+    return usable
+
+
+def provider_options(entry: ProviderEntry, env=None) -> dict[str, str]:
+    """The options a provider entry carries: the provider's defaults underneath,
+    the entry's own on top, ``ADAPTER_ONNX_PROVIDER_OPTIONS`` (``k=v,k=v``)
+    last. For QNN the ``backend_type`` shorthand becomes the package's
+    ``backend_path``: the documented ``backend_type`` failed device creation
+    on a QCS8275 (``QNN_DEVICE_ERROR_INVALID_CONFIG``) where the path worked."""
+    name = provider_name(entry)
+    opts = dict(PROVIDER_DEFAULTS.get(name, {}))
+    if isinstance(entry, tuple) and isinstance(entry[1], dict):
+        opts.update({k: str(v) for k, v in entry[1].items()})
+    raw = (env if env is not None else os.environ).get(PROVIDER_OPTIONS_ENV, "")
+    for item in raw.split(","):
+        k, sep, v = item.strip().partition("=")
+        if sep and k:
+            opts[k] = v
+    if name == QNN_EP and "backend_path" not in opts:
+        path = _qnn_backend_path(opts.get("backend_type", "htp"))
+        if path:
+            opts["backend_path"] = path
+            opts.pop("backend_type", None)
+    return opts
+
+
+def _qnn_backend_path(backend: str) -> str | None:
+    try:
+        import onnxruntime_qnn as q
+    except ImportError:
+        return None
+    getter = getattr(q, f"get_qnn_{backend.strip().lower()}_path", None)
+    return getter() if getter else None
+
+
+def plugin_context_path(model, provider: str) -> str:
+    """Where a plugin provider's compiled graph for ``model`` is cached: next
+    to the model when its directory is writable, else under the temp dir;
+    the name carries the provider so flavours never share one. QNN compiles
+    the graph at session build (seconds); the EP-context dump loads in a
+    fraction of that for every later session. A model given as bytes is
+    keyed by its hash."""
+    import hashlib
+    import tempfile
+
+    if isinstance(model, (bytes, bytearray)):
+        return os.path.join(tempfile.gettempdir(),
+                            f"{hashlib.sha256(model).hexdigest()[:16]}.{provider}.ctx.onnx")
+    path = str(model)
+    d = os.path.dirname(os.path.abspath(path))
+    if not os.access(d, os.W_OK):
+        d = tempfile.gettempdir()
+    return os.path.join(d, f"{os.path.basename(path)}.{provider}.ctx.onnx")
+
+
+def plugin_session(model, entries, sess_options=None, *, adapter: str = "adapter", **kw):
+    """Build an ``InferenceSession`` with the plugin provider(s) in ``entries``
+    attached BY DEVICE (``add_provider_for_devices``: a plugin named in
+    ``providers=`` is ignored, and ``add_provider`` by name is refused), the
+    remaining entries passed the classic way, through the compiled-graph
+    cache. The returned session carries ``_opennvr_plugin_compiled``: True
+    when the provider took the graph, False when it compiled nothing — the
+    only reliable sign, since ``get_providers()`` keeps naming a plugin
+    whose device failed (measured: QNN refused, every node on CPU, the
+    session still said QNN)."""
+    import threading
+
+    import onnxruntime as ort
+
+    original = _ORIGINAL_SESSION or ort.InferenceSession
+    opts = sess_options if sess_options is not None else ort.SessionOptions()
+    plugins = [e for e in entries or [] if provider_name(e) in _registered_plugin_eps]
+    classic = [e for e in entries or [] if provider_name(e) not in PLUGIN_EPS]
+    attached = []
+    for e in plugins:
+        name = provider_name(e)
+        devices = [d for d in ort.get_ep_devices() if d.ep_name == name]
+        if not devices:
+            log.warning("%s: ORT plugin provider %s reports no device on this host; skipping", adapter, name)
+            continue
+        opts.add_provider_for_devices(devices, provider_options(e))
+        attached.append(name)
+    if not attached:
+        sess = original(model, sess_options=opts, providers=classic or None, **kw)
+        sess._opennvr_plugin_compiled = None
+        return sess
+    provider = attached[0]
+    ctx = plugin_context_path(model, provider)
+    if os.path.exists(ctx):
+        try:
+            sess = original(ctx, sess_options=opts, **kw)
+            log.info("%s: %s loaded the compiled graph %s", adapter, provider, ctx)
+            sess._opennvr_plugin_compiled = True
+            return sess
+        except Exception as exc:  # another QNN version, another SoC
+            log.warning("%s: compiled graph %s rejected (%s); rebuilding from the model", adapter, ctx, exc)
+            try:
+                os.remove(ctx)
+            except OSError:
+                pass
+    tmp = f"{ctx}.{os.getpid()}.{threading.get_ident()}.tmp"
+    opts.add_session_config_entry("ep.context_enable", "1")
+    opts.add_session_config_entry("ep.context_file_path", tmp)
+    opts.add_session_config_entry("ep.context_embed_mode", "1")
+    sess = original(model, sess_options=opts, **kw)
+    if os.path.exists(tmp):
+        try:
+            os.replace(tmp, ctx)
+            log.info("%s: %s compiled the graph, cached at %s", adapter, provider, ctx)
+        except OSError as exc:
+            log.warning("%s: could not keep the compiled graph at %s: %s", adapter, ctx, exc)
+        sess._opennvr_plugin_compiled = True
+    else:
+        sess._opennvr_plugin_compiled = False
+    return sess
+
+
+_ORIGINAL_SESSION = None
+
+
+def install_plugin_shim() -> None:
+    """Route every ``onnxruntime.InferenceSession(..., providers=[...])`` that
+    names a registered plugin provider through :func:`plugin_session`.
+
+    The adapters' libraries (InsightFace, fast-plate-ocr, onnx-asr …) build
+    their own sessions from the provider list they are handed, and ORT
+    silently ignores a plugin named there (measured) — so the only way to
+    give them the NPU is to meet them at the constructor. Lists without a
+    plugin go straight through; idempotent."""
+    global _ORIGINAL_SESSION
+    if _ORIGINAL_SESSION is not None:
+        return
+    import onnxruntime as ort
+
+    _ORIGINAL_SESSION = ort.InferenceSession
+    original = _ORIGINAL_SESSION
+
+    def _session(model, sess_options=None, providers=None, provider_options=None, **kw):
+        if providers and provider_options:
+            entries = [(p, dict(o)) if isinstance(p, str) and o else p
+                       for p, o in zip(providers, list(provider_options) + [None] * len(providers))]
+        else:
+            entries = list(providers or [])
+        if any(provider_name(e) in _registered_plugin_eps for e in entries):
+            return plugin_session(model, entries, sess_options, **kw)
+        return original(model, sess_options=sess_options, providers=providers,
+                        provider_options=provider_options, **kw)
+
+    _session.__name__ = "InferenceSession"
+    _session.__wrapped__ = original
+    ort.InferenceSession = _session
+    log.info("ORT plugin shim installed: providers lists naming %s go through the plugin API",
+             ", ".join(sorted(_registered_plugin_eps)))
 
 
 def accelerator_available(available=None) -> bool:
@@ -213,10 +441,12 @@ def accelerator_available(available=None) -> bool:
 
 def session_providers(requested=None) -> list[ProviderEntry]:
     """What to pass as ``providers=`` for an ``InferenceSession``: the env
-    setting (or ``requested``) resolved against this build's providers."""
-    return resolve_providers(
-        requested if requested is not None else requested_providers(), available_providers()
-    )
+    setting (or ``requested``) resolved against this build's providers. A
+    plugin provider in the request is registered here (and the constructor
+    shim installed), so the list works in a library's ``providers=`` too."""
+    req = requested if requested is not None else requested_providers()
+    register_plugin_providers(req)
+    return resolve_providers(req, available_providers())
 
 
 def build_with_fallback(build, requested, *, adapter: str = "adapter"):
@@ -267,6 +497,10 @@ def effective_providers(session, requested=None, *, adapter: str = "adapter",
         effective = list(session.get_providers())
     except Exception:
         effective = []
+    if getattr(session, "_opennvr_plugin_compiled", None) is False:
+        # The plugin's device never came up and every node is on CPU, yet
+        # the session still lists it (see plugin_session).
+        effective = [p for p in effective if p not in PLUGIN_EPS]
     req = list(requested) if requested else []
     wanted = provider_name(req[0]) if req else None
     in_use = bool(effective) and effective[0] not in _NOT_ACCELERATORS
@@ -295,7 +529,9 @@ def effective_providers(session, requested=None, *, adapter: str = "adapter",
 
 
 __all__ = [
-    "ENV_VAR", "CPU_EP", "DEVICE_OPTION",
+    "ENV_VAR", "CPU_EP", "DEVICE_OPTION", "QNN_EP", "PLUGIN_EPS", "PROVIDER_OPTIONS_ENV",
+    "PROVIDER_DEFAULTS", "register_plugin_providers", "provider_options", "plugin_context_path",
+    "plugin_session", "install_plugin_shim",
     "parse_provider_specs", "provider_entry", "provider_name", "resolve_providers",
     "describe_providers", "requested_providers", "available_providers",
     "accelerator_available", "session_providers", "effective_providers",
