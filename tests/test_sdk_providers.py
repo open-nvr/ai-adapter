@@ -394,4 +394,6 @@ def test_fixed_shape_model_wildcard_pins_only_a_dynamic_first_input(monkeypatch,
     (tmp_path / "rec.onnx").write_bytes(b"m2")
     out = fixed_shape_model(str(tmp_path / "rec.onnx"), "*[1,3,640,640]", "QNNExecutionProvider")
     assert out.endswith("rec.onnx.QNNExecutionProvider.fixed.onnx") and fixed_calls[-1] == ("input.1", [1, 3, 112, 112])
-    assert fixed_shape_model(str(tmp_path / "det.onnx"), "images[1,3,448,448]", "QNNExecutionProvider") == str(tmp_path / "det.onnx")
+    # a named input the model lacks: nothing to pin (fresh file: the det copy above is cached)
+    protos["det2.onnx"] = protos["det.onnx"]; (tmp_path / "det2.onnx").write_bytes(b"m")
+    assert fixed_shape_model(str(tmp_path / "det2.onnx"), "images[1,3,448,448]", "QNNExecutionProvider") == str(tmp_path / "det2.onnx")
