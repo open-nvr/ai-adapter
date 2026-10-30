@@ -418,21 +418,18 @@ def fixed_shape_model(model, spec: str, provider: str, *, adapter: str = "adapte
     return model
 
 
-def plugin_session(model, entries, sess_options=None, *, adapter: str = "adapter", **kw):
-    """Build an ``InferenceSession`` with the plugin provider(s) in ``entries``
-    attached BY DEVICE (``add_provider_for_devices``: a plugin named in
-    ``providers=`` is ignored, and ``add_provider`` by name is refused), the
-    remaining entries passed the classic way, through the compiled-graph
-    cache. The returned session carries ``_opennvr_plugin_compiled``: True
-    when the provider took the graph, False when it compiled nothing — the
-    only reliable sign, since ``get_providers()`` keeps naming a plugin
-    whose device failed (measured: QNN refused, every node on CPU, the
-    session still said QNN)."""
+def _plugin_build_plan(ort, model, entries, sess_options=None, *, adapter: str = "adapter"):
+    """Attach the plugin provider(s) in ``entries`` to the session options
+    BY DEVICE and decide what to load: ``(model_or_ctx, opts, classic, tmp_dump, ctx, provider)``.
+
+    ``add_provider_for_devices`` is the only way in: a plugin named in
+    ``providers=`` is ignored and ``add_provider`` by name is refused. ``ctx``
+    is the compiled-graph cache; when it exists it is what gets loaded, else
+    the runtime is asked to dump it at ``tmp_dump`` (renamed into place by
+    :func:`_plugin_build_finish`). ``provider`` is None when nothing attached.
+    """
     import threading
 
-    import onnxruntime as ort
-
-    original = _ORIGINAL_SESSION or ort.InferenceSession
     opts = sess_options if sess_options is not None else ort.SessionOptions()
     plugins = [e for e in entries or [] if provider_name(e) in _registered_plugin_eps]
     classic = [e for e in entries or [] if provider_name(e) not in PLUGIN_EPS]
@@ -450,28 +447,31 @@ def plugin_session(model, entries, sess_options=None, *, adapter: str = "adapter
         opts.add_provider_for_devices(devices, popts)
         attached.append(name)
     if not attached:
-        sess = original(model, sess_options=opts, providers=classic or None, **kw)
-        sess._opennvr_plugin_compiled = None
-        return sess
+        return model, opts, classic, None, None, None
     provider = attached[0]
     ctx = plugin_context_path(model, provider)
     if os.path.exists(ctx):
-        try:
-            sess = original(ctx, sess_options=opts, **kw)
-            log.info("%s: %s loaded the compiled graph %s", adapter, provider, ctx)
-            sess._opennvr_plugin_compiled = True
-            return sess
-        except Exception as exc:  # another QNN version, another SoC
-            log.warning("%s: compiled graph %s rejected (%s); rebuilding from the model", adapter, ctx, exc)
-            try:
-                os.remove(ctx)
-            except OSError:
-                pass
+        return ctx, opts, classic, None, ctx, provider
     tmp = f"{ctx}.{os.getpid()}.{threading.get_ident()}.tmp"
     opts.add_session_config_entry("ep.context_enable", "1")
     opts.add_session_config_entry("ep.context_file_path", tmp)
     opts.add_session_config_entry("ep.context_embed_mode", "1")
-    sess = original(model, sess_options=opts, **kw)
+    return model, opts, classic, tmp, ctx, provider
+
+
+def _plugin_build_finish(sess, tmp, ctx, provider, *, adapter: str = "adapter") -> None:
+    """After the session is built: keep the compiled-graph dump and mark the
+    session. ``_opennvr_plugin_compiled`` is True when the provider took the
+    graph, False when it compiled nothing — the only reliable sign, since
+    ``get_providers()`` keeps naming a plugin whose device failed (measured:
+    QNN refused, every node on CPU, the session still said QNN)."""
+    if provider is None:
+        sess._opennvr_plugin_compiled = None
+        return
+    if tmp is None:  # loaded the cache
+        log.info("%s: %s loaded the compiled graph %s", adapter, provider, ctx)
+        sess._opennvr_plugin_compiled = True
+        return
     if os.path.exists(tmp):
         try:
             os.replace(tmp, ctx)
@@ -481,50 +481,102 @@ def plugin_session(model, entries, sess_options=None, *, adapter: str = "adapter
         sess._opennvr_plugin_compiled = True
     else:
         sess._opennvr_plugin_compiled = False
-    return sess
+
+
+def plugin_session(model, entries, sess_options=None, *, adapter: str = "adapter", **kw):
+    """Build an ``InferenceSession`` with the plugin provider(s) in ``entries``
+    attached by device, through the compiled-graph cache (see
+    :func:`_plugin_build_plan`). A cache the runtime rejects (another QNN
+    version, another SoC) is deleted and the model compiled again."""
+    import onnxruntime as ort
+
+    original = _ORIGINAL_SESSION or ort.InferenceSession
+    for attempt in (1, 2):
+        load, opts, classic, tmp, ctx, provider = _plugin_build_plan(
+            ort, model, entries, sess_options, adapter=adapter)
+        try:
+            sess = original(load, sess_options=opts, providers=classic or None, **kw) if provider is None \
+                else original(load, sess_options=opts, **kw)
+        except Exception as exc:
+            if provider is not None and tmp is None and attempt == 1:
+                log.warning("%s: compiled graph %s rejected (%s); rebuilding from the model", adapter, ctx, exc)
+                try:
+                    os.remove(ctx)
+                except OSError:
+                    pass
+                sess_options = None  # the options carry the stale attach; start over
+                continue
+            raise
+        _plugin_build_finish(sess, tmp, ctx, provider, adapter=adapter)
+        return sess
+    raise RuntimeError("unreachable")
 
 
 _ORIGINAL_SESSION = None
 
 
 def install_plugin_shim() -> None:
-    """Route every ``onnxruntime.InferenceSession(..., providers=[...])`` that
-    names a registered plugin provider through :func:`plugin_session`.
+    """Make ``onnxruntime.InferenceSession`` a SUBCLASS that routes a
+    ``providers=`` list naming a registered plugin provider through the plugin
+    API (see :func:`_plugin_build_plan`); any other list goes straight through.
 
     The adapters' libraries (InsightFace, fast-plate-ocr, onnx-asr …) build
     their own sessions from the provider list they are handed, and ORT
     silently ignores a plugin named there (measured) — so the only way to
-    give them the NPU is to meet them at the constructor. Lists without a
-    plugin go straight through; idempotent."""
+    give them the NPU is to meet them at the constructor. A subclass rather
+    than a function because libraries also subclass it (InsightFace's
+    PickableInferenceSession) and pickle it. Idempotent."""
     global _ORIGINAL_SESSION
     if _ORIGINAL_SESSION is not None:
         return
     import onnxruntime as ort
 
-    _ORIGINAL_SESSION = ort.InferenceSession
-    original = _ORIGINAL_SESSION
+    original = ort.InferenceSession
+    _ORIGINAL_SESSION = original
 
-    def _session(model, sess_options=None, providers=None, provider_options=None, **kw):
-        if providers and provider_options:
-            entries = [(p, dict(o)) if isinstance(p, str) and o else p
-                       for p, o in zip(providers, list(provider_options) + [None] * len(providers))]
-        else:
-            entries = list(providers or [])
-        if any(provider_name(e) in _registered_plugin_eps for e in entries):
-            return plugin_session(model, entries, sess_options, **kw)
-        return original(model, sess_options=sess_options, providers=providers,
-                        provider_options=provider_options, **kw)
+    class InferenceSession(original):  # noqa: N801 — stands in for the runtime's class
+        def __init__(self, model, sess_options=None, providers=None, provider_options=None, **kw):
+            if providers and provider_options:
+                entries = [(p, dict(o)) if isinstance(p, str) and o else p
+                           for p, o in zip(providers, list(provider_options) + [None] * len(providers))]
+            else:
+                entries = list(providers or [])
+            if not any(provider_name(e) in _registered_plugin_eps for e in entries):
+                super().__init__(model, sess_options=sess_options, providers=providers,
+                                 provider_options=provider_options, **kw)
+                return
+            for attempt in (1, 2):
+                load, opts, classic, tmp, ctx, provider = _plugin_build_plan(ort, model, entries, sess_options)
+                try:
+                    if provider is None:
+                        super().__init__(load, sess_options=opts, providers=classic or None, **kw)
+                    else:
+                        super().__init__(load, sess_options=opts, **kw)
+                except Exception as exc:
+                    if provider is not None and tmp is None and attempt == 1:
+                        log.warning("compiled graph %s rejected (%s); rebuilding from the model", ctx, exc)
+                        try:
+                            os.remove(ctx)
+                        except OSError:
+                            pass
+                        sess_options = None
+                        continue
+                    raise
+                _plugin_build_finish(self, tmp, ctx, provider)
+                return
 
-    _session.__name__ = "InferenceSession"
-    _session.__wrapped__ = original
-    ort.InferenceSession = _session
+    InferenceSession.__module__ = original.__module__
+    InferenceSession.__qualname__ = original.__qualname__
+    InferenceSession.__wrapped__ = original
+    ort.InferenceSession = InferenceSession
     log.info("ORT plugin shim installed: providers lists naming %s go through the plugin API",
              ", ".join(sorted(_registered_plugin_eps)))
 
 
 def accelerator_available(available=None) -> bool:
     """Does this *build* carry an accelerator provider at all (CUDA, OpenVINO,
-    TensorRT, ROCm …)? The §8 ``gpu`` permission declares exactly this."""
+    TensorRT, ROCm, a registered plugin …)? The §8 ``gpu`` permission declares
+    exactly this."""
     provs = list(available) if available is not None else available_providers()
     return any(p not in _NOT_ACCELERATORS for p in provs)
 

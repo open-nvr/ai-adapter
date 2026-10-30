@@ -397,3 +397,23 @@ def test_fixed_shape_model_wildcard_pins_only_a_dynamic_first_input(monkeypatch,
     # a named input the model lacks: nothing to pin (fresh file: the det copy above is cached)
     protos["det2.onnx"] = protos["det.onnx"]; (tmp_path / "det2.onnx").write_bytes(b"m")
     assert fixed_shape_model(str(tmp_path / "det2.onnx"), "images[1,3,448,448]", "QNNExecutionProvider") == str(tmp_path / "det2.onnx")
+
+
+def test_shim_is_a_subclass_libraries_can_subclass_and_isinstance(monkeypatch, tmp_path):
+    """InsightFace does ``class PickableInferenceSession(onnxruntime.InferenceSession)``
+    at import time; a function in that slot broke it (measured)."""
+    _reset_plugins(monkeypatch)
+    fake, calls = _fake_ort(monkeypatch)
+    original = fake.InferenceSession
+    session_providers("QNNExecutionProvider:htp")
+    assert isinstance(fake.InferenceSession, type) and issubclass(fake.InferenceSession, original)
+    assert fake.InferenceSession.__wrapped__ is original
+
+    class Pickable(fake.InferenceSession):        # what insightface's model_zoo does
+        pass
+
+    model = tmp_path / "m.onnx"; model.write_bytes(b"m")
+    sess = Pickable(str(model), providers=session_providers("QNNExecutionProvider:htp"))
+    assert isinstance(sess, original) and sess._opennvr_plugin_compiled is True
+    plain = Pickable(str(model), providers=["CPUExecutionProvider"])
+    assert plain._opennvr_plugin_compiled is None if hasattr(plain, "_opennvr_plugin_compiled") else True
