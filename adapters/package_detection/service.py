@@ -188,18 +188,38 @@ class PackageDetectionService(AdapterService):
             # Providers from ADAPTER_ONNX_PROVIDERS resolved against this
             # build (OpenNVR Accelerate flavours); never a hardcoded list.
             from opennvr_adapter_sdk.providers import (
-                build_with_fallback, effective_providers, session_providers)
+                build_with_fallback, effective_providers, session_providers,
+                static_shapes, wants_static_shapes)
 
             self._requested_providers = session_providers()
+            pinned: list[int] | None = None
+            if wants_static_shapes(self._requested_providers):
+                # An accelerator that compiles for fixed shapes (OpenVINO
+                # device, QNN HTP): the dynamic-axes export is pinned to
+                # DEFAULT_IMGSZ before the graph is compiled; a fixed-size
+                # export is left alone. Requests then resize to that.
+                probe = ort.InferenceSession(self._weights_path, providers=["CPUExecutionProvider"])
+                meta = probe.get_inputs()[0]
+                if _static_input_size(getattr(meta, "shape", None)) is None:
+                    pinned = [1, 3, DEFAULT_IMGSZ, DEFAULT_IMGSZ]
+                    self._requested_providers = static_shapes(
+                        self._requested_providers, {meta.name: pinned})
+                del probe
             self._session, self._requested_providers, fallback = build_with_fallback(
                 lambda providers: ort.InferenceSession(self._weights_path, providers=providers),
                 self._requested_providers, adapter="package-detection")
+            if fallback:
+                pinned = None  # the CPU session takes the export as is
             self._provider_report = effective_providers(
                 self._session, self._requested_providers, adapter="package-detection",
                 fallback_error=fallback)
+            if pinned:
+                self._provider_report["input_shape_pinned"] = list(pinned)
             input_meta = self._session.get_inputs()[0]
             self._input_name = input_meta.name
-            self._static_imgsz = _static_input_size(getattr(input_meta, "shape", None))
+            self._static_imgsz = (
+                pinned[-1] if pinned else _static_input_size(getattr(input_meta, "shape", None))
+            )
             self._fingerprint_cache = self._compute_fingerprint()
             self._gpu_in_use = bool(self._provider_report.get("accelerator_in_use"))
             self._warm_up()

@@ -7,6 +7,23 @@ the SDK uses semantic versioning aligned with the AI Adapter Contract major vers
 
 ## [Unreleased]
 
+### Added
+
+- **Plugin execution providers (ONNX Runtime QNN, the `qualcomm` flavour).**
+  `providers.py` registers the plugin library a request names
+  (`PLUGIN_EPS`: `QNNExecutionProvider` → `onnxruntime_qnn`), folds it into
+  the available list, attaches it to a session **by device**
+  (`plugin_session`), caches its compiled graph next to the model
+  (`<model>.<Provider>.ctx.onnx`), and installs a constructor shim so a
+  library that builds its own sessions from a `providers=` list
+  (InsightFace, fast-plate-ocr, onnx-asr) gets the plugin too — ORT
+  silently ignores a plugin named in that list. `QNNExecutionProvider:htp`
+  is the shorthand; HTP defaults (sustained clocks, fp16 for fp32 models,
+  graph finalisation 3) sit under it and
+  `ADAPTER_ONNX_PROVIDER_OPTIONS=k=v,…` on top. `effective_providers`
+  reports CPU for a plugin that compiled nothing — the session keeps
+  listing it after its device failed.
+
 ## [1.3.0] — 2026-10-11
 
 First published with OpenNVR 0.1.6. This section was written on

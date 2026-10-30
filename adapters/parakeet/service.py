@@ -91,13 +91,20 @@ class ParakeetService(AdapterService):
                 import onnxruntime as ort
 
                 path = self._weights_dir if _has_weights(self._weights_dir) else None
-                available = list(ort.get_available_providers())
-                providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in available]
+                # Providers from ADAPTER_ONNX_PROVIDERS resolved against this
+                # build (OpenNVR Accelerate flavours): unset keeps what it
+                # always was, CUDA when the build has it, else CPU.
+                from opennvr_adapter_sdk.providers import build_with_fallback, session_providers
+                requested = session_providers(
+                    None if os.environ.get("ADAPTER_ONNX_PROVIDERS", "").strip() else
+                    [p for p in ("CUDAExecutionProvider",) if p in ort.get_available_providers()])
                 logger.info("ParakeetService: loading %s from %s providers=%s",
-                            self._model_name, path or "huggingface", providers)
-                self._model = onnx_asr.load_model(
-                    self._model_name, path, quantization="int8", providers=providers,
-                ).with_timestamps()
+                            self._model_name, path or "huggingface", requested)
+                self._model, providers, self._fallback_error = build_with_fallback(
+                    lambda provs: onnx_asr.load_model(
+                        self._model_name, path, quantization="int8", providers=provs,
+                    ).with_timestamps(),
+                    requested, adapter="parakeet")
                 self._providers = providers
                 self._fingerprint_cache = self._compute_fingerprint()
                 self._load_state = HealthStatus.OK
@@ -127,9 +134,11 @@ class ParakeetService(AdapterService):
 
     def hardware_evaluation(self) -> HardwareEvaluationResponse:
         if self._load_state == HealthStatus.OK:
-            on_gpu = "CUDAExecutionProvider" in self._providers
+            from opennvr_adapter_sdk.providers import provider_name
+            names = [provider_name(p) for p in self._providers]
+            on_gpu = names[:1] not in ([], ["CPUExecutionProvider"])
             verdict = HardwareVerdict.OK
-            reasoning = ("Parakeet loaded on CUDA." if on_gpu else
+            reasoning = (f"Parakeet loaded on {names[0]}." if on_gpu else
                          "Parakeet loaded on CPU: a few hundred milliseconds an utterance on four cores.")
         elif self._load_state == HealthStatus.LOADING:
             verdict, reasoning = HardwareVerdict.WARN, "Model still loading."

@@ -20,6 +20,11 @@
 # OpenNVR Accelerate flavours — one Dockerfile, ACCEL picks the runtime:
 #   cpu   (default)  plain onnxruntime; amd64 + arm64
 #   intel            onnxruntime-openvino + Intel OpenCL/NPU user-space
+#   qualcomm         + onnxruntime-qnn, the Qualcomm AI Runtime PLUGIN provider
+#                    (+ libatomic1: the HTP backend dlopens it and python:slim
+#                    lacks it — "Unable to load backend" otherwise)
+#                    (Hexagon NPU; next to plain onnxruntime, which it needs
+#                    >= 1.24.2 — the plugin API); arm64 only
 #                    (scripts/install-intel-runtime.sh); amd64 only
 #   docker build --build-arg ACCEL=intel -f adapters/<dir>/Dockerfile .
 # Select the device at run time with ADAPTER_ONNX_PROVIDERS
@@ -46,6 +51,20 @@ RUN pip install --no-cache-dir \
         opencv-python-headless==4.10.0.84 \
         onnxruntime==1.23.2
 
+ARG ACCEL=cpu
+COPY scripts/install-intel-runtime.sh /tmp/install-intel-runtime.sh
+RUN case "${ACCEL}" in \
+      cpu) ;; \
+      intel) sh /tmp/install-intel-runtime.sh \
+             && pip uninstall -y onnxruntime \
+             && pip install --no-cache-dir onnxruntime-openvino==1.24.1 ;; \
+      qualcomm) apt-get update && apt-get install -y --no-install-recommends libatomic1 \
+             && rm -rf /var/lib/apt/lists/* \
+             && pip install --no-cache-dir "onnxruntime>=1.24.2,<2" onnxruntime-qnn==2.7.0 "onnx>=1.16" ;; \
+      *) echo "unknown ACCEL=${ACCEL} (cpu|intel|qualcomm)" >&2; exit 1 ;; \
+    esac && rm -f /tmp/install-intel-runtime.sh
+ENV OPENNVR_ACCEL_FLAVOUR=${ACCEL}
+
 # Install the OpenNVR adapter SDK so ``adapters.yolov8.main`` can
 # import ``AdapterApp``, ``BodyShape``, etc. Sister Dockerfiles
 # (adapters/insightface/Dockerfile, adapters/fast_plate_ocr/
@@ -57,16 +76,6 @@ RUN pip install --no-cache-dir ./opennvr_adapter_sdk
 # Flavour step (ACCEL). The accelerator wheels CONFLICT with plain onnxruntime
 # (same import name), so swap rather than add; the Intel user-space comes from
 # Intel's pinned GitHub releases because Debian carries none of it.
-ARG ACCEL=cpu
-COPY scripts/install-intel-runtime.sh /tmp/install-intel-runtime.sh
-RUN case "${ACCEL}" in \
-      cpu) ;; \
-      intel) sh /tmp/install-intel-runtime.sh \
-             && pip uninstall -y onnxruntime \
-             && pip install --no-cache-dir onnxruntime-openvino==1.24.1 ;; \
-      *) echo "unknown ACCEL=${ACCEL} (cpu|intel)" >&2; exit 1 ;; \
-    esac && rm -f /tmp/install-intel-runtime.sh
-ENV OPENNVR_ACCEL_FLAVOUR=${ACCEL}
 
 COPY app/__init__.py                            ./app/__init__.py
 COPY app/interfaces/                            ./app/interfaces/
