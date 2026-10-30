@@ -219,7 +219,37 @@ def session_providers(requested=None) -> list[ProviderEntry]:
     )
 
 
-def effective_providers(session, requested=None, *, adapter: str = "adapter") -> dict[str, Any]:
+def build_with_fallback(build, requested, *, adapter: str = "adapter"):
+    """Run ``build(providers)`` with the requested providers; if that raises
+    and an accelerator was requested, log the error and build again on CPU.
+
+    Returns ``(obj, providers_used, fallback_error)``: ``fallback_error`` is
+    ``None`` when the first attempt succeeded, else the error text (hand it
+    to :func:`effective_providers`). An accelerator that cannot even start
+    — device missing from the container, driver absent, plugin crash —
+    must never take the adapter down with it: the adapter serves on CPU
+    and ``/hardware/evaluation`` says why. A failure with no accelerator
+    requested is a real error and propagates.
+    """
+    req = list(requested) if requested else [CPU_EP]
+    try:
+        return build(req), req, None
+    except Exception as exc:  # noqa: BLE001 — any failure of the accelerated path
+        wanted = provider_name(req[0]) if req else CPU_EP
+        if wanted in _NOT_ACCELERATORS:
+            raise
+        error = f"{type(exc).__name__}: {exc}"[:400]
+        log.error(
+            "%s: could not start on %s — %s. Falling back to CPU; the adapter works "
+            "but is not accelerated. Check the device is passed through to the "
+            "container and the image flavour matches the host.",
+            adapter, describe_providers(req[:1]), error,
+        )
+        return build([CPU_EP]), [CPU_EP], error
+
+
+def effective_providers(session, requested=None, *, adapter: str = "adapter",
+                        fallback_error: str | None = None) -> dict[str, Any]:
     """Compare the request with what ``session`` really runs on.
 
     Returns the hardware-evaluation payload fragment::
@@ -249,13 +279,19 @@ def effective_providers(session, requested=None, *, adapter: str = "adapter") ->
         )
     elif wanted:
         log.info("%s: ONNX Runtime running on %s", adapter, describe_providers(req[:1]))
-    return {
+    report = {
         "onnxruntime_providers": available_providers(),
         "requested_providers": describe_providers(req),
         "effective_providers": effective,
         "accelerator_in_use": in_use,
         "accelerator_requested": bool(wanted) and wanted not in _NOT_ACCELERATORS,
     }
+    if fallback_error:
+        # build_with_fallback() rebuilt on CPU: the request is what the
+        # operator asked for, the session is CPU, and here is why.
+        report["accelerator_requested"] = True
+        report["accelerator_fallback_error"] = fallback_error
+    return report
 
 
 __all__ = [
@@ -263,4 +299,5 @@ __all__ = [
     "parse_provider_specs", "provider_entry", "provider_name", "resolve_providers",
     "describe_providers", "requested_providers", "available_providers",
     "accelerator_available", "session_providers", "effective_providers",
+    "build_with_fallback", "static_shapes", "wants_static_shapes",
 ]

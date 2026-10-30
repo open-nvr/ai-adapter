@@ -859,3 +859,35 @@ def test_cpu_path_keeps_dynamic_export(yolo_pose_environment, monkeypatch):
     assert svc.is_ready(), svc._load_error
     assert svc._static_imgsz is None
     assert "input_shape_pinned" not in svc._provider_report
+
+
+def test_accelerator_that_cannot_start_falls_back_to_cpu(yolo_pose_environment, monkeypatch):
+    """OpenVINO raising at session creation (device missing, driver absent)
+    must leave the adapter serving on CPU, with the reason in the report."""
+    import importlib
+    import sys
+
+    monkeypatch.setenv("ADAPTER_ONNX_PROVIDERS", "OpenVINOExecutionProvider:GPU")
+    from tests._yolo_pose_service_fixtures import install_fake_onnxruntime
+    module = install_fake_onnxruntime(providers=["OpenVINOExecutionProvider", "CPUExecutionProvider"])
+    real = module.InferenceSession
+
+    class Failing(real):
+        def __init__(self, *args, **kwargs):
+            if kwargs.get("providers", [None])[0] != "CPUExecutionProvider":
+                raise RuntimeError("clGetPlatformIDs failed")
+            super().__init__(*args, **kwargs)
+            self._providers = ["CPUExecutionProvider"]
+
+    module.InferenceSession = Failing
+    sys.modules["onnxruntime"] = module
+    import adapters.yolo_pose.service as service_module
+    importlib.reload(service_module)
+    svc = service_module.YoloPoseService()
+    svc.load()
+    assert svc.is_ready(), svc._load_error
+    report = svc._provider_report
+    assert report["accelerator_in_use"] is False
+    assert report["accelerator_requested"] is True
+    assert "clGetPlatformIDs" in report["accelerator_fallback_error"]
+    assert svc._static_imgsz is None

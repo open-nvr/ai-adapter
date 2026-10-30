@@ -229,25 +229,31 @@ class FastPlateOcrService(AdapterService):
                 # discovery fast and avoids pulling onnxruntime into
                 # discovery-only code paths.
                 from fast_plate_ocr import LicensePlateRecognizer
-                from opennvr_adapter_sdk.providers import effective_providers, session_providers
+                from opennvr_adapter_sdk.providers import (
+                    build_with_fallback, effective_providers, session_providers)
 
                 # Providers from ADAPTER_ONNX_PROVIDERS resolved against this build
                 # (OpenNVR Accelerate flavours): both the recogniser and the plate
                 # detector take the same onnxruntime provider list.
                 self._requested_providers = session_providers()
 
-                if self._model_path:
-                    self._recognizer = LicensePlateRecognizer(
-                        onnx_model_path=self._model_path,
-                        plate_config_path=self._plate_config_path,
-                        providers=self._requested_providers,
-                    )
-                else:
-                    self._recognizer = LicensePlateRecognizer(
-                        self._model_id, providers=self._requested_providers)
+                def _build_recognizer(providers):
+                    if self._model_path:
+                        return LicensePlateRecognizer(
+                            onnx_model_path=self._model_path,
+                            plate_config_path=self._plate_config_path,
+                            providers=providers,
+                        )
+                    return LicensePlateRecognizer(self._model_id, providers=providers)
+
+                # An accelerator that cannot start must not take the adapter
+                # down: build_with_fallback rebuilds on CPU and the report says why.
+                self._recognizer, self._requested_providers, fallback = build_with_fallback(
+                    _build_recognizer, self._requested_providers, adapter="fast-plate-ocr")
                 self._fingerprint_cache = self._compute_fingerprint()
                 self._provider_report = effective_providers(
-                    _session_of(self._recognizer), self._requested_providers, adapter="fast-plate-ocr")
+                    _session_of(self._recognizer), self._requested_providers, adapter="fast-plate-ocr",
+                    fallback_error=fallback)
                 self._load_state = HealthStatus.OK
                 self._load_error = None
                 logger.info(

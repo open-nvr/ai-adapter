@@ -160,6 +160,7 @@ ANSWERS: tuple[str, ...] = (
     "FairQueuing",
     # ONNX Runtime providers (OpenNVR Accelerate flavours)
     "accelerator_available",
+    "build_with_fallback",
     "describe_providers",
     "effective_providers",
     "resolve_providers",
@@ -184,6 +185,7 @@ API_TIERS: dict[str, tuple[str, ...]] = {
 
 from .providers import (  # noqa: E402
     accelerator_available,
+    build_with_fallback,
     describe_providers,
     effective_providers,
     resolve_providers,

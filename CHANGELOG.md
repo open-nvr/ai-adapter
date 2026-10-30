@@ -11,6 +11,15 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **An accelerator that cannot start never takes an adapter down.**
+  `build_with_fallback()` in `opennvr_adapter_sdk.providers` builds the
+  session (or InsightFace / fast-plate-ocr model object) with the requested
+  providers and, if that raises — device not passed through, driver absent,
+  OpenVINO plugin failure — logs the error and builds again on CPU. All five
+  ONNX adapters use it; `/hardware/evaluation` then reports
+  `accelerator_requested: true`, `accelerator_in_use: false` and
+  `accelerator_fallback_error` with the reason. A failure with no
+  accelerator requested still propagates.
 - **Static shapes on OpenVINO accelerators.** `ADAPTER_ONNX_PROVIDERS` with an
   OpenVINO device other than `CPU` now compiles the graph for the shapes of
   the first inference (`disable_dynamic_shapes`) instead of as a dynamic

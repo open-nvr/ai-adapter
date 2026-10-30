@@ -122,7 +122,7 @@ class InsightFaceService(AdapterService):
                 from insightface.app import FaceAnalysis
 
                 from opennvr_adapter_sdk.providers import (
-                    accelerator_available, session_providers)
+                    accelerator_available, build_with_fallback, session_providers)
                 # Providers from ADAPTER_ONNX_PROVIDERS resolved against this build
                 # (OpenNVR Accelerate flavours). InsightFace's own default is
                 # CUDA-then-CPU, which on the -intel flavour silently means CPU.
@@ -133,9 +133,16 @@ class InsightFaceService(AdapterService):
                 # detected face; the detector's own 5 keypoints are what
                 # the ArcFace alignment uses, so the landmark and
                 # attribute nets were pure waste on every face.
-                self._face_app = FaceAnalysis(
-                    name=self._model_pack, providers=self._requested_providers,
-                    allowed_modules=["detection", "recognition"])
+                # FaceAnalysis builds its onnxruntime sessions in __init__;
+                # an accelerator that cannot start must not take the
+                # adapter down — build_with_fallback rebuilds on CPU and
+                # /hardware/evaluation carries the reason.
+                self._face_app, self._requested_providers, self._fallback_error = (
+                    build_with_fallback(
+                        lambda providers: FaceAnalysis(
+                            name=self._model_pack, providers=providers,
+                            allowed_modules=["detection", "recognition"]),
+                        self._requested_providers, adapter="insightface"))
                 # ctx_id=-1 keeps it on CPU. GPU users override via
                 # the OPENNVR_INSIGHTFACE_CTX env var.
                 # ctx_id < 0 makes InsightFace force CPUExecutionProvider on every
@@ -189,7 +196,8 @@ class InsightFaceService(AdapterService):
             session = getattr(model, "session", None)
             if session is not None and hasattr(session, "get_providers"):
                 return effective_providers(
-                    session, getattr(self, "_requested_providers", None), adapter="insightface")
+                    session, getattr(self, "_requested_providers", None), adapter="insightface",
+                    fallback_error=getattr(self, "_fallback_error", None))
         return {}
 
     def hardware_evaluation(self) -> HardwareEvaluationResponse:

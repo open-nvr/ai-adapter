@@ -187,15 +187,16 @@ class PackageDetectionService(AdapterService):
             )
             # Providers from ADAPTER_ONNX_PROVIDERS resolved against this
             # build (OpenNVR Accelerate flavours); never a hardcoded list.
-            from opennvr_adapter_sdk.providers import effective_providers, session_providers
+            from opennvr_adapter_sdk.providers import (
+                build_with_fallback, effective_providers, session_providers)
 
             self._requested_providers = session_providers()
-            self._session = ort.InferenceSession(
-                self._weights_path,
-                providers=self._requested_providers,
-            )
+            self._session, self._requested_providers, fallback = build_with_fallback(
+                lambda providers: ort.InferenceSession(self._weights_path, providers=providers),
+                self._requested_providers, adapter="package-detection")
             self._provider_report = effective_providers(
-                self._session, self._requested_providers, adapter="package-detection")
+                self._session, self._requested_providers, adapter="package-detection",
+                fallback_error=fallback)
             input_meta = self._session.get_inputs()[0]
             self._input_name = input_meta.name
             self._static_imgsz = _static_input_size(getattr(input_meta, "shape", None))

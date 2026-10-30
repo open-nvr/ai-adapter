@@ -18,6 +18,8 @@ difference between one dropped frame and a retry storm.
 
 ::: opennvr_adapter_sdk.accelerator_available
 
+::: opennvr_adapter_sdk.build_with_fallback
+
 ::: opennvr_adapter_sdk.describe_providers
 
 ::: opennvr_adapter_sdk.effective_providers
