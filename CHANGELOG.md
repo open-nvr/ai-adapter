@@ -9,6 +9,13 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.10] — 2026-10-31
+
+The 0.1.9 images under the number of the OpenNVR release they ship with
+(open-nvr 0.1.10 carries one more detect-pipeline change; nothing changed
+here). Every adapter at `0.1.10`, the five ONNX adapters also at
+`0.1.10-intel` and `0.1.10-qualcomm`. SDK stays 1.4.0.
+
 ## [0.1.9] — 2026-10-31
 
 ### Added
