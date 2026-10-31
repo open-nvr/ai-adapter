@@ -9,6 +9,8 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-10-31
+
 ### Added
 
 - **OpenNVR Accelerate: Qualcomm flavour (`-qualcomm`) of the ONNX
@@ -27,8 +29,6 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   272 ms. Parakeet loads on the HTP but its dynamic-length graphs fail at
   inference (Expand node), so it is not published in this flavour and
   stays on CPU (0.6 s per 3 s of audio).
-
-### Added
 
 - **An accelerator that cannot start never takes an adapter down.**
   `build_with_fallback()` in `opennvr_adapter_sdk.providers` builds the
