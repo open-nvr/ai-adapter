@@ -7,6 +7,8 @@ the SDK uses semantic versioning aligned with the AI Adapter Contract major vers
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-10-31
+
 ### Added
 
 - **Plugin execution providers (ONNX Runtime QNN, the `qualcomm` flavour).**

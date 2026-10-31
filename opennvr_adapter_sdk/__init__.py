@@ -106,7 +106,7 @@ from opennvr_adapter_sdk.contract import (  # noqa: F401 — re-exports
     StreamEndpointInfo,
 )
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # ── The public API, in tiers ──────────────────────────────────────
 #

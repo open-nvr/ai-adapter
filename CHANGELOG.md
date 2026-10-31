@@ -9,6 +9,8 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-10-31
+
 ### Added
 
 - **OpenNVR Accelerate: Qualcomm flavour (`-qualcomm`) of the ONNX
@@ -28,7 +30,10 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inference (Expand node), so it is not published in this flavour and
   stays on CPU (0.6 s per 3 s of audio).
 
-### Added
+- **Adapter SDK 1.4.0 on PyPI.** The plugin execution-provider support
+  above (`register_plugin_providers`, `plugin_session`, the constructor
+  shim, `.opennvr-accel/` caches, `static_shapes` with `*`) for adapters
+  built outside this repository; `opennvr_adapter_sdk/CHANGELOG.md`.
 
 - **An accelerator that cannot start never takes an adapter down.**
   `build_with_fallback()` in `opennvr_adapter_sdk.providers` builds the
