@@ -9,6 +9,19 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **InsightFace: a recognition miss carries its evidence.** The
+  `face_recognition` reply for a face below the threshold now includes
+  `similarity` (the nearest enrolled face, below the threshold by
+  definition and deliberately unnamed; `null` when nobody is enrolled)
+  and `confidence` (the detector's score for the face). A match reply
+  gains `confidence` too. A caller can now hold its verdict on a
+  side-on frame at 0.45 instead of calling a known person a stranger;
+  the Smart Doorbell's per-visit decision reads both. Additive: the
+  wire shape for a match is unchanged, and `recognized: false` means
+  what it did.
+
 ## [0.1.10] — 2026-10-31
 
 The 0.1.9 images under the number of the OpenNVR release they ship with
