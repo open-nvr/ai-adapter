@@ -187,6 +187,24 @@ def test_face_recognition_unknown_when_only_other_person_registered(
     resp = svc.infer({"__file__": sample_jpeg, "task": "face_recognition"})
     assert resp.result["recognized"] is False
     assert resp.result["registered_faces"] == 1
+    # The miss says how near it came and how sure the detector was, so
+    # a caller can hold its decision on a bad frame instead of calling
+    # a known face a stranger. It does NOT say who the nearest was.
+    sim = resp.result["similarity"]
+    assert sim is not None and sim < 0.5
+    assert 0.0 < resp.result["confidence"] <= 1.0
+    assert "person_id" not in resp.result and "name" not in resp.result
+
+
+def test_face_recognition_miss_with_empty_db_has_no_similarity(
+    insightface_environment, sample_jpeg
+):
+    svc = _build_service(insightface_environment)
+    svc.load()
+    resp = svc.infer({"__file__": sample_jpeg, "task": "face_recognition"})
+    assert resp.result["recognized"] is False
+    assert resp.result["similarity"] is None
+    assert resp.result["confidence"] > 0.0
 
 
 def test_face_recognition_returns_no_face_when_none_detected(

@@ -41,7 +41,29 @@ curl -X POST http://localhost:9005/infer \
     "category": "family",
     "similarity": 0.9234,
     "face_bbox": [120, 80, 240, 240],
+    "confidence": 0.91,
     "threshold": 0.5
+  }
+}
+```
+
+A miss keeps its evidence: `similarity` is the nearest enrolled face
+(below the threshold, and deliberately unnamed), `confidence` is the
+detector's score for the face, and `face_bbox` its size. A caller that
+sees `similarity: 0.45` against a threshold of 0.5 on a 30-pixel face
+knows to wait for a better frame rather than announce a stranger.
+
+```json
+{
+  "result": {
+    "task": "face_recognition",
+    "recognized": false,
+    "face_bbox": [410, 92, 442, 131],
+    "confidence": 0.63,
+    "similarity": 0.45,
+    "message": "no match above threshold 0.5",
+    "threshold": 0.5,
+    "registered_faces": 3
   }
 }
 ```

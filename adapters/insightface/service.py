@@ -526,10 +526,21 @@ def _build_recognition_result(
         }
     match = face_db.best_match(embedding, threshold=threshold)
     if match is None:
+        # A miss carries its evidence. The caller cannot otherwise tell
+        # "almost Alice, seen side-on at 0.45" from "nobody we know at
+        # 0.10", nor a crisp face from a blurred half of one — and a
+        # doorbell deciding whether to call somebody a stranger needs
+        # exactly those two numbers. ``similarity`` is the NEAREST
+        # enrolled face, below the threshold by definition; who it
+        # was is deliberately not said, because a near miss is not an
+        # identification. None when nobody is enrolled.
+        nearest = face_db.best_match(embedding, threshold=-1.0)
         return {
             "task": "face_recognition",
             "recognized": False,
             "face_bbox": best["bbox"],
+            "confidence": best["confidence"],
+            "similarity": nearest["similarity"] if nearest else None,
             "message": f"no match above threshold {threshold}",
             "threshold": threshold,
             "registered_faces": len(face_db),
@@ -542,6 +553,7 @@ def _build_recognition_result(
         "category": match["category"],
         "similarity": match["similarity"],
         "face_bbox": best["bbox"],
+        "confidence": best["confidence"],
         "threshold": threshold,
     }
 
