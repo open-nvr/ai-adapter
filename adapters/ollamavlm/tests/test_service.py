@@ -124,3 +124,47 @@ def test_tagged_model_matches_exactly(monkeypatch):
                monkeypatch=monkeypatch)
     svc.load()
     assert svc.hardware_evaluation().details["endpoint_state"] == "ok"
+
+
+def test_a_failed_pull_is_a_hard_error_with_its_cause(monkeypatch):
+    """The field failure (Ventuno Q, 2026-11-01): the eMMC was full, Ollama
+    answered the pull with "no space left on device", and the adapter kept
+    telling every caller "auto-pull is running — retry shortly" for an hour.
+    A pull that died is not in progress: the error says why, is not
+    transient, and the hardware verdict is blocked until it is fixed."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": []})
+        if request.url.path == "/api/pull":
+            return httpx.Response(500, json={"error": "write /usr/share/ollama/.ollama/models/blobs/sha256-4dc7-partial: no space left on device"})
+        if request.url.path == "/api/generate":
+            return httpx.Response(404, text="model not found")
+        return httpx.Response(404)
+    svc = _svc(handler, autopull="true", monkeypatch=monkeypatch)
+    svc.load()
+    assert svc._pull_thread is not None
+    svc._pull_thread.join(5)
+    with pytest.raises(ServiceError) as e:
+        svc.infer({"__file__": JPEG})
+    assert e.value.transient is False and e.value.code == "model_pull_failed"
+    assert "no space left on device" in e.value.message and "ollama pull moondream" in e.value.message
+    assert "sha256" not in e.value.message            # the blob path is noise
+    ev = svc.hardware_evaluation()
+    assert ev.verdict.value == "blocked" and "no space left on device" in ev.reasoning
+
+
+def test_a_model_pulled_by_hand_clears_the_pull_error(monkeypatch):
+    present = {"models": []}
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json=present)
+        if request.url.path == "/api/pull":
+            present["models"] = [{"name": "moondream:latest"}]    # arrived meanwhile
+            return httpx.Response(500, json={"error": "boom"})
+        if request.url.path == "/api/generate":
+            return httpx.Response(200, json={"response": "ok"})
+        return httpx.Response(404)
+    svc = _svc(handler, autopull="true", monkeypatch=monkeypatch)
+    svc.load(); svc._pull_thread.join(5)
+    assert svc._pull_error is None
+    assert svc.hardware_evaluation().verdict.value == "ok"

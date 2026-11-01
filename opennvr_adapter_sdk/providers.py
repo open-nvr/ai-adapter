@@ -68,6 +68,11 @@ QNN_EP = "QNNExecutionProvider"
 # that ships the library. The ``qualcomm`` flavour installs onnxruntime-qnn
 # next to plain onnxruntime (it is a plugin, not a replacement wheel).
 PLUGIN_EPS = {QNN_EP: "onnxruntime_qnn"}
+#: The Hexagon compute DSP, as the host lends it to a container
+#: (docker-compose.accel-qualcomm.yml). The QNN plugin lists the HTP as a
+#: device on any Qualcomm host and compiles the graph without opening it,
+#: so this node is the only honest sign the NPU is reachable from here.
+QNN_HTP_DEVICE = "/dev/fastrpc-cdsp"
 _registered_plugin_eps: set[str] = set()
 
 #: Extra provider options, ``key=value,key=value``, on top of the flavour's
@@ -439,6 +444,35 @@ def fixed_shape_model(model, spec: str, provider: str, *, adapter: str = "adapte
     return model
 
 
+def plugin_device_missing(name: str, entry: ProviderEntry) -> str | None:
+    """Why ``entry`` cannot run on its accelerator from THIS container, or None.
+
+    Measured on a Ventuno Q, 2026-11-01: a container recreated without the
+    Qualcomm overlay — no ``/dev/fastrpc-cdsp`` — still got an HTP device
+    from ``get_ep_devices()``, built the session, listed QNN as effective,
+    reported ``accelerator_in_use: true`` on ``/hardware/evaluation``, and
+    ran every node on CPU: 468 ms an inference against 15 on the HTP. The
+    runtime never says. The device node does: an HTP backend without it is
+    CPU, and this says so before the session is built.
+    """
+    if name != QNN_EP:
+        return None
+    opts = entry[1] if isinstance(entry, tuple) and isinstance(entry[1], dict) else {}
+    backend = str(opts.get("backend_type", "htp")).strip().lower()
+    if backend != "htp":
+        return None   # QNN's own CPU (or GPU) backend needs no DSP
+    dev = QNN_HTP_DEVICE
+    if not os.path.exists(dev):
+        return (f"{name}(htp) requested but {dev} is not in this container — the "
+                "Qualcomm overlay (docker-compose.accel-qualcomm.yml, applied by "
+                "./start.sh up) lends it; running on CPU")
+    if not os.access(dev, os.R_OK | os.W_OK):
+        return (f"{name}(htp) requested but {dev} is not accessible from this "
+                "container — check FASTRPC_GID / DMAHEAP_GID in .env match the host's "
+                "fastrpc and dmaheap groups; running on CPU")
+    return None
+
+
 def _plugin_build_plan(ort, model, entries, sess_options=None, *, adapter: str = "adapter"):
     """Attach the plugin provider(s) in ``entries`` to the session options
     BY DEVICE and decide what to load: ``(model_or_ctx, opts, classic, tmp_dump, ctx, provider)``.
@@ -457,6 +491,10 @@ def _plugin_build_plan(ort, model, entries, sess_options=None, *, adapter: str =
     attached = []
     for e in plugins:
         name = provider_name(e)
+        missing = plugin_device_missing(name, e)
+        if missing:
+            log.warning("%s: %s", adapter, missing)
+            continue
         devices = [d for d in ort.get_ep_devices() if d.ep_name == name]
         if not devices:
             log.warning("%s: ORT plugin provider %s reports no device on this host; skipping", adapter, name)
