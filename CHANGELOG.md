@@ -9,6 +9,25 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **QNN on the HTP is refused, out loud, when the DSP node is not in the
+  container.** The plugin lists an HTP device on any Qualcomm host and
+  compiles the graph without opening it, so an adapter recreated without the
+  Qualcomm overlay (no `/dev/fastrpc-cdsp`) built a session that named QNN,
+  reported `accelerator_in_use: true`, and ran every node on CPU — 468 ms an
+  inference against 15 on the HTP, health green (Ventuno Q, 2026-11-01).
+  `plugin_device_missing` now checks the node before the plugin is attached;
+  without it the adapter runs on the classic CPU list, `/hardware/evaluation`
+  says `accelerator_in_use: false`, and the log names the missing file and
+  the overlay that lends it. SDK 1.4.x.
+- **ollamavlm: a failed auto-pull is a hard error with its cause.** A pull
+  that died ("no space left on device") left `/infer` answering
+  `model_not_pulled, transient, auto-pull is running — retry shortly` for an
+  hour. It now answers `model_pull_failed`, not transient, with Ollama's own
+  reason and the fix; `/hardware/evaluation` is `blocked` with the same text
+  until the model appears (pulled by hand, or the adapter restarted).
+
 ### Added
 
 - **InsightFace: a recognition miss carries its evidence.** The

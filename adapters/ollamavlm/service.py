@@ -91,6 +91,11 @@ class OllamaVlmService(AdapterService):
         self._probe: dict[str, Any] = {"state": "unprobed"}
         self._started_at = datetime.now(timezone.utc)
         self._pull_thread: threading.Thread | None = None
+        #: Why the last auto-pull did not produce the model, or None. A pull
+        #: that died ("no space left on device", a registry that refused)
+        #: used to leave infer() saying "auto-pull is running — retry
+        #: shortly" forever; the caller retried for an hour against a hole.
+        self._pull_error: str | None = None
 
     # ── AdapterService impl ────────────────────────────────────────
 
@@ -135,6 +140,11 @@ class OllamaVlmService(AdapterService):
             reasoning = (f"Ollama at {self._url} serves {self._model!r}. Inference "
                          "runs wherever that endpoint runs — host GPU when the "
                          "endpoint is the host machine (Metal on Apple Silicon).")
+        elif state == "model_missing" and self._pull_error:
+            verdict = HardwareVerdict.BLOCKED
+            reasoning = (f"Ollama at {self._url} is up but the pull of {self._model!r} "
+                         f"failed: {self._pull_error}. Fix the cause (disk, registry "
+                         f"access), then restart the adapter or run: ollama pull {self._model}")
         elif state == "model_missing":
             verdict = HardwareVerdict.WARN
             reasoning = (f"Ollama at {self._url} is up but {self._model!r} is not "
@@ -233,6 +243,17 @@ class OllamaVlmService(AdapterService):
             ) from exc
         if resp.status_code == 404:
             # Model not pulled (Ollama 404s /api/generate for unknown models).
+            if self._pull_error:
+                # Not transient: nothing is running that could make the
+                # next retry succeed. The caller gets the cause once,
+                # instead of "retry shortly" until somebody reads a log.
+                raise ServiceError(
+                    ErrorCategory.MODEL_ERROR, code="model_pull_failed",
+                    message=(f"Ollama could not pull {self._model!r}: {self._pull_error} "
+                             f"— fix the cause, then restart the adapter or run: "
+                             f"ollama pull {self._model}"),
+                    transient=False, http_status=503,
+                )
             hint = ("auto-pull is running — retry shortly" if self._autopull
                     else f"run: ollama pull {self._model}")
             raise ServiceError(
@@ -294,10 +315,29 @@ class OllamaVlmService(AdapterService):
             )
             if resp.status_code == 200:
                 logger.info("ollamavlm: pull of %r finished", self._model)
+                self._pull_error = None
             else:
+                self._pull_error = _pull_failure_text(resp)
                 logger.warning("ollamavlm: pull of %r failed: HTTP %s %s",
-                               self._model, resp.status_code, resp.text[:200])
-        except Exception:
+                               self._model, resp.status_code, self._pull_error)
+        except Exception as exc:
+            self._pull_error = f"{type(exc).__name__}: {exc}"[:300]
             logger.exception("ollamavlm: pull of %r failed", self._model)
         finally:
             self._refresh_probe(timeout=3.0)
+            if self._probe.get("state") == "ok":
+                self._pull_error = None   # it is there after all (pulled by hand)
+
+
+def _pull_failure_text(resp: httpx.Response) -> str:
+    """Ollama's own words for a failed pull — ``{"error": "write ...: no
+    space left on device"}`` — with the long blob path left out."""
+    try:
+        err = str(resp.json().get("error") or "")
+    except Exception:  # noqa: BLE001 — not JSON
+        err = ""
+    err = err or resp.text
+    # "write /usr/share/ollama/.ollama/models/blobs/sha256-...-partial: no space left on device"
+    if ": " in err and err.startswith("write "):
+        err = err.rsplit(": ", 1)[-1]
+    return f"HTTP {resp.status_code}: {err[:200]}"

@@ -18,6 +18,48 @@ from opennvr_adapter_sdk.providers import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _htp_device_present(monkeypatch, tmp_path):
+    """The HTP backend now needs the DSP node the host lends the container;
+    the tests that attach QNN run as if it were lent (a plain file stands in
+    for /dev/fastrpc-cdsp). The one test about its absence points it away."""
+    dev = tmp_path / "fastrpc-cdsp"
+    dev.write_bytes(b"")
+    monkeypatch.setattr("opennvr_adapter_sdk.providers.QNN_HTP_DEVICE", str(dev))
+
+
+def test_qnn_htp_without_the_dsp_node_is_cpu_and_says_so(monkeypatch, tmp_path, caplog):
+    """The field failure: a container recreated without the Qualcomm overlay.
+    The plugin still lists an HTP device and would build a session that names
+    QNN while every node runs on CPU — 468 ms an inference against 15 on the
+    HTP, with the health check green. Without /dev/fastrpc-cdsp the plugin
+    is not attached at all: the classic CPU list goes to ORT, nothing is
+    compiled, and the log says which file is missing and which overlay
+    lends it."""
+    import logging
+    from opennvr_adapter_sdk.providers import plugin_device_missing
+    _reset_plugins(monkeypatch)
+    fake, calls = _fake_ort(monkeypatch)
+    monkeypatch.setattr("opennvr_adapter_sdk.providers.QNN_HTP_DEVICE", str(tmp_path / "absent"))
+    model = tmp_path / "det.onnx"; model.write_bytes(b"m")
+    provs = session_providers("QNNExecutionProvider:htp")
+    with caplog.at_level(logging.WARNING):
+        sess = fake.InferenceSession(str(model), providers=provs)
+    assert calls["providers"] == ["CPUExecutionProvider"]
+    assert calls["opts"].added == []
+    assert sess._opennvr_plugin_compiled is None
+    assert not (tmp_path / ".opennvr-accel").exists()
+    assert "not in this container" in caplog.text and "accel-qualcomm" in caplog.text
+    # QNN's own CPU backend needs no DSP; a present-but-unreadable node is named too
+    assert plugin_device_missing("QNNExecutionProvider", ("QNNExecutionProvider", {"backend_type": "cpu"})) is None
+    assert plugin_device_missing("CPUExecutionProvider", "CPUExecutionProvider") is None
+    locked = tmp_path / "locked"; locked.write_bytes(b""); locked.chmod(0)
+    monkeypatch.setattr("opennvr_adapter_sdk.providers.QNN_HTP_DEVICE", str(locked))
+    import os
+    if os.geteuid() != 0:
+        assert "not accessible" in (plugin_device_missing("QNNExecutionProvider", provs[0]) or "")
+
+
 def test_parse_shorthand_and_multi_device_continuation():
     assert parse_provider_specs("OpenVINOExecutionProvider:NPU,CPUExecutionProvider") == [
         ("OpenVINOExecutionProvider", "NPU"), ("CPUExecutionProvider", None)]

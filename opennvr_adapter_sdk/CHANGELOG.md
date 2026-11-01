@@ -7,6 +7,18 @@ the SDK uses semantic versioning aligned with the AI Adapter Contract major vers
 
 ## [Unreleased]
 
+### Fixed
+
+- **`plugin_device_missing` / `QNN_HTP_DEVICE`.** The QNN HTP backend is
+  attached only when `/dev/fastrpc-cdsp` is present and accessible in the
+  container. The plugin lists an HTP device on any Qualcomm host and compiles
+  without opening it, so a container the overlay never lent the node built a
+  session that named QNN, reported the accelerator in use, and ran on CPU
+  (measured 468 ms against 15 ms). Now the plugin is skipped, the session is
+  the classic CPU list, `effective_providers` reports `accelerator_in_use:
+  false`, and one warning names the file and the overlay. QNN's own CPU
+  backend needs no node and is unaffected.
+
 ## [1.4.0] — 2026-10-31
 
 ### Added
