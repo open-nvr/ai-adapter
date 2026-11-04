@@ -150,6 +150,7 @@ class ConformanceRunner:
         "face_detection": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
         "face_recognition": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
         "face_embedding": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
+        "face_identify": __import__("base64").b64decode(_SAMPLE_1x1_BLACK_JPEG_B64),
         # Pose — a 1x1 black frame contains no person, so the adapter
         # answers with an empty ``persons`` list. That is the point:
         # the check is on the wire shape and the §6 roundtrip, not on

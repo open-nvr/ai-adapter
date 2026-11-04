@@ -9,13 +9,73 @@ Smart Doorbell example.
 ## What it does
 
 POST a JPEG / PNG image with a `task` parameter, get a face result back.
-Three tasks supported:
+Four tasks supported:
 
 | `task` | Result |
 |---|---|
 | `face_detection` (default) | List of detected faces — bbox, confidence, optional landmarks / age / gender |
 | `face_recognition` | Detect the highest-confidence face and look it up in the on-disk face DB. Returns either a match (person_id / name / category / similarity) or `recognized: false` |
 | `face_embedding` | Return the raw 512-d normalised embedding for the highest-confidence face. Use this if you want to do your own matching outside the adapter |
+| `face_identify` | Look up **every** face in the frame (a classroom, a shop floor). One entry per face: bbox, confidence, recognized, person_id / name / category, similarity, second_similarity |
+
+### `face_identify`
+
+Params (all optional): `threshold` (as for `face_recognition`), `min_face_px`
+(drop faces whose shorter bbox side is smaller; default 0), `max_faces` (keep
+the most confident N, default 100, at most 500), `category` (match only people
+in that category).
+
+```json
+{
+  "result": {
+    "task": "face_identify",
+    "faces": [
+      {"bbox": [812, 300, 870, 372], "confidence": 0.91, "recognized": true,
+       "person_id": "7f0c…", "name": "Asha Rao", "category": "attendance",
+       "similarity": 0.63, "second_similarity": 0.21},
+      {"bbox": [140, 410, 182, 462], "confidence": 0.74, "recognized": false,
+       "person_id": null, "name": null, "category": null,
+       "similarity": 0.38, "second_similarity": 0.30}
+    ],
+    "face_count": 2, "recognized_count": 1, "detected_count": 3,
+    "dropped": {"too_small": 1, "over_limit": 0},
+    "frame": {"w": 1920, "h": 1080},
+    "threshold": 0.5, "registered_faces": 140
+  }
+}
+```
+
+Boxes are pixels in the posted frame; `frame` lets the caller normalise them.
+On a miss, `similarity` is the nearest person's score but the adapter does not
+say who: a near miss is not an identification. `second_similarity` is the
+runner-up person's score, so a caller can demand a margin over the next-best
+person.
+
+The whole DB is matched in one matrix product per frame, so the per-face cost is
+the ArcFace embedding, not the lookup.
+
+What a crowded frame costs on CPU (1080p, 54 faces, det size 640, measured
+2026-11-04 on an 8-thread laptop CPU of 2013 vintage, in this image):
+
+| Pack | Detector | Recogniser, per face | Whole frame |
+|---|---|---|---|
+| `buffalo_l` (default) | ~300 ms | ~170 ms | ~10 s |
+| `buffalo_s` | ~35 ms | ~17 ms | ~1 s |
+
+Matching those 54 faces against 2,000 people × 10 samples took 26 ms. The cost
+grows with the number of faces, not the size of the DB. Plan
+the call rate from the faces in the room: a camera on 50 faces every 150 s is
+~7 % of one `buffalo_l` instance on that CPU. `OPENNVR_INSIGHTFACE_MODEL=buffalo_s`
+is ten times cheaper but its detector and recogniser are both much weaker
+(InsightFace's model zoo ranks it far below `buffalo_l`); prefer more instances
+or a longer interval over the smaller pack.
+
+### Detector size
+
+`OPENNVR_INSIGHTFACE_DET_SIZE` (default `640`, a multiple of 32 in 160–2048)
+sets the detector's input size. At 640 a 1080p frame is scaled down about 3×,
+so small faces at the back of a room are missed; `1280` finds them at roughly
+4× the detection cost. A bad value fails the load, with the reason on `/health`.
 
 ```bash
 # Detection — who's at the door?

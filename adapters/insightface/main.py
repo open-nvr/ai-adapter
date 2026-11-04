@@ -80,6 +80,7 @@ _adapter_app = AdapterApp(
         "face_detection",
         "face_recognition",
         "face_embedding",
+        "face_identify",
     ],
     body_shape=BodyShape.IMAGE,
     max_body_bytes=MAX_IMAGE_BYTES,

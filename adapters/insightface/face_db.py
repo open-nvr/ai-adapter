@@ -83,6 +83,9 @@ class FaceDB:
         self._records: dict[str, FaceRecord] = {}
         self._storage_path = storage_path
         self._lock = threading.RLock()
+        # match_many's sample matrix, per category filter; every
+        # mutation goes through _save(), which drops it.
+        self._gallery_cache: dict[str | None, Any] = {}
         if storage_path:
             self._load()
 
@@ -293,6 +296,98 @@ class FaceDB:
             for sim, record in hits
         ]
 
+    def match_many(
+        self,
+        query_embeddings: list[Any],
+        *,
+        threshold: float = 0.5,
+        category: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """``best_match`` for every face in a frame, in one matrix product.
+
+        A classroom frame holds dozens of faces and the gallery hundreds
+        of people; the per-record Python loop of ``best_match`` would be
+        faces × samples × 512 multiplications in the interpreter. Here it
+        is one ``(faces, 512) @ (512, samples)`` product, reduced to the
+        best sample per person.
+
+        One dict per query, in order:
+
+        * ``match`` — ``{person_id, name, category, similarity}`` of the
+          best person at or above ``threshold``, else ``None``;
+        * ``nearest_similarity`` — the best person's score whether or not
+          it cleared the threshold (``None`` when nobody is enrolled), so a
+          miss still says how near it came, as ``face_recognition`` does;
+        * ``second_similarity`` — the runner-up person's score. A match
+          barely ahead of the next person is a weak one; the caller can
+          require a margin.
+
+        Ties go to the smaller ``person_id``, as in ``best_match``.
+        """
+        import numpy as np
+
+        if not query_embeddings:
+            return []
+        queries = np.asarray(
+            [_ensure_list(q) for q in query_embeddings], dtype=np.float32)
+        norms = np.linalg.norm(queries, axis=1, keepdims=True)
+        norms[norms < 1e-12] = 1.0
+        queries = queries / norms
+
+        with self._lock:
+            gallery = self._gallery(category)
+        if gallery is None:
+            return [{"match": None, "nearest_similarity": None,
+                     "second_similarity": None} for _ in range(len(queries))]
+        matrix, starts, people = gallery
+
+        # (faces, samples) → (faces, people): best sample per person.
+        per_person = np.maximum.reduceat(queries @ matrix.T, starts, axis=1)
+        out: list[dict[str, Any]] = []
+        for row in per_person:
+            # Stable sort on the negated scores keeps people (already in
+            # person_id order) in that order on a tie.
+            order = np.argsort(-row, kind="stable")
+            best = int(order[0])
+            best_sim = round(float(row[best]), 4)
+            second = round(float(row[order[1]]), 4) if len(order) > 1 else None
+            match = None
+            if best_sim >= threshold:
+                pid, name, cat = people[best]
+                match = {"person_id": pid, "name": name, "category": cat,
+                         "similarity": best_sim}
+            out.append({"match": match, "nearest_similarity": best_sim,
+                        "second_similarity": second})
+        return out
+
+    def _gallery(self, category: str | None):
+        """``(matrix, starts, people)`` for the records in ``category``
+        (all when None), or None when there are none. ``matrix`` stacks
+        every sample, grouped by person in ``person_id`` order; ``starts``
+        is where each person's rows begin. Caller holds the lock."""
+        if category in self._gallery_cache:
+            return self._gallery_cache[category]
+        import numpy as np
+
+        records = sorted(
+            (r for r in self._records.values()
+             if category is None or r.category == category),
+            key=lambda r: r.person_id)
+        if not records:
+            self._gallery_cache[category] = None
+            return None
+        rows: list[list[float]] = []
+        starts: list[int] = []
+        people: list[tuple[str, str, str]] = []
+        for record in records:
+            starts.append(len(rows))
+            rows.extend(record.embeddings)
+            people.append((record.person_id, record.name, record.category))
+        gallery = (np.asarray(rows, dtype=np.float32),
+                   np.asarray(starts, dtype=np.intp), people)
+        self._gallery_cache[category] = gallery
+        return gallery
+
     # ── Persistence ────────────────────────────────────────────────
 
     def _load(self) -> None:
@@ -333,6 +428,7 @@ class FaceDB:
                 logger.exception("face DB: skipping malformed entry %r", entry)
 
     def _save(self) -> None:
+        self._gallery_cache.clear()
         if not self._storage_path:
             return
         path = Path(self._storage_path)
