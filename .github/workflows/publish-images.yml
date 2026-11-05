@@ -445,6 +445,106 @@ jobs:
           docker logs "$CID" >&2 || true
           exit 1
 
+  # Gemma on the Hexagon NPU through LiteRT-LM: an arm64-only image with one
+  # flavour, published under the -qualcomm suffix like the ONNX adapters so
+  # open-nvr's CAPTION_ADAPTER_TAG=<tag>-qualcomm picks it up. No QNN plugin
+  # wheel here (the smoke above would not apply): the PR smoke proves the
+  # Python package and the bundled runtime are present and that the adapter
+  # boots and answers /health honestly without a DSP (blocked, not crashed).
+  build-and-push-litertlm:
+    name: litertlm-adapter (qualcomm)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU (arm64 build + smoke)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/open-nvr/litertlm-adapter
+          flavor: |
+            suffix=-qualcomm,onlatest=true
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=OpenNVR litertlm-adapter (qualcomm)
+            org.opencontainers.image.description=OpenNVR AI Adapter Contract v1 — Gemma captions/VQA on the Qualcomm Hexagon NPU through LiteRT-LM, port 9020
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+            org.opencontainers.image.vendor=OpenNVR
+            org.opencontainers.image.documentation=https://github.com/open-nvr/ai-adapter/blob/main/adapters/litertlm/README.md
+      - name: Build${{ github.event_name != 'pull_request' && ' + push' || ' (no push)' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: adapters/litertlm/Dockerfile
+          platforms: linux/arm64
+          build-args: |
+            ACCEL=qualcomm
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ github.event_name == 'pull_request' && 'ghcr.io/open-nvr/litertlm-adapter:local-smoke-qualcomm' || '' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=litertlm-adapter-qualcomm
+          cache-to: type=gha,scope=litertlm-adapter-qualcomm,mode=max
+      - name: Smoke-test the built image (PR only)
+        if: github.event_name == 'pull_request'
+        env:
+          ADAPTER_IMAGE: ghcr.io/open-nvr/litertlm-adapter:local-smoke-qualcomm
+          ADAPTER_PORT: "9020"
+        run: |
+          set -euo pipefail
+          echo "== litert-lm-api and the NPU runtime bundle are present =="
+          docker run --rm --platform linux/arm64 --entrypoint python "$ADAPTER_IMAGE" -c '
+          import os, importlib.metadata as m
+          print("litert-lm-api", m.version("litert-lm-api"))
+          for p in ("/opt/npu/litertlm/libLiteRtLm.so", "/opt/npu/litertlm/libLiteRt.so",
+                    "/opt/npu/dispatch/libLiteRtDispatch_Qualcomm.so", "/opt/npu/dispatch/libatomic.so.1"):
+              assert os.path.exists(p), p
+          import litert_lm
+          '
+          echo "== adapter boots without a DSP: /health 200, hardware blocked with the reason =="
+          CID=$(docker run -d --platform linux/arm64 \
+            -e OPENNVR_ADAPTER_TOKEN=smoke-token \
+            -p 127.0.0.1:${ADAPTER_PORT}:${ADAPTER_PORT} \
+            "$ADAPTER_IMAGE")
+          trap "docker rm -f $CID >/dev/null 2>&1 || true" EXIT
+          for i in $(seq 1 60); do
+            if curl -sf "http://127.0.0.1:${ADAPTER_PORT}/health" >/dev/null; then
+              echo "Adapter healthy after ${i}x5s."
+              EV=$(curl -sf -H "Authorization: Bearer smoke-token" "http://127.0.0.1:${ADAPTER_PORT}/hardware/evaluation" || true)
+              echo "$EV" | head -c 600; echo
+              echo "$EV" | grep -q '"blocked"' || { echo "::error::expected a blocked verdict without /dev/fastrpc-cdsp" >&2; exit 1; }
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Adapter $ADAPTER_IMAGE never reached /health within 5 minutes." >&2
+          docker logs "$CID" >&2 || true
+          exit 1
+
   # OpenNVR Accelerate — the Qualcomm flavour of the ONNX adapters: same
   # Dockerfile, ACCEL=qualcomm (plain onnxruntime + the onnxruntime-qnn
   # user-space, scripts/install-intel-runtime.sh), every tag with an -intel
