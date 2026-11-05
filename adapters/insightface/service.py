@@ -341,10 +341,16 @@ class InsightFaceService(AdapterService):
                 http_status=400,
             )
 
+        # face_identify with match=false: where the faces are and how they
+        # are turned, nobody looked up. Only the detector runs (no
+        # embedding, no age/gender), for a page that checks a webcam frame
+        # every second while somebody enrols.
+        match = task != "face_identify" or _truthy(payload.get("match", True))
         started = time.monotonic()
         frame_size: dict[str, int] = {}
         try:
-            faces = _run_insightface(self._face_app, image_bytes, frame_size)
+            faces = _run_insightface(self._face_app, image_bytes, frame_size,
+                                     detect_only=not match)
         except _ImageDecodeError as exc:
             raise ServiceError(
                 ErrorCategory.TRANSPORT_ERROR,
@@ -377,7 +383,7 @@ class InsightFaceService(AdapterService):
         elif task == "face_identify":
             threshold = self._resolve_threshold(payload, self._recognition_threshold)
             result = _build_identify_result(
-                faces, self._face_db, threshold,
+                faces, self._face_db if match else None, threshold,
                 frame=frame_size,
                 min_face_px=self._resolve_int(payload, "min_face_px", 0, 0, 4096),
                 max_faces=self._resolve_int(
@@ -508,8 +514,16 @@ class _ImageDecodeError(Exception):
     """Raised when the input bytes are not a decodable image."""
 
 
+def _truthy(value: Any) -> bool:
+    """A JSON flag that may also arrive as a form string."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no", "off", "")
+    return bool(value)
+
+
 def _run_insightface(
     face_app: Any, image_bytes: bytes, frame_size: dict[str, int] | None = None,
+    *, detect_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Decode JPEG/PNG bytes, run InsightFace, return one dict per
     detected face with bbox / confidence / embedding / optional
@@ -530,6 +544,20 @@ def _run_insightface(
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     if frame_size is not None:
         frame_size["h"], frame_size["w"] = int(img.shape[0]), int(img.shape[1])
+
+    det_model = getattr(face_app, "det_model", None)
+    if detect_only and det_model is not None:
+        # FaceAnalysis.get() runs this first, then every other model on
+        # each face; stopping here skips the embeddings.
+        bboxes, kpss = det_model.detect(img_rgb, max_num=0, metric="default")
+        out: list[dict[str, Any]] = []
+        for i in range(bboxes.shape[0]):
+            entry = {"bbox": [int(v) for v in bboxes[i, :4].tolist()],
+                     "confidence": round(float(bboxes[i, 4]), 4)}
+            if kpss is not None:
+                entry["landmarks"] = [[int(x), int(y)] for x, y in kpss[i].tolist()]
+            out.append(entry)
+        return out
 
     raw_faces = face_app.get(img_rgb)
 
@@ -647,7 +675,7 @@ def _build_recognition_result(
 
 def _build_identify_result(
     faces: list[dict[str, Any]],
-    face_db: FaceDB,
+    face_db: FaceDB | None,
     threshold: float,
     *,
     frame: dict[str, int],
@@ -666,6 +694,8 @@ def _build_identify_result(
     who that was, for the same reason as ``face_recognition``: a near
     miss is not an identification. ``second_similarity`` is the
     runner-up's score on a hit or a miss — the caller's margin check.
+
+    ``face_db`` None (``match=false``): the same faces, nobody looked up.
     """
     detected = len(faces)
     sized = [
@@ -676,8 +706,8 @@ def _build_identify_result(
     sized.sort(key=lambda f: f["confidence"], reverse=True)
     kept, over_limit = sized[:max_faces], max(0, len(sized) - max_faces)
 
-    with_emb = [f for f in kept if f.get("embedding") is not None]
-    lookups = iter(face_db.match_many(
+    with_emb = [f for f in kept if f.get("embedding") is not None] if face_db is not None else []
+    lookups = iter([] if face_db is None else face_db.match_many(
         [f["embedding"] for f in with_emb], threshold=threshold, category=category))
     by_face = {id(f): next(lookups) for f in with_emb}
 
@@ -688,6 +718,9 @@ def _build_identify_result(
         entries.append({
             "bbox": face["bbox"],
             "confidence": face["confidence"],
+            # The detector's five points (eyes, nose, mouth corners): how
+            # the head is turned, for a page guiding an enrolment.
+            "landmarks": face.get("landmarks"),
             "recognized": match is not None,
             "person_id": match["person_id"] if match else None,
             "name": match["name"] if match else None,
@@ -705,7 +738,7 @@ def _build_identify_result(
         "dropped": {"too_small": too_small, "over_limit": over_limit},
         "frame": {"w": frame.get("w"), "h": frame.get("h")},
         "threshold": threshold,
-        "registered_faces": len(face_db),
+        "registered_faces": len(face_db) if face_db is not None else None,
     }
 
 

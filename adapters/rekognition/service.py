@@ -109,6 +109,10 @@ class RekognitionService(AdapterService):
             self._client.create_collection(CollectionId=self._collection)
 
     def _rebuild_index(self) -> None:
+        """ListFaces is the truth about which faces exist, but not their
+        order, and callers address a sample by position (oldest first).
+        The saved index keeps that order; faces it does not know are
+        appended, faces gone from the collection are dropped."""
         index: dict[str, list[str]] = {}
         token = None
         while True:
@@ -123,9 +127,24 @@ class RekognitionService(AdapterService):
             token = page.get("NextToken")
             if not token:
                 break
+        saved = self._read_saved_index()
+        for pid, ids in index.items():
+            known = [i for i in saved.get(pid, []) if i in set(ids)]
+            index[pid] = known + [i for i in ids if i not in set(known)]
         with self._lock:
             self._index = index
         self._save_index()
+
+    def _read_saved_index(self) -> dict[str, list[str]]:
+        if not self._index_path:
+            return {}
+        try:
+            data = json.loads(Path(self._index_path).read_text())
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): [str(i) for i in v] for k, v in data.items() if isinstance(v, list)}
 
     def _save_index(self) -> None:
         if not self._index_path:
@@ -177,9 +196,16 @@ class RekognitionService(AdapterService):
         threshold = _bounded_float(payload.get("threshold"), 0.5, 0.0, 1.0, "threshold")
         min_px = _bounded_int(payload.get("min_face_px"), 0, 0, 4096, "min_face_px")
         max_faces = _bounded_int(payload.get("max_faces"), DEFAULT_MAX_FACES, 1, _MAX_FACES_LIMIT, "max_faces")
+        # match=false: where the faces are, nobody looked up. One paid
+        # DetectFaces call instead of one more SearchFacesByImage per face,
+        # for a page that checks a webcam frame every second.
+        raw_match = payload.get("match", True)
+        match = (raw_match.strip().lower() not in ("false", "0", "no", "off", "")
+                 if isinstance(raw_match, str) else bool(raw_match))
         started = time.monotonic()
         try:
-            result = self.identify(image, threshold=threshold, min_face_px=min_px, max_faces=max_faces)
+            result = self.identify(image, threshold=threshold, min_face_px=min_px,
+                                   max_faces=max_faces, match=match)
         except ServiceError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -193,7 +219,7 @@ class RekognitionService(AdapterService):
     # ── face_identify ──────────────────────────────────────────────
 
     def identify(self, image: bytes, *, threshold: float, min_face_px: int = 0,
-                 max_faces: int = DEFAULT_MAX_FACES) -> dict[str, Any]:
+                 max_faces: int = DEFAULT_MAX_FACES, match: bool = True) -> dict[str, Any]:
         from PIL import Image
 
         try:
@@ -212,15 +238,21 @@ class RekognitionService(AdapterService):
             x2 = min(w, int(round((b.get("Left", 0) + b.get("Width", 0)) * w)))
             y2 = min(h, int(round((b.get("Top", 0) + b.get("Height", 0)) * h)))
             if x2 > x1 and y2 > y1:
-                boxes.append(([x1, y1, x2, y2], round(float(d.get("Confidence", 0)) / 100, 4)))
+                boxes.append(([x1, y1, x2, y2], round(float(d.get("Confidence", 0)) / 100, 4),
+                              _landmarks(d, w, h)))
         detected = len(boxes)
-        sized = [bc for bc in boxes if min(bc[0][2] - bc[0][0], bc[0][3] - bc[0][1]) >= min_face_px]
+        sized = [b for b in boxes if min(b[0][2] - b[0][0], b[0][3] - b[0][1]) >= min_face_px]
         sized.sort(key=lambda bc: bc[1], reverse=True)
         kept = sized[:max_faces]
         floor = max(self._min_sim, threshold * 100)
 
         faces = []
-        for bbox, conf in kept:
+        for bbox, conf, points in kept:
+            if not match:
+                faces.append({"bbox": bbox, "confidence": conf, "landmarks": points,
+                              "recognized": False, "person_id": None, "name": None,
+                              "category": None, "similarity": None, "second_similarity": None})
+                continue
             crop = io.BytesIO()
             pic.crop(tuple(_pad(bbox, w, h))).save(crop, format="JPEG", quality=92)
             try:
@@ -241,7 +273,7 @@ class RekognitionService(AdapterService):
             ranked = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))
             top = ranked[0] if ranked else None
             faces.append({
-                "bbox": bbox, "confidence": conf, "recognized": top is not None,
+                "bbox": bbox, "confidence": conf, "landmarks": points, "recognized": top is not None,
                 "person_id": top[0] if top else None, "name": None,
                 "category": "attendance" if top else None,
                 "similarity": round(top[1], 4) if top else None,
@@ -288,9 +320,44 @@ class RekognitionService(AdapterService):
         self._save_index()
         return True
 
+    def forget_sample(self, person_id: str, index: int) -> int:
+        """Delete one sample (0 = the oldest); returns how many are left.
+        The last one cannot go this way (ValueError), as on InsightFace:
+        forgetting the person is how all of them go. IndexError for no
+        such sample, KeyError for no such person."""
+        with self._lock:
+            ids = list(self._index.get(person_id) or [])
+        if not ids:
+            raise KeyError(person_id)
+        if not 0 <= index < len(ids):
+            raise IndexError(index)
+        if len(ids) == 1:
+            raise ValueError("cannot remove the last sample; delete the person instead")
+        self._client.delete_faces(CollectionId=self._collection, FaceIds=[ids[index]])
+        with self._lock:
+            current = self._index.get(person_id) or []
+            if ids[index] in current:
+                current.remove(ids[index])
+            left = len(current)
+        self._save_index()
+        return left
+
     def people(self) -> dict[str, int]:
         with self._lock:
             return {pid: len(ids) for pid, ids in self._index.items()}
+
+
+#: Rekognition's landmark names in InsightFace's five-point order (eyes,
+#: nose, mouth corners), so a page reads both adapters the same way.
+_FIVE_POINTS = ("eyeLeft", "eyeRight", "nose", "mouthLeft", "mouthRight")
+
+
+def _landmarks(detail: dict[str, Any], w: int, h: int) -> list[list[int]] | None:
+    points = {p.get("Type"): p for p in detail.get("Landmarks") or []}
+    if not all(name in points for name in _FIVE_POINTS):
+        return None
+    return [[int(round(points[n].get("X", 0) * w)), int(round(points[n].get("Y", 0) * h))]
+            for n in _FIVE_POINTS]
 
 
 def _pad(bbox: list[int], w: int, h: int, frac: float = 0.15) -> list[int]:

@@ -71,6 +71,9 @@ def test_identify_looks_up_every_face_not_just_the_best(
     assert result["faces"][0]["similarity"] >= 0.99
     assert result["frame"] == {"w": 320, "h": 240}
     assert result["registered_faces"] == 2
+    # The five points, so an enrolling page can tell how the head is turned.
+    assert result["faces"][0]["landmarks"] == [
+        [110, 130], [140, 130], [125, 160], [115, 180], [135, 180]]
 
 
 def test_identify_miss_says_how_near_but_not_who(
@@ -324,3 +327,35 @@ def test_bad_det_size_fails_the_load_with_the_reason(
     svc.load()
     assert not svc.is_ready()
     assert "OPENNVR_INSIGHTFACE_DET_SIZE" in svc._load_error
+
+
+def test_identify_without_match_runs_only_the_detector(
+    insightface_environment, sample_jpeg, monkeypatch
+):
+    """A webcam frame checked every second while somebody enrols needs the
+    boxes and the five points, not embeddings: match=false skips them."""
+    import numpy as np
+
+    env = insightface_environment
+    svc = _build_service(env)
+    svc.load()
+    svc.face_db.register(person_id="alice", name="Alice", embedding=env["embedding_alice"])
+
+    def no_full_pass(img):
+        raise AssertionError("the full model ran")
+
+    class _Detector:
+        def detect(self, img, max_num=0, metric="default"):
+            return (np.array([[10.0, 10.0, 60.0, 70.0, 0.95]]),
+                    np.array([[[20, 30], [40, 30], [30, 45], [22, 55], [38, 55]]]))
+
+    monkeypatch.setattr(svc._face_app, "get", no_full_pass)
+    monkeypatch.setattr(svc._face_app, "det_model", _Detector(), raising=False)
+    result = _identify(svc, sample_jpeg, match=False)
+    [face] = result["faces"]
+    assert face["bbox"] == [10, 10, 60, 70] and face["confidence"] == 0.95
+    assert face["landmarks"] == [[20, 30], [40, 30], [30, 45], [22, 55], [38, 55]]
+    assert face["recognized"] is False and face["person_id"] is None
+    assert face["similarity"] is None and result["registered_faces"] is None
+    # A form field arrives as a string.
+    assert _identify(svc, sample_jpeg, match="false")["faces"][0]["person_id"] is None

@@ -199,5 +199,64 @@ def test_routes_and_declared_egress(monkeypatch, tmp_path):
                         data={"person_id": "u-1"})
         assert r.status_code == 422
         assert client.get("/faces").json()["faces"] == [{"person_id": "u-1", "samples": 1}]
+        # The only photo cannot go one by one; a second one can.
+        assert client.delete("/faces/u-1/samples/0").status_code == 409
+        fake.faces_in = [_face(0.1, 0.1)]
+        client.post("/faces/register", files={"frame": ("b.jpg", _jpeg(), "image/jpeg")},
+                    data={"person_id": "u-1"})
+        r = client.delete("/faces/u-1/samples/0")
+        assert r.status_code == 200 and r.json()["face"]["samples"] == 1
+        assert client.delete("/faces/u-1/samples/7").status_code == 404
+        assert client.delete("/faces/nobody/samples/0").status_code == 404
         assert client.delete("/faces/u-1").status_code == 200
         assert client.delete("/faces/u-1").status_code == 404
+
+
+def _with_points(face):
+    face["Landmarks"] = [{"Type": t, "X": x, "Y": 0.2} for t, x in
+                         (("eyeLeft", 0.12), ("eyeRight", 0.18), ("nose", 0.15),
+                          ("mouthLeft", 0.13), ("mouthRight", 0.17))]
+    return face
+
+
+def test_without_match_only_detect_faces_is_paid_for(svc):
+    s, fake = svc
+    fake.faces_in = [_with_points(_face(0.1, 0.1))]
+    r = s.infer({"__file__": _jpeg(), "task": "face_identify", "match": "false"}).result
+    assert fake.calls == ["detect"]
+    [face] = r["faces"]
+    assert face["person_id"] is None and face["recognized"] is False
+    # Pixels, in InsightFace's five-point order.
+    assert face["landmarks"] == [[48, 60], [72, 60], [60, 60], [52, 60], [68, 60]]
+
+
+def test_one_photo_can_be_forgotten_but_not_the_last(svc):
+    s, fake = svc
+    fake.faces_in = [_face(0.1, 0.1)]
+    for _ in range(3):
+        s.register("asha", _jpeg())
+    first, second, third = s._index["asha"]
+    assert s.forget_sample("asha", 1) == 2
+    assert s._index["asha"] == [first, third]
+    assert [f["FaceId"] for f in fake.collections["att"]] == [first, third]
+    with pytest.raises(IndexError):
+        s.forget_sample("asha", 5)
+    s.forget_sample("asha", 0)
+    with pytest.raises(ValueError):
+        s.forget_sample("asha", 0)
+    with pytest.raises(KeyError):
+        s.forget_sample("nobody", 0)
+
+
+def test_a_restart_keeps_the_order_photos_are_addressed_by(svc, tmp_path):
+    from adapters.rekognition.service import RekognitionService
+
+    s, fake = svc
+    fake.faces_in = [_face(0.1, 0.1)]
+    for _ in range(3):
+        s.register("asha", _jpeg())
+    order = list(s._index["asha"])
+    fake.collections["att"].reverse()           # ListFaces promises no order
+    again = RekognitionService(client=fake, collection="att", index_path=str(tmp_path / "idx.json"))
+    again.load()
+    assert again._index["asha"] == order

@@ -17,7 +17,7 @@ gallery routes, so OpenNVR attendance can use either.
 
 | `task` | Result |
 |---|---|
-| `face_identify` | Every face in the frame looked up in the collection. Same shape as InsightFace's `face_identify` (bbox, confidence, recognized, person_id, similarity, second_similarity, `frame`, `dropped`) |
+| `face_identify` | Every face in the frame looked up in the collection. Same shape as InsightFace's `face_identify` (bbox, confidence, landmarks, recognized, person_id, similarity, second_similarity, `frame`, `dropped`). `match: false` is `DetectFaces` alone: one billed call, nobody looked up. |
 
 The calls behind one look are one `DetectFaces`, then one
 `SearchFacesByImage` per face. A 40-face classroom is therefore **41
@@ -35,6 +35,7 @@ whatever threshold the caller sends.
 |---|---|
 | `POST /faces/register` | multipart `frame`, `person_id`. Indexes one photo; refuses 0 or several faces (422). Always appends. |
 | `DELETE /faces/{person_id}` | Deletes every face of the person; 404 if there were none |
+| `DELETE /faces/{person_id}/samples/{index}` | Deletes one photo (0 = the oldest, in the order they were enrolled, kept across restarts by the index); the last one is a 409 |
 | `GET /faces` | `person_id` and sample count per person |
 
 A local index (`OPENNVR_REKOGNITION_INDEX`, a volume) maps each person to

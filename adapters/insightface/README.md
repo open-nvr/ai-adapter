@@ -23,7 +23,10 @@ Four tasks supported:
 Params (all optional): `threshold` (as for `face_recognition`), `min_face_px`
 (drop faces whose shorter bbox side is smaller; default 0), `max_faces` (keep
 the most confident N, default 100, at most 500), `category` (match only people
-in that category).
+in that category), `match` (default true; `false` runs only the detector and
+looks nobody up, for a page checking webcam frames while somebody enrols).
+Each face also carries `landmarks`: the detector's five points (eyes, nose,
+mouth corners), which say how the head is turned.
 
 ```json
 {

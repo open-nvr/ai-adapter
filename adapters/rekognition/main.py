@@ -111,6 +111,21 @@ async def delete_face(person_id: str) -> dict[str, Any]:
     return {"ok": True, "person_id": person_id}
 
 
+@app.delete("/faces/{person_id}/samples/{index}")
+async def delete_face_sample(person_id: str, index: int) -> dict[str, Any]:
+    """Drop one photo of a person (0 = the oldest), as on InsightFace. The
+    last one cannot be removed (409): DELETE /faces/{person_id} is that."""
+    try:
+        left = await asyncio.to_thread(_service().forget_sample, person_id, index)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"no registered face with person_id={person_id!r}") from None
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"no sample {index} on {person_id!r}") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return {"ok": True, "face": {"person_id": person_id, "samples": left}}
+
+
 @app.get("/faces")
 async def list_faces() -> dict[str, Any]:
     people = _service().people()
