@@ -9,6 +9,25 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **litertlm: Gemma captions on the Qualcomm Hexagon NPU.** A new
+  caption/VQA adapter (`adapters/litertlm`, image `litertlm-adapter`, port
+  9020, arm64, published as `…-qualcomm`) runs Gemma 4 E2B compiled for the
+  QCS8275 through Google's LiteRT-LM, with the image encoder on the NPU
+  too. Same tasks and result keys as moondream/ollamavlm (`scene_caption`
+  → `caption`, `visual_qa` → `answer`), so it drops into the
+  `caption-adapter` slot. Measured on a Ventuno Q (2026-11-05): a 124 KB
+  evidence photo in 2.5 s warm / 4.3 s cold, ~1.2 GiB resident, the
+  detector sharing the NPU slowed from 38 to 44 ms per inference; the CPU
+  captioner the box ran before (qwen3-vl 2B via Ollama) took 60–90 s per
+  photo and outran every deadline. The 2.7 GB model is downloaded once into
+  `/models` when `OPENNVR_LITERTLM_MODEL_URL` is set; Qualcomm's six AI
+  Runtime libraries are fetched once at first start by range requests
+  (pinned SHA-256; not redistributed in the image). Photos are downscaled
+  to 768 px before the model. Without `/dev/fastrpc-cdsp` the adapter
+  stays up and `/hardware/evaluation` is `blocked` with the reason.
+
 ### Fixed
 
 - **QNN on the HTP is refused, out loud, when the DSP node is not in the
