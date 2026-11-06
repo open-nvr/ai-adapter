@@ -44,7 +44,7 @@ _adapter_app = AdapterApp(
         # First-boot fetches only: the model from Hugging Face and six
         # Qualcomm AI Runtime libraries from Qualcomm's download server.
         # Nothing leaves the box at inference time.
-        network_egress=["https://huggingface.co", "https://softwarecenter.qualcomm.com"],
+        network_egress=["huggingface.co", "softwarecenter.qualcomm.com"],
         host_filesystem=["/dev/fastrpc-cdsp", "/dev/dma_heap"],
         shared_memory_paths=[],
         host_metadata=False,
