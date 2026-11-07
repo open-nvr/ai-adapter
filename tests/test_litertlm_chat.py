@@ -28,7 +28,26 @@ def test_messages_split_into_system_history_and_the_last_user_turn():
     assert system == "You are the agent." and user == "and now?"
     assert history[0] == {"role": "user", "content": "is anyone there?"}
     assert history[1]["tool_calls"] == [{"name": "detect_objects", "arguments": {"camera_id": "cam23"}, "id": "call_1"}]
-    assert history[2] == {"role": "tool", "content": '{"persons": 2}', "tool_call_id": "call_1", "name": None}
+    assert history[2] == {"role": "tool", "content": [
+        {"type": "tool_response", "name": "", "response": '{"persons": 2}'}]}
+
+
+def test_a_conversation_ending_with_tool_results_sends_them_as_tool_responses():
+    """The agent's second iteration: question, the model's call, the
+    result — the result is what gets sent, in the runtime's own shape,
+    with the question and the call as history, in that order."""
+    system, history, current = split_messages([
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "is anyone there?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "detect_objects", "arguments": '{"camera_id": "cam23"}'}}]},
+        {"role": "tool", "tool_call_id": "call_1", "name": "detect_objects", "content": "On front_door: 2 people."},
+    ])
+    assert system == "sys"
+    assert [m["role"] for m in history] == ["user", "assistant"]
+    assert history[1]["tool_calls"][0]["name"] == "detect_objects"
+    assert current == [{"role": "tool", "content": [
+        {"type": "tool_response", "name": "detect_objects", "response": "On front_door: 2 people."}]}]
 
 
 def test_the_reply_is_shaped_for_an_openai_client():
@@ -56,6 +75,8 @@ class _Conv:
         self.engine.seen.append((self.kwargs, text))
         if self.engine.overflow_at and len(self.kwargs.get("tools") or []) >= self.engine.overflow_at:
             raise RuntimeError("litert_lm_conversation_send_message failed")
+        if isinstance(text, list):                         # tool results handed back
+            return _Msg("There are 2 people at the door.")
         if self.kwargs.get("tools") and "alarm" in text:
             return _Msg("", [types.SimpleNamespace(name="create_alarm", arguments={"camera_id": "cam1"}, id=None)])
         return _Msg(f"reply to: {text}")
@@ -134,6 +155,17 @@ def test_the_http_endpoint_round_trip(tmp_path, monkeypatch):
     assert body["usage"]["estimated"] is True and body["opennvr"]["tools_attached"] == 1
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hello"}]})
     assert r.json()["choices"][0]["message"]["content"] == "reply to: hello" and r.json()["choices"][0]["finish_reason"] == "stop"
+    # The second iteration of the agent's loop: the tool result comes back
+    # and the answer comes out of it.
+    r = c.post("/v1/chat/completions", json={"messages": [
+        {"role": "user", "content": "is anyone there?"},
+        {"role": "assistant", "content": None, "tool_calls": msg["tool_calls"]},
+        {"role": "tool", "tool_call_id": msg["tool_calls"][0]["id"], "name": "create_alarm", "content": "armed"},
+    ]})
+    assert r.status_code == 200, r.text
+    assert r.json()["choices"][0]["message"]["content"] == "There are 2 people at the door."
+    kwargs, sent = engine.seen[-1]
+    assert sent[0]["content"][0]["type"] == "tool_response" and [m["role"] for m in kwargs["messages"]] == ["user", "assistant"]
     engine.overflow_at = 1
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}],
                                              "tools": [{"type": "function", "function": {"name": "t", "parameters": {}}}]})

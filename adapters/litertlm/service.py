@@ -460,14 +460,18 @@ class LitertLmService(AdapterService):
     class PromptTooLong(RuntimeError):
         """The prompt does not fit the bundle's compiled context window."""
 
-    def chat(self, *, system: str | None, history: list[dict[str, Any]], user: str,
+    def chat(self, *, system: str | None, history: list[dict[str, Any]],
+             user: str | list[dict[str, Any]],
              tools: list[dict[str, Any]], max_tokens: int,
              temperature: float | None = None) -> tuple[str, list[dict[str, Any]], bool]:
         """One chat turn on the same engine as the captions: returns (text,
-        tool calls as [{name, arguments, id}], True). Serialised with the
-        captions by the service lock. A prompt the window cannot hold raises
-        PromptTooLong; the runtime says only that the send failed, and with a
-        prompt past the compiled context that is what it means."""
+        tool calls as [{name, arguments, id}], True). ``user`` is the text
+        to send, or the tool results (the runtime's ``tool_response``
+        turns) when the caller's loop is handing a result back. Serialised
+        with the captions by the service lock. A prompt the window cannot
+        hold raises PromptTooLong; the runtime says only that the send
+        failed, and with a prompt past the compiled context that is what
+        it means."""
         if not self.is_ready():
             raise self.NotReady(self._error or "the model is still loading on the NPU")
         lm = self._lm
