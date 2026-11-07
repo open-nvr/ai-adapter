@@ -46,8 +46,17 @@ def test_a_conversation_ending_with_tool_results_sends_them_as_tool_responses():
     assert system == "sys"
     assert [m["role"] for m in history] == ["user", "assistant"]
     assert history[1]["tool_calls"][0]["name"] == "detect_objects"
-    assert current == [{"role": "tool", "content": [
-        {"type": "tool_response", "name": "detect_objects", "response": "On front_door: 2 people."}]}]
+    assert current == {"role": "tool", "content": [
+        {"type": "tool_response", "name": "detect_objects", "response": "On front_door: 2 people."}]}
+    # Two results of one iteration: one turn, two parts (the entry point
+    # takes a single message).
+    _, _, current = split_messages([
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "", "tool_calls": []},
+        {"role": "tool", "name": "a", "content": "1"},
+        {"role": "tool", "name": "b", "content": "2"},
+    ])
+    assert [p["name"] for p in current["content"]] == ["a", "b"]
 
 
 def test_the_reply_is_shaped_for_an_openai_client():
@@ -75,7 +84,7 @@ class _Conv:
         self.engine.seen.append((self.kwargs, text))
         if self.engine.overflow_at and len(self.kwargs.get("tools") or []) >= self.engine.overflow_at:
             raise RuntimeError("litert_lm_conversation_send_message failed")
-        if isinstance(text, list):                         # tool results handed back
+        if isinstance(text, dict) and text.get("role") == "tool":   # results handed back
             return _Msg("There are 2 people at the door.")
         if self.kwargs.get("tools") and "alarm" in text:
             return _Msg("", [types.SimpleNamespace(name="create_alarm", arguments={"camera_id": "cam1"}, id=None)])
@@ -165,7 +174,7 @@ def test_the_http_endpoint_round_trip(tmp_path, monkeypatch):
     assert r.status_code == 200, r.text
     assert r.json()["choices"][0]["message"]["content"] == "There are 2 people at the door."
     kwargs, sent = engine.seen[-1]
-    assert sent[0]["content"][0]["type"] == "tool_response" and [m["role"] for m in kwargs["messages"]] == ["user", "assistant"]
+    assert sent["content"][0]["type"] == "tool_response" and [m["role"] for m in kwargs["messages"]] == ["user", "assistant"]
     engine.overflow_at = 1
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}],
                                              "tools": [{"type": "function", "function": {"name": "t", "parameters": {}}}]})

@@ -61,15 +61,16 @@ def _text_of(content: Any) -> str:
     return str(content)
 
 
-def _tool_response(m: dict[str, Any]) -> dict[str, Any]:
-    """A tool result in the runtime's own shape (what its automatic tool
-    calling sends back itself): a ``tool`` turn whose content is one
-    ``tool_response`` part with the tool's name and its result. A plain
-    text ``tool`` turn is refused by the native side — measured on the
-    Ventuno Q, 2026-11-07, as a "send failed" in 10 ms."""
-    return {"role": "tool", "content": [{"type": "tool_response",
-                                          "name": m.get("name") or "",
-                                          "response": _text_of(m.get("content"))}]}
+def _tool_response(*results: dict[str, Any]) -> dict[str, Any]:
+    """Tool results in the runtime's own shape (what its automatic tool
+    calling sends back itself): ONE ``tool`` turn whose content is a
+    ``tool_response`` part per result, with the tool's name and what it
+    returned. A plain text ``tool`` turn is refused by the native side,
+    and the Python entry point takes one message, not a list — both
+    measured on the Ventuno Q, 2026-11-07."""
+    return {"role": "tool", "content": [
+        {"type": "tool_response", "name": m.get("name") or "", "response": _text_of(m.get("content"))}
+        for m in results]}
 
 
 def _engine_message(m: dict[str, Any]) -> dict[str, Any]:
@@ -97,7 +98,7 @@ def _engine_message(m: dict[str, Any]) -> dict[str, Any]:
 
 
 def split_messages(messages: list[dict[str, Any]]
-                   ) -> tuple[str | None, list[dict[str, Any]], str | list[dict[str, Any]]]:
+                   ) -> tuple[str | None, list[dict[str, Any]], str | dict[str, Any]]:
     """(system text, history for the engine, what to send).
 
     System messages are joined into one system prompt. What gets sent is
@@ -105,9 +106,10 @@ def split_messages(messages: list[dict[str, Any]]
     engine's own message shape (assistant turns keep their tool calls) —
     or, when the conversation ENDS with tool results (the agent's loop:
     the model called a tool, here is the result, now answer), those
-    results in the runtime's ``tool_response`` shape, with the user's
-    question and the model's call before them as history. Sending the
-    question again after the result would put it in the wrong order."""
+    results as one ``tool`` turn in the runtime's ``tool_response`` shape,
+    with the user's question and the model's call before them as history.
+    Sending the question again after the result would put it in the wrong
+    order."""
     system_parts = [_text_of(m.get("content")) for m in messages if m.get("role") == "system"]
     system = "\n\n".join(p for p in system_parts if p) or None
     rest = [m for m in messages if m.get("role") != "system"]
@@ -115,7 +117,7 @@ def split_messages(messages: list[dict[str, Any]]
     while rest and rest[-1].get("role") == "tool":
         tail.insert(0, rest.pop())
     if tail:
-        return system, [_engine_message(m) for m in rest], [_tool_response(m) for m in tail]
+        return system, [_engine_message(m) for m in rest], _tool_response(*tail)
     last_user_index = max((i for i, m in enumerate(rest) if m.get("role") == "user"), default=-1)
     if last_user_index < 0:
         return system, [_engine_message(m) for m in rest], ""
