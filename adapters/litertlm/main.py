@@ -60,6 +60,16 @@ _adapter_app = AdapterApp(
 
 app = _adapter_app.fastapi_app
 
+# The chat endpoint rides the same app (and the SDK's bearer-token
+# middleware) and the same engine as the captions: adapters/litertlm/chat.py.
+from adapters.litertlm.chat import router as _chat_router  # noqa: E402
+
+app.include_router(_chat_router)
+# Resolved per request, not here: the SDK builds the service in the
+# lifespan, and reading it at import time trips its assertion before
+# uvicorn has even bound the port (the CI smoke test caught exactly that).
+app.state.litertlm_service_getter = lambda: _adapter_app.service
+
 
 def __getattr__(name: str):
     if name == "_service":
