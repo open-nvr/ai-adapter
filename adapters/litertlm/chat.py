@@ -87,8 +87,13 @@ def _engine_message(m: dict[str, Any]) -> dict[str, Any]:
                     args = json.loads(args) if args.strip() else {}
                 except json.JSONDecodeError:
                     args = {"_raw": args}
-            calls.append({"name": fn.get("name") or tc.get("name"), "arguments": args or {},
-                          "id": tc.get("id")})
+            # The runtime's chat template reads the OpenAI envelope — a
+            # flat {name, arguments} fails it with "undefined value"
+            # (measured on the Ventuno Q, 2026-11-07); arguments stay a
+            # mapping, not the JSON string the client sent.
+            calls.append({"id": tc.get("id") or f"call_{len(calls) + 1}", "type": "function",
+                          "function": {"name": fn.get("name") or tc.get("name") or "",
+                                       "arguments": args or {}}})
         if calls:
             entry["tool_calls"] = calls
         return entry

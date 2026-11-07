@@ -27,7 +27,8 @@ def test_messages_split_into_system_history_and_the_last_user_turn():
     ])
     assert system == "You are the agent." and user == "and now?"
     assert history[0] == {"role": "user", "content": "is anyone there?"}
-    assert history[1]["tool_calls"] == [{"name": "detect_objects", "arguments": {"camera_id": "cam23"}, "id": "call_1"}]
+    assert history[1]["tool_calls"] == [{"id": "call_1", "type": "function", "function": {
+        "name": "detect_objects", "arguments": {"camera_id": "cam23"}}}]
     assert history[2] == {"role": "tool", "content": [
         {"type": "tool_response", "name": "", "response": '{"persons": 2}'}]}
 
@@ -45,7 +46,7 @@ def test_a_conversation_ending_with_tool_results_sends_them_as_tool_responses():
     ])
     assert system == "sys"
     assert [m["role"] for m in history] == ["user", "assistant"]
-    assert history[1]["tool_calls"][0]["name"] == "detect_objects"
+    assert history[1]["tool_calls"][0]["function"]["name"] == "detect_objects"
     assert current == {"role": "tool", "content": [
         {"type": "tool_response", "name": "detect_objects", "response": "On front_door: 2 people."}]}
     # Two results of one iteration: one turn, two parts (the entry point
