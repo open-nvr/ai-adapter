@@ -39,3 +39,19 @@ Without the NPU node the adapter stays up, `/health` says so, and
 | `OPENNVR_LITERTLM_CAPTION_PROMPT` | one-sentence security-camera prompt | The caption instruction. |
 
 Port 9020. The context window is fixed at compile time (4096 tokens).
+
+## Chat: the same engine as the camera agent's LLM
+
+`POST /v1/chat/completions` (and `GET /v1/models`) on the same port, behind the same bearer token:
+an OpenAI-compatible chat endpoint on the same engine as the captions. It takes `messages`
+(system / user / assistant / tool), `tools` as OpenAI function envelopes, `tool_choice`,
+`temperature` and `max_tokens`, and answers `choices[0].message` with `content` and
+`tool_calls[].function.{name, arguments}` (arguments a JSON string), `finish_reason` `tool_calls` or
+`stop`. The camera agent switches to it with `llm_provider: openai` and this adapter's URL.
+
+Measured on a Ventuno Q (open-nvr `bench/ventuno-q-npu-agent-llm-2026-11-07.md`): the agent's real prompt
+with seven tool schemas, 10 of 10 right tool choices on its evaluation questions at 0.8–2.0 s a turn. The
+bundle's context is fixed at compile time (4,096 tokens): a prompt that does not fit is answered
+`400 context_length_exceeded`, never truncated. Captions and chat share one lock; `max_tokens` (capped by
+`OPENNVR_LITERTLM_CHAT_MAX_TOKENS`, default 512) is the deadline, since the runtime cannot be interrupted.
+Streaming is not supported. `usage` is estimated from characters and says so.

@@ -11,6 +11,19 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **litertlm: an OpenAI-compatible chat endpoint on the NPU engine.**
+  `POST /v1/chat/completions` on the caption adapter, same engine, same
+  bearer token: `messages` with system / user / assistant / tool roles,
+  `tools` as OpenAI function envelopes, `tool_choice`, `temperature`,
+  `max_tokens`; answers `choices[0].message` with `content` and
+  structured `tool_calls`, so the camera agent switches to the NPU with
+  `llm_provider: openai` and the adapter's URL. Measured on a Ventuno Q
+  with the agent's real prompt and seven tool schemas: 10 of 10 right
+  tool choices at 0.8–2.0 s a turn (the CPU model: 20–25 s). A prompt
+  past the bundle's 4,096-token window is `400 context_length_exceeded`,
+  never truncated; captions and chat share one lock; streaming is not
+  supported.
+
 - **litertlm: Gemma captions on the Qualcomm Hexagon NPU.** A new
   caption/VQA adapter (`adapters/litertlm`, image `litertlm-adapter`, port
   9020, arm64, published as `…-qualcomm`) runs Gemma 4 E2B compiled for the
