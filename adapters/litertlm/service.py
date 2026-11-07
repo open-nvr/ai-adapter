@@ -216,6 +216,28 @@ def shrink_image(image_bytes: bytes, max_px: int) -> tuple[bytes, tuple[int, int
     return out.getvalue(), img.size
 
 
+_TOOL_CLASS_CACHE: dict[int, type] = {}
+
+
+def agent_tool_class(base: type) -> type:
+    """A ``litert_lm.Tool`` subclass that presents an OpenAI function envelope
+    as given and never executes: automatic tool calling is off, the caller
+    runs its own tools and sends the result back as a message."""
+    cls = _TOOL_CLASS_CACHE.get(id(base))
+    if cls is None:
+        class AgentTool(base):  # type: ignore[misc,valid-type]
+            def __init__(self, spec: dict[str, Any]) -> None:
+                self.spec = spec if "function" in spec else {"type": "function", "function": spec}
+
+            def get_tool_description(self) -> dict[str, Any]:
+                return self.spec
+
+            def execute(self, param: Any) -> Any:
+                return {"error": "tool execution is the caller's"}
+        cls = _TOOL_CLASS_CACHE[id(base)] = AgentTool
+    return cls
+
+
 class LitertLmService(AdapterService):
     """Gemma 4 E2B on the Hexagon NPU through LiteRT-LM.
 
@@ -431,6 +453,61 @@ class LitertLmService(AdapterService):
         return InferResponse(
             model_name=self._model_path.name, model_version=f"litert-lm/{self._model_path.name}",
             inference_ms=elapsed_ms, result=result)
+
+    class NotReady(RuntimeError):
+        """The engine is not loaded (still loading, or the load failed)."""
+
+    class PromptTooLong(RuntimeError):
+        """The prompt does not fit the bundle's compiled context window."""
+
+    def chat(self, *, system: str | None, history: list[dict[str, Any]], user: str,
+             tools: list[dict[str, Any]], max_tokens: int,
+             temperature: float | None = None) -> tuple[str, list[dict[str, Any]], bool]:
+        """One chat turn on the same engine as the captions: returns (text,
+        tool calls as [{name, arguments, id}], True). Serialised with the
+        captions by the service lock. A prompt the window cannot hold raises
+        PromptTooLong; the runtime says only that the send failed, and with a
+        prompt past the compiled context that is what it means."""
+        if not self.is_ready():
+            raise self.NotReady(self._error or "the model is still loading on the NPU")
+        lm = self._lm
+        kwargs: dict[str, Any] = {"max_output_tokens": int(max_tokens), "automatic_tool_calling": False}
+        if system:
+            kwargs["system_message"] = system
+        if history:
+            kwargs["messages"] = history
+        if tools and lm is not None:
+            kwargs["tools"] = [agent_tool_class(lm.Tool)(t) for t in tools]
+        if lm is not None and hasattr(lm, "ThinkingConfig"):
+            kwargs["thinking_config"] = lm.ThinkingConfig(enable_thinking=False, thinking_token_budget=0)
+        if temperature is not None and lm is not None and hasattr(lm, "SamplerConfig"):
+            try:
+                kwargs["sampler_config"] = lm.SamplerConfig(temperature=float(temperature))
+            except Exception:  # noqa: BLE001 — an odd temperature is not worth refusing the turn
+                pass
+        with self._lock:
+            try:
+                with self._engine.create_conversation(**kwargs) as conversation:
+                    response = conversation.send_message(user)
+            except RuntimeError as exc:
+                if "send_message failed" in str(exc) or "overflow" in str(exc).lower():
+                    raise self.PromptTooLong(
+                        "the prompt does not fit the model's context window; send fewer tool "
+                        "schemas or less history") from exc
+                raise
+        text = ""
+        try:
+            items = response.get("content", []) if hasattr(response, "get") else []
+        except Exception:  # noqa: BLE001
+            items = []
+        for p in items or []:
+            if isinstance(p, dict) and p.get("type") == "text":
+                text += p.get("text", "")
+        calls: list[dict[str, Any]] = []
+        for c in getattr(response, "tool_calls", None) or []:
+            calls.append({"name": getattr(c, "name", None), "arguments": getattr(c, "arguments", None) or {},
+                          "id": getattr(c, "id", None)})
+        return " ".join(text.split()).strip(), calls, True
 
     def _ask(self, jpeg: bytes, prompt: str) -> str:
         """One bounded conversation turn with the image; serialised."""
