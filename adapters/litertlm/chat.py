@@ -116,6 +116,23 @@ def to_openai_message(text: str, tool_calls: list[dict[str, Any]]) -> dict[str, 
     return msg
 
 
+def _service_of(request: Request) -> Any:
+    """The adapter's service: set directly (tests), or through the getter
+    main.py registers, which the SDK only answers once its lifespan has
+    built the service — before that the engine is not loaded anyway."""
+    state = request.app.state
+    service = getattr(state, "litertlm_service", None)
+    if service is not None:
+        return service
+    getter = getattr(state, "litertlm_service_getter", None)
+    if getter is None:
+        return None
+    try:
+        return getter()
+    except AssertionError:
+        return None
+
+
 @router.get("/v1/models")
 async def models() -> dict[str, Any]:
     return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "open-nvr"}]}
@@ -123,7 +140,7 @@ async def models() -> dict[str, Any]:
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> Any:
-    service = getattr(request.app.state, "litertlm_service", None)
+    service = _service_of(request)
     if service is None:
         return _error(503, "model_not_loaded", "the chat service is not attached")
     try:

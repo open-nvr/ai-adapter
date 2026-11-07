@@ -65,7 +65,10 @@ app = _adapter_app.fastapi_app
 from adapters.litertlm.chat import router as _chat_router  # noqa: E402
 
 app.include_router(_chat_router)
-app.state.litertlm_service = _adapter_app.service
+# Resolved per request, not here: the SDK builds the service in the
+# lifespan, and reading it at import time trips its assertion before
+# uvicorn has even bound the port (the CI smoke test caught exactly that).
+app.state.litertlm_service_getter = lambda: _adapter_app.service
 
 
 def __getattr__(name: str):

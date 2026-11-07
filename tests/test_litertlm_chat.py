@@ -140,3 +140,23 @@ def test_the_http_endpoint_round_trip(tmp_path, monkeypatch):
     assert r.status_code == 400 and r.json()["error"]["code"] == "context_length_exceeded"
     assert c.post("/v1/chat/completions", json={"messages": []}).status_code == 400
     assert c.get("/v1/models").json()["data"][0]["object"] == "model"
+
+
+def test_main_resolves_the_service_lazily():
+    """main.py must not touch the SDK's service at import (its lifespan
+    builds it; the assertion took the container down in the CI smoke)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import adapters.litertlm.chat as chat
+
+    class _NotYet:
+        @property
+        def service(self):
+            raise AssertionError("service not built — lifespan has not run yet")
+    app = FastAPI(); app.include_router(chat.router)
+    app.state.litertlm_service_getter = lambda: _NotYet().service
+    c = TestClient(app)
+    r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "model_not_loaded"
+    assert c.get("/v1/models").status_code == 200
+
