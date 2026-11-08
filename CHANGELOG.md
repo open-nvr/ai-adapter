@@ -43,6 +43,15 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **litertlm chat: the agent's second iteration works.** A tool result
+  goes back to the engine as one `tool` turn of `tool_response` parts
+  (a plain-text tool turn fails the native send; a Python list fails the
+  entry point), a conversation that ends with tool results sends those
+  with the question and the call as history, and past tool calls in
+  history keep the OpenAI `function` envelope (a flat shape fails the
+  chat template). Measured on a Ventuno Q: result back in, answer out in
+  1.07 s. These three fixes were pushed after #83 merged and missed it.
+
 - **QNN on the HTP is refused, out loud, when the DSP node is not in the
   container.** The plugin lists an HTP device on any Qualcomm host and
   compiles the graph without opening it, so an adapter recreated without the
