@@ -61,48 +61,73 @@ def _text_of(content: Any) -> str:
     return str(content)
 
 
-def split_messages(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]], str]:
-    """(system text, history for the engine, the last user turn).
+def _tool_response(*results: dict[str, Any]) -> dict[str, Any]:
+    """Tool results in the runtime's own shape (what its automatic tool
+    calling sends back itself): ONE ``tool`` turn whose content is a
+    ``tool_response`` part per result, with the tool's name and what it
+    returned. A plain text ``tool`` turn is refused by the native side,
+    and the Python entry point takes one message, not a list — both
+    measured on the Ventuno Q, 2026-11-07."""
+    return {"role": "tool", "content": [
+        {"type": "tool_response", "name": m.get("name") or "", "response": _text_of(m.get("content"))}
+        for m in results]}
 
-    System messages are joined into one system prompt. The LAST user message
-    is what gets sent; everything before it is history in the engine's own
-    message shape: assistant turns that called tools keep the calls, tool
-    results become ``tool`` turns with their text, so a second iteration of
-    the agent's loop (tool result in, final answer out) works."""
-    system_parts: list[str] = []
-    history: list[dict[str, Any]] = []
-    last_user: str | None = None
-    last_user_index = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
-    for i, m in enumerate(messages):
-        role = m.get("role")
-        if role == "system":
-            system_parts.append(_text_of(m.get("content")))
-            continue
-        if i == last_user_index:
-            last_user = _text_of(m.get("content"))
-            continue
-        if role == "user":
-            history.append({"role": "user", "content": _text_of(m.get("content"))})
-        elif role == "assistant":
-            entry: dict[str, Any] = {"role": "assistant", "content": _text_of(m.get("content"))}
-            calls = []
-            for tc in m.get("tool_calls") or []:
-                fn = tc.get("function") or {}
-                args = fn.get("arguments")
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args) if args.strip() else {}
-                    except json.JSONDecodeError:
-                        args = {"_raw": args}
-                calls.append({"name": fn.get("name") or tc.get("name"), "arguments": args or {},
-                              "id": tc.get("id")})
-            if calls:
-                entry["tool_calls"] = calls
-            history.append(entry)
-        elif role == "tool":
-            history.append({"role": "tool", "content": _text_of(m.get("content")),
-                            "tool_call_id": m.get("tool_call_id"), "name": m.get("name")})
-    return ("\n\n".join(p for p in system_parts if p) or None), history, (last_user or "")
+
+def _engine_message(m: dict[str, Any]) -> dict[str, Any]:
+    """One OpenAI message as the engine's history takes it."""
+    role = m.get("role")
+    if role == "assistant":
+        entry: dict[str, Any] = {"role": "assistant", "content": _text_of(m.get("content"))}
+        calls = []
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args) if args.strip() else {}
+                except json.JSONDecodeError:
+                    args = {"_raw": args}
+            # The runtime's chat template reads the OpenAI envelope — a
+            # flat {name, arguments} fails it with "undefined value"
+            # (measured on the Ventuno Q, 2026-11-07); arguments stay a
+            # mapping, not the JSON string the client sent.
+            calls.append({"id": tc.get("id") or f"call_{len(calls) + 1}", "type": "function",
+                          "function": {"name": fn.get("name") or tc.get("name") or "",
+                                       "arguments": args or {}}})
+        if calls:
+            entry["tool_calls"] = calls
+        return entry
+    if role == "tool":
+        return _tool_response(m)
+    return {"role": "user", "content": _text_of(m.get("content"))}
+
+
+def split_messages(messages: list[dict[str, Any]]
+                   ) -> tuple[str | None, list[dict[str, Any]], str | dict[str, Any]]:
+    """(system text, history for the engine, what to send).
+
+    System messages are joined into one system prompt. What gets sent is
+    the LAST user message's text, with everything else as history in the
+    engine's own message shape (assistant turns keep their tool calls) —
+    or, when the conversation ENDS with tool results (the agent's loop:
+    the model called a tool, here is the result, now answer), those
+    results as one ``tool`` turn in the runtime's ``tool_response`` shape,
+    with the user's question and the model's call before them as history.
+    Sending the question again after the result would put it in the wrong
+    order."""
+    system_parts = [_text_of(m.get("content")) for m in messages if m.get("role") == "system"]
+    system = "\n\n".join(p for p in system_parts if p) or None
+    rest = [m for m in messages if m.get("role") != "system"]
+    tail: list[dict[str, Any]] = []
+    while rest and rest[-1].get("role") == "tool":
+        tail.insert(0, rest.pop())
+    if tail:
+        return system, [_engine_message(m) for m in rest], _tool_response(*tail)
+    last_user_index = max((i for i, m in enumerate(rest) if m.get("role") == "user"), default=-1)
+    if last_user_index < 0:
+        return system, [_engine_message(m) for m in rest], ""
+    history = [_engine_message(m) for i, m in enumerate(rest) if i != last_user_index]
+    return system, history, _text_of(rest[last_user_index].get("content"))
 
 
 def to_openai_message(text: str, tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
@@ -153,7 +178,7 @@ async def chat_completions(request: Request) -> Any:
         return _error(400, "stream_unsupported", "streaming is not supported; send stream=false")
     system, history, user = split_messages(body["messages"])
     if not user:
-        return _error(400, "invalid_request", "the last message must be from the user")
+        return _error(400, "invalid_request", "the last message must be from the user, or a tool result")
     tools = [t for t in (body.get("tools") or []) if isinstance(t, dict)]
     if body.get("tool_choice") == "none":
         tools = []
@@ -176,7 +201,8 @@ async def chat_completions(request: Request) -> Any:
         return _error(500, "inference_failed", f"{type(exc).__name__}: {exc}")
     elapsed_ms = int((time.monotonic() - started) * 1000)
     message = to_openai_message(text, calls)
-    prompt_chars = len(system or "") + sum(len(json.dumps(m)) for m in history) + len(user) + len(json.dumps(tools))
+    sent_chars = len(user) if isinstance(user, str) else len(json.dumps(user))
+    prompt_chars = len(system or "") + sum(len(json.dumps(m)) for m in history) + sent_chars + len(json.dumps(tools))
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
         "object": "chat.completion",
