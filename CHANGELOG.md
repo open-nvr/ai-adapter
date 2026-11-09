@@ -11,6 +11,24 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`whisper_qnn`: Whisper-Small on the Qualcomm Hexagon NPU.** A third ASR
+  adapter, for the camera agent on the Ventuno Q, where speech-to-text on
+  the CPU (parakeet) took 0.7–2.3 s an utterance and had no confidence
+  signal to gate noise. It drives Qualcomm AI Hub's precompiled QNN export
+  of openai/whisper-small (w8a16, QCS8275 / HTP v75; the asset names the
+  Arduino VENTUNO Q as its reference device) through ONNX Runtime's QNN
+  plugin provider: numpy log-mel front end checked against HuggingFace's
+  extractor to 1e-6, encoder → cached greedy decoder with the English
+  prefix forced, `no_speech_prob` from the first step, the §5.3 result plus
+  `encoder_ms`/`decoder_ms`. Hexagon only: anywhere else `/health` says
+  `error` and `/hardware/evaluation` `blocked` with the reason, never a
+  silent CPU fallback. Assets, tokenizer and mel filters are baked into the
+  image (`--build-arg WHISPER_QNN_CHIPSET=` for another chip in the release).
+  Published in the qualcomm flavour as `whisper-qnn-adapter`, port 9020.
+  Not yet measured on the hardware.
+
+### Added
+
 - **litertlm: an OpenAI-compatible chat endpoint on the NPU engine.**
   `POST /v1/chat/completions` on the caption adapter, same engine, same
   bearer token: `messages` with system / user / assistant / tool roles,

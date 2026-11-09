@@ -564,6 +564,11 @@ jobs:
           - { dir: insightface,       image: insightface-adapter,       port: 9005 }
           - { dir: fast_plate_ocr,    image: fast-plate-ocr-adapter,    port: 9004 }
           - { dir: package_detection, image: package-detection-adapter, port: 9010 }
+          # Whisper-Small (w8a16) as Qualcomm's precompiled QNN context
+          # binaries for the QCS8275: Hexagon only, so it exists in this
+          # flavour alone (its Dockerfile has no ACCEL switch; the arg is
+          # accepted and ignored). The camera agent's NPU speech-to-text.
+          - { dir: whisper_qnn,       image: whisper-qnn-adapter,       port: 9020 }
           # parakeet keeps its ACCEL=qualcomm block but is not published: the
           # dynamic-length encoder/decoder graphs partition onto the HTP and
           # then fail at inference (Expand: invalid expand shape) — CPU is
