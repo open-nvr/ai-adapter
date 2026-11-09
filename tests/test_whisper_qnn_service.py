@@ -205,3 +205,25 @@ def test_a_host_without_the_hexagon_is_blocked_not_cpu(tmp_path, monkeypatch):
     s.load()
     assert not s.is_ready()
     assert "fastrpc" in s.hardware_evaluation().reasoning
+
+
+def test_a_pcm_wav_at_another_rate_needs_no_ffmpeg(whisper_qnn_app, monkeypatch):
+    """The conformance kit probes with an 8 kHz WAV and CI has no ffmpeg:
+    a PCM WAV at any rate is resampled in numpy."""
+    import shutil
+
+    import adapters.whisper_qnn.audio as audio
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000)
+        w.writeframes(b"\x00\x00" * 8000)
+    r = whisper_qnn_app.post("/infer", files={"audio": ("c.wav", buf.getvalue(), "audio/wav")})
+    assert r.status_code == 200, r.text
+    assert r.json()["result"]["duration_seconds"] == 1.0
+    x = audio.resample_linear(np.arange(8, dtype=np.float32), 8000, 16000)
+    assert x.shape == (16,) and abs(float(x[2]) - 1.0) < 1e-6
