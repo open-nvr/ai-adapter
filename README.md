@@ -197,7 +197,7 @@ Apple Silicon Mac or a Raspberry Pi 5 pulls a native image with no
 
 | Adapter images | amd64 | arm64 |
 |---|:---:|:---:|
-| `yolov8`, `piper`, `whisper`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm`, `yolo-pose`, `package-detection`, `clip`, `open-vocab`, `parakeet` | ✓ | ✓ |
+| `yolov8`, `piper`, `whisper`, `fast-plate-ocr`, `insightface`, `blip`, `bytetrack`, `moondream`, `voice`, `ollamavlm`, `yolo-pose`, `package-detection`, `clip`, `text-embed`, `open-vocab`, `parakeet` | ✓ | ✓ |
 | `litertlm` (Gemma on the Qualcomm Hexagon NPU, `-qualcomm` tag only) | | ✓ |
 
 (The former amd64-only pair — `llamacpp` and `smolvlm`, blocked on

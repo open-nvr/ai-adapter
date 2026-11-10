@@ -11,6 +11,25 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`text_embed`: sentence embeddings for search's caption arm.** A new
+  adapter (`adapters/text_embed`, image `text-embed-adapter`, port 9013,
+  amd64 + arm64) advertising a new task, `text_embed`: a sentence in, a
+  384-dimensional unit vector out, from `BAAI/bge-small-en-v1.5` (MIT) as
+  the repo's own ONNX export, run by ONNX Runtime on the CPU with two
+  threads — a caption costs a few milliseconds. The `embed` adapters keep
+  the frame arm (a frame and a query in one space); this one exists
+  because an image-text model's text tower is a poor judge of text
+  against text: on the Ventuno Q SigLIP2's text-to-text cosines for
+  relevant and irrelevant caption/query pairs overlap (0.76–0.87 against
+  0.59–0.75, 2026-11-10), where bge-small puts the matching caption at
+  0.76–0.82 and the rest at or under 0.63. `text` or `texts` (a batch of
+  up to 64), `kind` query/document (a model's query instruction, if its
+  card asks for one, goes on queries only), `dim` + `model` in the answer
+  so a store never compares vectors from two models; `TEXT_EMBED_MODEL_DIR`
+  takes any BERT-style export with `cls` or `mean` pooling. Weights baked
+  in, no egress. OpenNVR's core picks it for caption vectors and the
+  caption arm's query where registered, and falls back to the embed
+  adapter's text tower where not.
 - **`whisper_qnn`: Whisper-Small on the Qualcomm Hexagon NPU.** A third ASR
   adapter, for the camera agent on the Ventuno Q, where speech-to-text on
   the CPU (parakeet) took 0.7–2.3 s an utterance and had no confidence
