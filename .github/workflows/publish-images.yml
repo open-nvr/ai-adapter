@@ -198,6 +198,13 @@ jobs:
           # bought for a container that declares no network egress at
           # all and needs no volume.
           - { dir: clip,           image: clip-adapter,           port: 9011, platforms: "linux/amd64,linux/arm64" }
+          # Sentence embeddings — the `text_embed` task, search's CAPTION
+          # arm: a query in words against the captions visits carry. An
+          # image-text model's text tower cannot separate relevant from
+          # irrelevant text pairs (SigLIP2 on the Ventuno Q, 2026-11-10);
+          # bge-small-en-v1.5 (MIT, 133 MB ONNX, 384 dims) can, on the
+          # CPU in milliseconds. Weights BAKED IN (#79), no egress.
+          - { dir: text_embed,     image: text-embed-adapter,     port: 9013, platforms: "linux/amd64,linux/arm64" }
           # Open-vocabulary detection — the `open_vocab_detection` task.
           # A box and a score for any phrase the caller writes ("red
           # truck", "forklift", "person wearing a hard hat"), where
