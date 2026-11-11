@@ -6,12 +6,13 @@ FastPlateOcrService — license-plate OCR implementation of
 ``AdapterService``.
 
 Wraps the `fast-plate-ocr <https://github.com/ankandrew/fast-plate-ocr>`_
-ONNX models. The adapter is deliberately single-purpose: it takes a
-**pre-cropped license-plate image** and returns the recognized
-characters. Vehicle detection and plate-region cropping happen
-upstream — the canonical pipeline is YOLOv8 (vehicle / plate ROI) →
-this adapter (OCR on the crop). The `license-plate-recognition`
-example app drives that chain end-to-end.
+ONNX models. The adapter takes a VEHICLE crop (or a whole frame), finds
+the plate in it with its own localiser (open-image-models
+``yolo-v9-t-384-license-plate-end2end``), crops it with a margin and
+reads the characters; with no plate found it reads the whole image at
+a raised floor. Upstream only has to find the vehicle — OpenNVR's core
+sends each vehicle visit's best frames — and the
+`license-plate-recognition` example app consumes the reads.
 
 Why a plate-specific OCR engine instead of generic Tesseract / Paddle?
 

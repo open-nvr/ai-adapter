@@ -9,6 +9,16 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **fast-plate-ocr's docs say what it does.** The README, the Dockerfile
+  and the service docstring described a "YOLOv8 → crop → OCR" chain
+  and a "pre-cropped plate image"; the adapter has localised the plate
+  in a vehicle crop itself (open-image-models yolo-v9-t-384) since 0.1.5,
+  its default floor is 0.45 (not 0.30), and it ships in CPU, -intel and
+  -qualcomm flavours (the Dockerfile said "CPU only"). The qualcomm
+  publish job's comment no longer says "-intel suffix, amd64 only".
+
 ### Added
 
 - **`text_embed`: sentence embeddings for search's caption arm.** A new
