@@ -115,6 +115,33 @@ that as an `adapter.fingerprint_mismatch` audit event, which is exactly the
 intended behaviour (the operator approved a specific model; a swap requires
 re-approval).
 
+### On an accelerator that compiles the graph whole (Qualcomm HTP, OpenVINO NPU)
+
+The OCR export carries a symbolic batch (`['unk', 64, 128, 3]`). The HTP
+compiles fixed shapes only, so as exported it took the graph node by node:
+2 of 377 nodes on the NPU, the rest on the CPU. The service pins the batch
+to 1 before the session is built (it reads one crop per call) and the SDK's
+constructor shim compiles a fixed-shape copy, cached beside the model
+under `.opennvr-accel/`. Measured on a Ventuno Q (QCS8275, 2026-11-11), one
+read of the `indian-plates-v1` model:
+
+| | wall | CPU per read |
+|---|---|---|
+| as exported (2 nodes on the HTP) | 62 ms | 501 ms across 6.5 cores |
+| batch pinned (every node on the HTP) | 10 ms | 1 ms |
+
+Through the production path (core → KAI-C → adapter, two reads in flight)
+the per-call latency did not move — 77 ms before, 80 ms after, with the
+JPEG decode of the vehicle frame and the proxy hop inside it — and with
+the Gemma captioner running on the same HTP it stayed at about 365 ms either
+way: on a shared NPU the wait for the device, not this graph, sets the
+latency. What the pin buys is the CPU the OCR graph no longer needs.
+
+The first start after this change compiles the fixed-shape graph once
+(the old compiled context is not reused). A model without an on-disk path
+(a hub id that is not bundled) cannot be pinned; the log says so, and
+`OPENNVR_LPR_MODEL_PATH` is the way to bundle it.
+
 ### Custom (fine-tuned) models
 
 The global model reads Indian plates poorly (39% exact on a held-out set

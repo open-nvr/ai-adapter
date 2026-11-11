@@ -384,6 +384,8 @@ def fixed_shape_model(model, spec: str, provider: str, *, adapter: str = "adapte
     otherwise falls back to CPU node by node. Needs the ``onnx`` package
     (in the qualcomm flavour); without it, or for a model given as bytes,
     the model is returned as is with a warning."""
+    if isinstance(model, os.PathLike):
+        model = os.fspath(model)   # fast-plate-ocr hands its model as a pathlib.Path
     if not isinstance(model, str):
         log.warning("%s: cannot pin shapes of an in-memory model for %s; compiling the dynamic graph", adapter, provider)
         return model

@@ -474,3 +474,17 @@ def test_accel_cache_dir_is_hidden_inside_the_model_dir_never_beside_the_model(m
     assert plugin_context_path(str(fixed), "QNNExecutionProvider") == str(fixed.parent / (fixed.name + ".QNNExecutionProvider.ctx.onnx"))
     monkeypatch.setenv("ADAPTER_ACCEL_CACHE_DIR", str(tmp_path / "elsewhere"))
     assert accel_cache_dir(str(model)) == str(tmp_path / "elsewhere") and (tmp_path / "elsewhere").is_dir()
+
+
+def test_fixed_shape_model_takes_a_pathlib_path(monkeypatch, tmp_path):
+    """fast-plate-ocr hands its model as a pathlib.Path; that is a file on
+    disk, not an in-memory model, and it gets pinned like a str path."""
+    import pathlib as _pl
+    from opennvr_adapter_sdk.providers import fixed_shape_model
+    model = tmp_path / "ocr.onnx"; model.write_bytes(b"dyn")
+    seen = {}
+    monkeypatch.setattr("os.path.getmtime", lambda p: 1.0)
+    monkeypatch.setattr("os.path.exists", lambda p: seen.setdefault("asked", p) and True)
+    out = fixed_shape_model(_pl.Path(model), "input[1,64,128,3]", "QNNExecutionProvider", adapter="t")
+    assert out.endswith("ocr.onnx.QNNExecutionProvider.fixed.onnx") and isinstance(out, str)
+

@@ -601,3 +601,72 @@ def test_hub_model_name_still_loads_by_id(fast_plate_ocr_environment, tmp_path, 
     assert cls.last_init_args == ("cct-xs-v2-global-model",)
     assert "onnx_model_path" not in cls.last_init_kwargs
     assert svc.model_info().version == "fast-plate-ocr/cct-xs-v2-global-model"
+
+
+# ── static shapes on an accelerator that compiles the graph whole ─────
+
+
+def test_a_symbolic_batch_is_pinned_before_the_recogniser_is_built(
+        fast_plate_ocr_environment, monkeypatch, tmp_path):
+    """On the QNN HTP a dynamic-shape export is taken node by node — 2 of
+    377 nodes on a Ventuno Q, the rest on the CPU at 501 ms per read. The
+    service pins the symbolic batch to 1 and hands the recogniser a
+    provider list the SDK shim compiles as a fixed-shape copy."""
+    import opennvr_adapter_sdk.providers as providers
+    from opennvr_adapter_sdk.providers import FIXED_SHAPES_KEY
+
+    cfg = tmp_path / "plate_config.yaml"
+    cfg.write_text("max_plate_slots: 10\n")
+    monkeypatch.setenv("OPENNVR_LPR_MODEL_PATH", str(fast_plate_ocr_environment["model_file"]))
+    monkeypatch.setenv("OPENNVR_LPR_PLATE_CONFIG", str(cfg))
+    monkeypatch.setattr(providers, "session_providers",
+                        lambda requested=None: [("QNNExecutionProvider", {"backend_type": "htp"}),
+                                                "CPUExecutionProvider"])
+    svc = _build_service(fast_plate_ocr_environment)
+    import adapters.fast_plate_ocr.service as mod
+    monkeypatch.setattr(mod, "_input_dims", lambda path: ("input", [None, 64, 128, 3]))
+    svc.load()
+    assert svc.is_ready()
+    handed = fast_plate_ocr_environment["fake_recognizer_cls"].last_init_kwargs["providers"]
+    qnn = next(e for e in handed if isinstance(e, tuple) and e[0] == "QNNExecutionProvider")
+    assert qnn[1][FIXED_SHAPES_KEY] == "input[1,64,128,3]"
+    assert svc._pinned_input == {"input": [1, 64, 128, 3]}
+    # The plate detector is a static export built from the same list: it
+    # gets the plain providers, not the OCR graph's pin.
+    det = fast_plate_ocr_environment["fake_detector_cls"].last_create_kwargs["providers"]
+    assert det == [("QNNExecutionProvider", {"backend_type": "htp"}), "CPUExecutionProvider"]
+
+
+def test_a_static_export_is_left_alone(fast_plate_ocr_environment, monkeypatch, tmp_path):
+    import opennvr_adapter_sdk.providers as providers
+    from opennvr_adapter_sdk.providers import FIXED_SHAPES_KEY
+
+    cfg = tmp_path / "plate_config.yaml"
+    cfg.write_text("max_plate_slots: 10\n")
+    monkeypatch.setenv("OPENNVR_LPR_MODEL_PATH", str(fast_plate_ocr_environment["model_file"]))
+    monkeypatch.setenv("OPENNVR_LPR_PLATE_CONFIG", str(cfg))
+    monkeypatch.setattr(providers, "session_providers",
+                        lambda requested=None: [("QNNExecutionProvider", {"backend_type": "htp"}),
+                                                "CPUExecutionProvider"])
+    svc = _build_service(fast_plate_ocr_environment)
+    import adapters.fast_plate_ocr.service as mod
+    monkeypatch.setattr(mod, "_input_dims", lambda path: ("input", [1, 64, 128, 3]))
+    svc.load()
+    handed = fast_plate_ocr_environment["fake_recognizer_cls"].last_init_kwargs["providers"]
+    qnn = next(e for e in handed if isinstance(e, tuple) and e[0] == "QNNExecutionProvider")
+    assert FIXED_SHAPES_KEY not in qnn[1] and svc._pinned_input is None
+
+
+def test_cpu_providers_never_pin(fast_plate_ocr_environment, monkeypatch):
+    """The pin is for accelerators that compile whole graphs; a CPU build
+    runs the export as it is and never reads the model twice."""
+    import opennvr_adapter_sdk.providers as providers
+
+    monkeypatch.setattr(providers, "session_providers", lambda requested=None: ["CPUExecutionProvider"])
+    svc = _build_service(fast_plate_ocr_environment)
+    import adapters.fast_plate_ocr.service as mod
+    calls = []
+    monkeypatch.setattr(mod, "_input_dims", lambda path: calls.append(path))
+    svc.load()
+    assert calls == [] and svc._pinned_input is None
+
