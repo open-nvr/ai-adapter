@@ -619,6 +619,7 @@ def test_a_symbolic_batch_is_pinned_before_the_recogniser_is_built(
     cfg.write_text("max_plate_slots: 10\n")
     monkeypatch.setenv("OPENNVR_LPR_MODEL_PATH", str(fast_plate_ocr_environment["model_file"]))
     monkeypatch.setenv("OPENNVR_LPR_PLATE_CONFIG", str(cfg))
+    monkeypatch.setenv("OPENNVR_LPR_PIN_BATCH", "1")
     monkeypatch.setattr(providers, "session_providers",
                         lambda requested=None: [("QNNExecutionProvider", {"backend_type": "htp"}),
                                                 "CPUExecutionProvider"])
@@ -655,6 +656,30 @@ def test_a_static_export_is_left_alone(fast_plate_ocr_environment, monkeypatch, 
     handed = fast_plate_ocr_environment["fake_recognizer_cls"].last_init_kwargs["providers"]
     qnn = next(e for e in handed if isinstance(e, tuple) and e[0] == "QNNExecutionProvider")
     assert FIXED_SHAPES_KEY not in qnn[1] and svc._pinned_input is None
+
+
+def test_the_pin_is_off_unless_asked_for(fast_plate_ocr_environment, monkeypatch, tmp_path):
+    """Measured on a Ventuno Q: the whole-graph HTP compile of the OCR
+    export answered one constant string for every crop. Off by default."""
+    import opennvr_adapter_sdk.providers as providers
+    from opennvr_adapter_sdk.providers import FIXED_SHAPES_KEY
+
+    cfg = tmp_path / "plate_config.yaml"
+    cfg.write_text("max_plate_slots: 10\n")
+    monkeypatch.setenv("OPENNVR_LPR_MODEL_PATH", str(fast_plate_ocr_environment["model_file"]))
+    monkeypatch.setenv("OPENNVR_LPR_PLATE_CONFIG", str(cfg))
+    monkeypatch.delenv("OPENNVR_LPR_PIN_BATCH", raising=False)
+    monkeypatch.setattr(providers, "session_providers",
+                        lambda requested=None: [("QNNExecutionProvider", {"backend_type": "htp"}),
+                                                "CPUExecutionProvider"])
+    svc = _build_service(fast_plate_ocr_environment)
+    import adapters.fast_plate_ocr.service as mod
+    calls = []
+    monkeypatch.setattr(mod, "_input_dims", lambda path: calls.append(path) or ("input", [None, 64, 128, 3]))
+    svc.load()
+    handed = fast_plate_ocr_environment["fake_recognizer_cls"].last_init_kwargs["providers"]
+    qnn = next(e for e in handed if isinstance(e, tuple) and e[0] == "QNNExecutionProvider")
+    assert FIXED_SHAPES_KEY not in qnn[1] and svc._pinned_input is None and calls == []
 
 
 def test_cpu_providers_never_pin(fast_plate_ocr_environment, monkeypatch):

@@ -250,9 +250,18 @@ class FastPlateOcrService(AdapterService):
                 # 6.5 cores, enough for two reads in flight to starve the
                 # detector; pinned, every node on the HTP — 10 ms wall and
                 # 1 ms of CPU per read.
+                # OFF unless asked for: measured on the Ventuno Q
+                # (2026-11-11), the pinned graph compiled whole for the HTP
+                # answered one constant string ("PR333337") for every crop
+                # while the CPU path read them all. Faster and cheaper, and
+                # wrong — the fp16 HTP graph of this OCR export is not
+                # trustworthy yet. OPENNVR_LPR_PIN_BATCH=1 turns it on for
+                # whoever wants to chase that; the default stays the
+                # partially offloaded graph that reads correctly.
                 self._pinned_input: dict[str, list[int]] | None = None
                 recognizer_providers = self._requested_providers
-                if wants_static_shapes(self._requested_providers):
+                pin_wanted = os.getenv("OPENNVR_LPR_PIN_BATCH", "").strip() in ("1", "true", "yes")
+                if wants_static_shapes(self._requested_providers) and pin_wanted:
                     if self._model_path:
                         self._pinned_input = _pinned_input(self._model_path)
                     if self._pinned_input:

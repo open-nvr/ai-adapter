@@ -117,6 +117,14 @@ re-approval).
 
 ### On an accelerator that compiles the graph whole (Qualcomm HTP, OpenVINO NPU)
 
+**Off by default.** Measured on the Ventuno Q on 2026-11-11, the pinned graph
+compiled whole for the HTP answered one constant string (`PR333337`) for
+every crop while the CPU path read every one of them. Faster and cheaper,
+and wrong. `OPENNVR_LPR_PIN_BATCH=1` turns the pin on for whoever wants to
+chase the fp16 HTP numerics of this export; the default stays the partially
+offloaded graph below, which reads correctly. The numbers that follow are
+for the pin when it is on.
+
 The OCR export carries a symbolic batch (`['unk', 64, 128, 3]`). The HTP
 compiles fixed shapes only, so as exported it took the graph node by node:
 2 of 377 nodes on the NPU, the rest on the CPU. The service pins the batch
