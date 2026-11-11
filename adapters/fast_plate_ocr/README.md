@@ -5,11 +5,12 @@ Reference implementation of the
 wrapping [fast-plate-ocr](https://github.com/ankandrew/fast-plate-ocr) — a
 small, plate-specific OCR model trained for license-plate recognition.
 
-This adapter is designed to be chained downstream of another adapter. The canonical pipeline is:
+This adapter takes a VEHICLE crop (OpenNVR's core sends each vehicle visit's
+best frames) and does the rest itself:
 
 ```
-camera frame → YOLOv8 (vehicle + plate ROI detection)
-                    → crop plate region
+vehicle crop → plate localiser (open-image-models yolo-v9-t-384, this adapter)
+                    → crop the plate (10 % / 20 % margin)
                           → fast-plate-ocr (this adapter)
                                   → plate text + per-character confidence
 ```
@@ -41,7 +42,7 @@ curl -X POST http://localhost:9004/infer \
       ...
     ],
     "accepted": true,
-    "min_confidence_applied": 0.30,
+    "min_confidence_applied": 0.45,
     "model_id": "cct-s-v2-global-model",
     "inference_ms": 18
   },
@@ -80,7 +81,9 @@ Paddle), and the whole install is ~30 MB on top of the SDK.
 
 ### Per-call confidence override
 
-The adapter applies a default minimum-confidence floor of **0.30**. Below
+The adapter applies a default minimum-confidence floor of **0.45**
+(`OPENNVR_LPR_MIN_CONFIDENCE`; the overall confidence is the lowest
+per-character probability). Below
 that the response still carries the best candidate but `accepted=false`,
 so the orchestrator can decide whether to drop the alert or surface it
 as a low-confidence read.
@@ -196,7 +199,7 @@ weights are downloaded and tests run on every machine including CI.
 adapters/fast_plate_ocr/
 ├── main.py          SDK glue + AdapterApp construction
 ├── service.py       FastPlateOcrService: AdapterService implementation
-├── Dockerfile       multi-stage CPU-only build
+├── Dockerfile       one Dockerfile, three flavours: CPU, ACCEL=intel (OpenVINO), ACCEL=qualcomm (the Hexagon NPU through onnxruntime-qnn)
 ├── README.md        you are here
 └── __init__.py
 ```

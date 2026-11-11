@@ -4,7 +4,9 @@
 # Build (from the ai-adapter repo root):
 #   docker build -f adapters/fast_plate_ocr/Dockerfile -t opennvr/fast-plate-ocr-adapter:1.0.0 .
 #
-# Run (CPU only — fast-plate-ocr does not benefit from GPU):
+# Run (the CPU image; the -intel and -qualcomm flavours below run the
+# same graphs on OpenVINO and on the Hexagon NPU — 79 ms a plate on the
+# Ventuno Q against 276 ms on its CPU):
 #   docker run --rm -p 9004:9004 \
 #     -e OPENNVR_ADAPTER_TOKEN=<token> \
 #     opennvr/fast-plate-ocr-adapter:1.0.0

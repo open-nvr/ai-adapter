@@ -554,8 +554,8 @@ jobs:
 
   # OpenNVR Accelerate — the Qualcomm flavour of the ONNX adapters: same
   # Dockerfile, ACCEL=qualcomm (plain onnxruntime + the onnxruntime-qnn
-  # user-space, scripts/install-intel-runtime.sh), every tag with an -intel
-  # suffix, amd64 only. A separate job so the cpu checks keep their names.
+  # plugin for the Hexagon NPU), every tag with a -qualcomm suffix,
+  # linux/arm64 only. A separate job so the cpu checks keep their names.
   build-and-push-qualcomm:
     name: ${{ matrix.adapter.image }} (qualcomm)
     runs-on: ubuntu-latest
