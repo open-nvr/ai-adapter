@@ -231,12 +231,42 @@ class FastPlateOcrService(AdapterService):
                 # discovery-only code paths.
                 from fast_plate_ocr import LicensePlateRecognizer
                 from opennvr_adapter_sdk.providers import (
-                    build_with_fallback, effective_providers, session_providers)
+                    build_with_fallback, effective_providers, session_providers,
+                    static_shapes, wants_static_shapes)
 
                 # Providers from ADAPTER_ONNX_PROVIDERS resolved against this build
                 # (OpenNVR Accelerate flavours): both the recogniser and the plate
                 # detector take the same onnxruntime provider list.
                 self._requested_providers = session_providers()
+                # An accelerator that compiles the graph whole (the QNN HTP, an
+                # OpenVINO device) takes a dynamic-shape graph node by node —
+                # which for the OCR export means almost nothing. The library's
+                # models carry a symbolic batch (``['unk', 64, 128, 3]``), so
+                # the batch is pinned to 1 (the service reads one crop per
+                # call) before the session is built; the SDK's constructor
+                # shim writes the fixed-shape copy and compiles that. Measured
+                # on a Ventuno Q (QCS8275, 2026-11-11): dynamic, QNN took 2 of
+                # 377 nodes — 62 ms wall and 501 ms of CPU per read across
+                # 6.5 cores, enough for two reads in flight to starve the
+                # detector; pinned, every node on the HTP — 10 ms wall and
+                # 1 ms of CPU per read.
+                self._pinned_input: dict[str, list[int]] | None = None
+                if wants_static_shapes(self._requested_providers):
+                    if self._model_path:
+                        self._pinned_input = _pinned_input(self._model_path)
+                    if self._pinned_input:
+                        self._requested_providers = static_shapes(
+                            self._requested_providers, self._pinned_input)
+                        logger.info(
+                            "plate OCR input pinned to %s: the accelerator "
+                            "compiles a graph whole or not at all",
+                            self._pinned_input)
+                    elif not self._model_path:
+                        logger.warning(
+                            "plate OCR model %s has no on-disk path, so its "
+                            "graph cannot be pinned; the accelerator may take "
+                            "only part of it (bundle the model, or set "
+                            "OPENNVR_LPR_MODEL_PATH)", self._model_id)
 
                 def _build_recognizer(providers):
                     if self._model_path:
@@ -764,6 +794,37 @@ def _parse_recognizer_output(raw: Any) -> tuple[str, list[dict[str, Any]], float
             {"char": ch, "confidence": round(overall, 4)} for ch in text
         ]
     return text, characters, overall
+
+
+def _input_dims(model_path: str) -> tuple[str, list[int | None]] | None:
+    """Name and shape of the model's first input, a symbolic dim as None.
+    Read through a CPU session so no accelerator is touched; None when
+    the file is not a loadable model."""
+    try:
+        import onnxruntime as ort
+
+        probe = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        meta = probe.get_inputs()[0]
+        shape = [d if isinstance(d, int) and d > 0 else None
+                 for d in (getattr(meta, "shape", None) or [])]
+        return meta.name, shape
+    except Exception as exc:  # noqa: BLE001 — the pin is an optimisation, never a gate
+        logger.warning("plate OCR: could not read the input shape of %s (%s); "
+                       "the graph is compiled as exported", model_path, exc)
+        return None
+
+
+def _pinned_input(model_path: str) -> dict[str, list[int]] | None:
+    """``{input: dims}`` with every symbolic dim of the first input set to 1,
+    for :func:`opennvr_adapter_sdk.providers.static_shapes`; None when the
+    export is already static (nothing to pin) or unreadable."""
+    dims = _input_dims(model_path)
+    if not dims:
+        return None
+    name, shape = dims
+    if not shape or all(d is not None for d in shape):
+        return None
+    return {name: [d if d is not None else 1 for d in shape]}
 
 
 def _recognizer_model_path(recognizer: Any) -> str | None:

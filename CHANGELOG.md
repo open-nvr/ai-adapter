@@ -9,6 +9,16 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **fast-plate-ocr reads on the Hexagon NPU, not beside it.** The OCR
+  export has a symbolic batch, and the QNN HTP compiles fixed shapes only,
+  so on the qualcomm flavour it took 2 of the model's 377 nodes and left
+  the rest to the CPU: 62 ms and 501 ms of CPU per read across 6.5 cores,
+  measured on a Ventuno Q — enough for two reads in flight to slow the
+  detector. The service now pins the batch to 1 before the session is
+  built (one crop per call) and the SDK shim compiles a fixed-shape copy:
+  every node on the HTP, 10 ms and 1 ms of CPU per read. The first start
+  compiles once; a model with no on-disk path is left as exported and the
+  log says so.
 ### Fixed
 
 - **fast-plate-ocr's docs say what it does.** The README, the Dockerfile
