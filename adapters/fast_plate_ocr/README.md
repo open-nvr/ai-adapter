@@ -130,6 +130,13 @@ read of the `indian-plates-v1` model:
 | as exported (2 nodes on the HTP) | 62 ms | 501 ms across 6.5 cores |
 | batch pinned (every node on the HTP) | 10 ms | 1 ms |
 
+Through the production path (core → KAI-C → adapter, two reads in flight)
+the per-call latency did not move — 77 ms before, 80 ms after, with the
+JPEG decode of the vehicle frame and the proxy hop inside it — and with
+the Gemma captioner running on the same HTP it stayed at about 365 ms either
+way: on a shared NPU the wait for the device, not this graph, sets the
+latency. What the pin buys is the CPU the OCR graph no longer needs.
+
 The first start after this change compiles the fixed-shape graph once
 (the old compiled context is not reused). A model without an on-disk path
 (a hub id that is not bundled) cannot be pinned; the log says so, and

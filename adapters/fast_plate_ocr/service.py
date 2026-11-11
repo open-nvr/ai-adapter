@@ -251,11 +251,14 @@ class FastPlateOcrService(AdapterService):
                 # detector; pinned, every node on the HTP — 10 ms wall and
                 # 1 ms of CPU per read.
                 self._pinned_input: dict[str, list[int]] | None = None
+                recognizer_providers = self._requested_providers
                 if wants_static_shapes(self._requested_providers):
                     if self._model_path:
                         self._pinned_input = _pinned_input(self._model_path)
                     if self._pinned_input:
-                        self._requested_providers = static_shapes(
+                        # The pin is the OCR graph's; the plate detector
+                        # (a static export) keeps the plain list.
+                        recognizer_providers = static_shapes(
                             self._requested_providers, self._pinned_input)
                         logger.info(
                             "plate OCR input pinned to %s: the accelerator "
@@ -279,11 +282,13 @@ class FastPlateOcrService(AdapterService):
 
                 # An accelerator that cannot start must not take the adapter
                 # down: build_with_fallback rebuilds on CPU and the report says why.
-                self._recognizer, self._requested_providers, fallback = build_with_fallback(
-                    _build_recognizer, self._requested_providers, adapter="fast-plate-ocr")
+                self._recognizer, used, fallback = build_with_fallback(
+                    _build_recognizer, recognizer_providers, adapter="fast-plate-ocr")
+                if fallback:
+                    self._requested_providers = used   # CPU for everything, pin moot
                 self._fingerprint_cache = self._compute_fingerprint()
                 self._provider_report = effective_providers(
-                    _session_of(self._recognizer), self._requested_providers, adapter="fast-plate-ocr",
+                    _session_of(self._recognizer), used, adapter="fast-plate-ocr",
                     fallback_error=fallback)
                 self._load_state = HealthStatus.OK
                 self._load_error = None

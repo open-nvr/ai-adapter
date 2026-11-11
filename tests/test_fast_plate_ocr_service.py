@@ -631,6 +631,10 @@ def test_a_symbolic_batch_is_pinned_before_the_recogniser_is_built(
     qnn = next(e for e in handed if isinstance(e, tuple) and e[0] == "QNNExecutionProvider")
     assert qnn[1][FIXED_SHAPES_KEY] == "input[1,64,128,3]"
     assert svc._pinned_input == {"input": [1, 64, 128, 3]}
+    # The plate detector is a static export built from the same list: it
+    # gets the plain providers, not the OCR graph's pin.
+    det = fast_plate_ocr_environment["fake_detector_cls"].last_create_kwargs["providers"]
+    assert det == [("QNNExecutionProvider", {"backend_type": "htp"}), "CPUExecutionProvider"]
 
 
 def test_a_static_export_is_left_alone(fast_plate_ocr_environment, monkeypatch, tmp_path):
