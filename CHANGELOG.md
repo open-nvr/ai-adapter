@@ -9,6 +9,12 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **fast-plate-ocr: the whole-graph HTP pin is off by default.** The pin
+  shipped in #89 compiles the OCR export whole for the Hexagon and, measured
+  on the Ventuno Q, answers one constant string for every crop while the
+  CPU path reads them all. Default back to the partially offloaded graph
+  that reads correctly; `OPENNVR_LPR_PIN_BATCH=1` turns the pin on for
+  anyone chasing the fp16 numerics.
 - **fast-plate-ocr reads on the Hexagon NPU, not beside it.** The OCR
   export has a symbolic batch, and the QNN HTP compiles fixed shapes only,
   so on the qualcomm flavour it took 2 of the model's 377 nodes and left
