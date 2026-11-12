@@ -9,35 +9,9 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- **fast-plate-ocr: the whole-graph HTP pin is off by default.** The pin
-  shipped in #89 compiles the OCR export whole for the Hexagon and, measured
-  on the Ventuno Q, answers one constant string for every crop while the
-  CPU path reads them all. Default back to the partially offloaded graph
-  that reads correctly; `OPENNVR_LPR_PIN_BATCH=1` turns the pin on for
-  anyone chasing the fp16 numerics.
-- **fast-plate-ocr reads on the Hexagon NPU, not beside it.** The OCR
-  export has a symbolic batch, and the QNN HTP compiles fixed shapes only,
-  so on the qualcomm flavour it took 2 of the model's 377 nodes and left
-  the rest to the CPU: 62 ms and 501 ms of CPU per read across 6.5 cores,
-  measured on a Ventuno Q — enough for two reads in flight to slow the
-  detector. The service now pins the batch to 1 before the session is
-  built (one crop per call) and the SDK shim compiles a fixed-shape copy:
-  every node on the HTP, 10 ms and 1 ms of CPU per read. Through core and
-  KAI-C the per-call latency is unchanged (the frame decode and the proxy
-  hop, and on a shared HTP the wait for the device, set it); the saving is
-  the CPU. The SDK's shape pin now takes a `pathlib.Path` as well as a
-  `str`: the library hands its model that way, and the pin had been
-  silently skipped as "in-memory". The first start compiles once; a model
-  with no on-disk path is left as exported and the log says so.
-### Fixed
+## [0.1.11] — 2026-11-12
 
-- **fast-plate-ocr's docs say what it does.** The README, the Dockerfile
-  and the service docstring described a "YOLOv8 → crop → OCR" chain
-  and a "pre-cropped plate image"; the adapter has localised the plate
-  in a vehicle crop itself (open-image-models yolo-v9-t-384) since 0.1.5,
-  its default floor is 0.45 (not 0.30), and it ships in CPU, -intel and
-  -qualcomm flavours (the Dockerfile said "CPU only"). The qualcomm
-  publish job's comment no longer says "-intel suffix, amd64 only".
+The Qualcomm NPU release: every adapter at `0.1.11`, the ONNX adapters also at `0.1.11-intel` and `0.1.11-qualcomm`. New on the Hexagon HTP: Gemma captions and an OpenAI-compatible chat endpoint (litertlm), Whisper-Small speech to text (whisper_qnn), SigLIP 2 embeddings (siglip_qnn), sentence embeddings for search's caption arm (text_embed, CPU), and the plate OCR graph compiled whole for the HTP (fast-plate-ocr, off by default after it misread on the board). SDK stays 1.4.0 on PyPI; the fixes under its own Unreleased ship in the images.
 
 ### Added
 
@@ -60,6 +34,7 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in, no egress. OpenNVR's core picks it for caption vectors and the
   caption arm's query where registered, and falls back to the embed
   adapter's text tower where not.
+
 - **`whisper_qnn`: Whisper-Small on the Qualcomm Hexagon NPU.** A third ASR
   adapter, for the camera agent on the Ventuno Q, where speech-to-text on
   the CPU (parakeet) took 0.7–2.3 s an utterance and had no confidence
@@ -75,8 +50,6 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   image (`--build-arg WHISPER_QNN_CHIPSET=` for another chip in the release).
   Published in the qualcomm flavour as `whisper-qnn-adapter`, port 9020.
   Not yet measured on the hardware.
-
-### Added
 
 - **litertlm: an OpenAI-compatible chat endpoint on the NPU engine.**
   `POST /v1/chat/completions` on the caption adapter, same engine, same
@@ -108,7 +81,50 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to 768 px before the model. Without `/dev/fastrpc-cdsp` the adapter
   stays up and `/hardware/evaluation` is `blocked` with the reason.
 
+- **InsightFace: a recognition miss carries its evidence.** The
+  `face_recognition` reply for a face below the threshold now includes
+  `similarity` (the nearest enrolled face, below the threshold by
+  definition and deliberately unnamed; `null` when nobody is enrolled)
+  and `confidence` (the detector's score for the face). A match reply
+  gains `confidence` too. A caller can now hold its verdict on a
+  side-on frame at 0.45 instead of calling a known person a stranger;
+  the Smart Doorbell's per-visit decision reads both. Additive: the
+  wire shape for a match is unchanged, and `recognized: false` means
+  what it did.
+
+### Changed
+
+- **fast-plate-ocr: the whole-graph HTP pin is off by default.** The pin
+  shipped in #89 compiles the OCR export whole for the Hexagon and, measured
+  on the Ventuno Q, answers one constant string for every crop while the
+  CPU path reads them all. Default back to the partially offloaded graph
+  that reads correctly; `OPENNVR_LPR_PIN_BATCH=1` turns the pin on for
+  anyone chasing the fp16 numerics.
+
+- **fast-plate-ocr reads on the Hexagon NPU, not beside it.** The OCR
+  export has a symbolic batch, and the QNN HTP compiles fixed shapes only,
+  so on the qualcomm flavour it took 2 of the model's 377 nodes and left
+  the rest to the CPU: 62 ms and 501 ms of CPU per read across 6.5 cores,
+  measured on a Ventuno Q — enough for two reads in flight to slow the
+  detector. The service now pins the batch to 1 before the session is
+  built (one crop per call) and the SDK shim compiles a fixed-shape copy:
+  every node on the HTP, 10 ms and 1 ms of CPU per read. Through core and
+  KAI-C the per-call latency is unchanged (the frame decode and the proxy
+  hop, and on a shared HTP the wait for the device, set it); the saving is
+  the CPU. The SDK's shape pin now takes a `pathlib.Path` as well as a
+  `str`: the library hands its model that way, and the pin had been
+  silently skipped as "in-memory". The first start compiles once; a model
+  with no on-disk path is left as exported and the log says so.
+
 ### Fixed
+
+- **fast-plate-ocr's docs say what it does.** The README, the Dockerfile
+  and the service docstring described a "YOLOv8 → crop → OCR" chain
+  and a "pre-cropped plate image"; the adapter has localised the plate
+  in a vehicle crop itself (open-image-models yolo-v9-t-384) since 0.1.5,
+  its default floor is 0.45 (not 0.30), and it ships in CPU, -intel and
+  -qualcomm flavours (the Dockerfile said "CPU only"). The qualcomm
+  publish job's comment no longer says "-intel suffix, amd64 only".
 
 - **litertlm chat: the agent's second iteration works.** A tool result
   goes back to the engine as one `tool` turn of `tool_response` parts
@@ -129,25 +145,13 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without it the adapter runs on the classic CPU list, `/hardware/evaluation`
   says `accelerator_in_use: false`, and the log names the missing file and
   the overlay that lends it. SDK 1.4.x.
+
 - **ollamavlm: a failed auto-pull is a hard error with its cause.** A pull
   that died ("no space left on device") left `/infer` answering
   `model_not_pulled, transient, auto-pull is running — retry shortly` for an
   hour. It now answers `model_pull_failed`, not transient, with Ollama's own
   reason and the fix; `/hardware/evaluation` is `blocked` with the same text
   until the model appears (pulled by hand, or the adapter restarted).
-
-### Added
-
-- **InsightFace: a recognition miss carries its evidence.** The
-  `face_recognition` reply for a face below the threshold now includes
-  `similarity` (the nearest enrolled face, below the threshold by
-  definition and deliberately unnamed; `null` when nobody is enrolled)
-  and `confidence` (the detector's score for the face). A match reply
-  gains `confidence` too. A caller can now hold its verdict on a
-  side-on frame at 0.45 instead of calling a known person a stranger;
-  the Smart Doorbell's per-visit decision reads both. Additive: the
-  wire shape for a match is unchanged, and `recognized: false` means
-  what it did.
 
 ## [0.1.10] — 2026-10-31
 
@@ -766,7 +770,8 @@ permits.
 
 ---
 
-[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.11...HEAD
+[0.1.11]: https://github.com/open-nvr/ai-adapter/compare/v0.1.10...v0.1.11
 [0.1.4]: https://github.com/open-nvr/ai-adapter/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/open-nvr/ai-adapter/compare/v0.1.1...v0.1.3
 [0.1.1]: https://github.com/open-nvr/ai-adapter/compare/v0.1.0...v0.1.1
