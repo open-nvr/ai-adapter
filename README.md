@@ -237,6 +237,7 @@ and the vendor user-space, and one env var picks the device at run time.
 |---|---|---|---|
 | `cpu` (default) | `<tag>` | amd64, arm64 | `onnxruntime` |
 | `intel` | `<tag>-intel` | amd64 | `onnxruntime-openvino` + Intel OpenCL / NPU user-space (`scripts/install-intel-runtime.sh`) → OpenVINO on the iGPU or NPU |
+| `qualcomm` | `<tag>-qualcomm` | arm64 | `onnxruntime` + the `onnxruntime-qnn` plugin → the Hexagon NPU (HTP) on Dragonwing / Snapdragon boards; also the `-qualcomm`-only adapters `litertlm` (Gemma captions and chat), `whisper_qnn` (speech) and `siglip_qnn` (search embeddings). Measured on an Arduino Ventuno Q lent by [Indus Technologies](https://www.industechno.com): detection 59–67 ms vs 152 on the ARM cores, faces 57–60 vs 436–485, plates 66–84 vs 272 |
 
 ```bash
 docker build --build-arg ACCEL=intel -f adapters/yolov8/Dockerfile -t yolov8-adapter:intel .
