@@ -11,7 +11,7 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.11] — 2026-11-12
 
-The Qualcomm NPU release: every adapter at `0.1.11`, the ONNX adapters also at `0.1.11-intel` and `0.1.11-qualcomm`. New on the Hexagon HTP: Gemma captions and an OpenAI-compatible chat endpoint (litertlm), Whisper-Small speech to text (whisper_qnn), SigLIP 2 embeddings (siglip_qnn), sentence embeddings for search's caption arm (text_embed, CPU), and the plate OCR graph compiled whole for the HTP (fast-plate-ocr, off by default after it misread on the board). SDK stays 1.4.0 on PyPI; the fixes under its own Unreleased ship in the images.
+The Qualcomm NPU release: every adapter at `0.1.11`, the ONNX adapters also at `0.1.11-intel` and `0.1.11-qualcomm`. New on the Hexagon HTP: Gemma captions and an OpenAI-compatible chat endpoint (litertlm), Whisper-Small speech to text (whisper_qnn), SigLIP 2 embeddings (siglip_qnn), sentence embeddings for search's caption arm (text_embed, CPU), and the plate OCR graph compiled whole for the HTP (fast-plate-ocr, off by default after it misread on the board). SDK 1.4.1 on PyPI (`sdk-v1.4.1`): the QNN DSP-node refusal and the conformance runner's fix, which until now shipped only inside the images.
 
 ### Added
 

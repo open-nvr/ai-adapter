@@ -1,0 +1,47 @@
+fix(sdk): close nine silent-failure defects found in review
+
+Every one of these reported success while doing nothing useful, which
+is the class of bug that survives a test suite unless it is pinned.
+
+/health could never say `error`. `is_ready()` is a bool, so a model
+that FAILED to load was indistinguishable from one still loading:
+/health answered `loading` forever, Docker's healthcheck passed, and
+`opennvr-adapter validate` recorded PASS on a dead adapter. Adds an
+optional `AdapterService.health_status()` (the facade returns its real
+state) and makes the conformance runner FAIL on `error` and WARN on
+`loading`.
+
+The fingerprint was re-hashed on every /health and twice per
+/capabilities — 1182 ms for a 1.6 GB weights file, past the contract's
+1000 ms budget on a 60s poll. Now cached on (path, size, mtime), so a
+swapped file still changes the digest and drift detection is intact.
+
+`opennvr-adapter dev` always sent `frame_b64`, so it reported audio and
+text adapters as broken. It now picks the body from the handler that
+was registered; adds a built-in silent WAV and a default prompt.
+
+The AsyncAPI document had three dangling $refs — `$defs` were dropped,
+leaving FrameTransport and StreamCloseCode referenced and undefined.
+Nested definitions are now lifted into components.schemas.
+
+A decorator used below `app = adapter.app` was silently ignored
+(supports_stream and the body shape freeze when the app is built). It
+now raises and says where the line belongs.
+
+The scaffolded pyproject declared `module:app` as a console script,
+naming a FastAPI instance; the template gains a real `main()`.
+
+The adapter catalog compared raw task strings, so `?task=speech_to_text`
+answered count=0 while listing an adapter advertising
+`audio_transcription`. It now canonicalizes through tasks.yml, both for
+the filter and for the grouping map.
+
+The index validator warned about only the first declared egress host, so
+an adapter that disclosed its vendor API and quietly added a telemetry
+endpoint passed clean.
+
+Also: TypeError from a handler is a 500 `model_error` with a traceback
+rather than a 400 blamed on the caller; a bbox outside 0-1 warns once
+instead of clamping silently; `validate` no longer prints
+"Non-loopback HTTP" about a host it never bound; the tier is
+constrained in the router and kept in step with the validator by a test.
