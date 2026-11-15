@@ -9,6 +9,10 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.12] — 2026-11-16
+
+Released with OpenNVR 0.1.12 so the two repositories carry the same number. No adapter changed: every image at `0.1.12` (and `0.1.12-intel` / `0.1.12-qualcomm` for the ONNX adapters) is built from the same adapter code as `0.1.11`. Adapter SDK 1.4.1, published on 2026-11-13, is the SDK in this tree.
+
 ## [0.1.11] — 2026-11-12
 
 The Qualcomm NPU release: every adapter at `0.1.11`, the ONNX adapters also at `0.1.11-intel` and `0.1.11-qualcomm`. New on the Hexagon HTP: Gemma captions and an OpenAI-compatible chat endpoint (litertlm), Whisper-Small speech to text (whisper_qnn), SigLIP 2 embeddings (siglip_qnn), sentence embeddings for search's caption arm (text_embed, CPU), and the plate OCR graph compiled whole for the HTP (fast-plate-ocr, off by default after it misread on the board). SDK 1.4.1 on PyPI (`sdk-v1.4.1`): the QNN DSP-node refusal and the conformance runner's fix, which until now shipped only inside the images.
@@ -770,7 +774,8 @@ permits.
 
 ---
 
-[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.11...HEAD
+[Unreleased]: https://github.com/open-nvr/ai-adapter/compare/v0.1.12...HEAD
+[0.1.12]: https://github.com/open-nvr/ai-adapter/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/open-nvr/ai-adapter/compare/v0.1.10...v0.1.11
 [0.1.4]: https://github.com/open-nvr/ai-adapter/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/open-nvr/ai-adapter/compare/v0.1.1...v0.1.3
