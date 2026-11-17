@@ -41,8 +41,10 @@ import io
 import logging
 import os
 import platform
+import shutil
 import threading
 import time
+import zipfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -57,6 +59,8 @@ from opennvr_adapter_sdk import (
     ServiceError,
 )
 
+from opennvr_adapter_sdk.model_fetch import ensure_model_file
+
 from adapters.insightface.face_db import FaceDB
 
 logger = logging.getLogger(__name__)
@@ -67,6 +71,26 @@ logger = logging.getLogger(__name__)
 # Operators override via the OPENNVR_INSIGHTFACE_MODEL env var.
 DEFAULT_MODEL_PACK: str = "buffalo_l"
 DEFAULT_MIN_FACE_CONFIDENCE: float = 0.5
+
+# Where the model pack lives and where it comes from. InsightFace's own
+# downloader has no timeouts and writes straight to the final zip, so a
+# stalled transfer hangs load() for good, and a cut one leaves an empty
+# pack directory that every later boot takes for an installed pack. The
+# adapter installs the pack itself first (timeouts, a .part file, a zip
+# check, an atomic rename), and FaceAnalysis then finds it in place.
+# OPENNVR_INSIGHTFACE_MODEL_ROOT moves the cache; OPENNVR_INSIGHTFACE_
+# MODEL_URL points at a mirror, and set to "" it turns fetching off.
+DEFAULT_MODEL_ROOT: str = "~/.insightface"
+MODEL_ZOO_URL: str = (
+    "https://github.com/deepinsight/insightface/releases/download/"
+    "model-zoo/{pack}.zip"
+)
+
+# A failed pack download is retried in the background, forever, with the
+# delay doubling up to the cap: a site whose link drops at boot gets face
+# recognition back by itself when the link returns, no restart needed.
+RETRY_FIRST_DELAY_S: float = 5.0
+RETRY_MAX_DELAY_S: float = 300.0
 DEFAULT_RECOGNITION_THRESHOLD: float = 0.5
 
 # Detector input size (square). The pack's detector sees the frame
@@ -116,6 +140,83 @@ def _det_size_from_env() -> int:
     return size
 
 
+def _has_onnx(path: str) -> bool:
+    try:
+        return any(name.endswith(".onnx") for name in os.listdir(path))
+    except OSError:
+        return False
+
+
+def ensure_model_pack(
+    root: str,
+    pack: str,
+    url: str | None,
+    *,
+    log: logging.Logger | None = None,
+) -> str:
+    """Install model pack ``pack`` under ``<root>/models/<pack>`` if it
+    is not there yet, and return that directory.
+
+    A directory holding at least one ``.onnx`` file counts as installed
+    and is never touched, so a pack copied in by hand always wins.
+    Otherwise ``url`` (``{pack}`` is filled in) is downloaded through the
+    SDK's ``ensure_model_file`` (``.part`` file, read timeout), checked
+    as a zip, extracted beside the target and renamed into place. Any
+    failure leaves nothing a later attempt would mistake for a pack.
+    Raises ``FileNotFoundError`` when the pack is missing and ``url`` is
+    empty (fetching turned off)."""
+    log = log or logger
+    models_dir = os.path.join(os.path.expanduser(root), "models")
+    pack_dir = os.path.join(models_dir, pack)
+    if _has_onnx(pack_dir):
+        return pack_dir
+    if not url:
+        raise FileNotFoundError(
+            f"InsightFace model pack {pack!r} is not installed at "
+            f"{pack_dir} and fetching is off (OPENNVR_INSIGHTFACE_MODEL_URL"
+            f" is empty). Copy the pack's .onnx files there and restart.")
+
+    zip_path = pack_dir + ".zip"
+    # A zip left by InsightFace's own downloader may be cut short; the
+    # SDK helper would reuse any non-empty file, so drop a broken one.
+    if os.path.exists(zip_path) and not zipfile.is_zipfile(zip_path):
+        os.remove(zip_path)
+    ensure_model_file(zip_path, url.format(pack=pack),
+                      label=f"InsightFace pack {pack}", logger=log)
+
+    staging = pack_dir + ".partial"
+    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            broken = zf.testzip()
+            if broken is not None:
+                raise zipfile.BadZipFile(f"{zip_path}: member {broken!r} is corrupt")
+            zf.extractall(staging)
+    except zipfile.BadZipFile:
+        shutil.rmtree(staging, ignore_errors=True)
+        os.remove(zip_path)  # the next attempt downloads it afresh
+        raise
+    source = staging
+    if not _has_onnx(source):
+        # Some packs (antelopev2) zip their files inside a folder named
+        # after the pack; InsightFace wants them one level up.
+        subdirs = [os.path.join(staging, d) for d in os.listdir(staging)
+                   if os.path.isdir(os.path.join(staging, d))]
+        if len(subdirs) == 1 and _has_onnx(subdirs[0]):
+            source = subdirs[0]
+        else:
+            shutil.rmtree(staging, ignore_errors=True)
+            os.remove(zip_path)
+            raise zipfile.BadZipFile(f"{zip_path} holds no .onnx files")
+    # An empty or partial directory from an earlier cut download.
+    shutil.rmtree(pack_dir, ignore_errors=True)
+    os.replace(source, pack_dir)
+    shutil.rmtree(staging, ignore_errors=True)
+    os.remove(zip_path)
+    log.info("InsightFace pack %s installed at %s", pack, pack_dir)
+    return pack_dir
+
+
 class InsightFaceService(AdapterService):
     """SDK-based face-recognition service backed by InsightFace."""
 
@@ -137,6 +238,15 @@ class InsightFaceService(AdapterService):
         self._fingerprint_cache: str | None = None
         self._fingerprint_stat_key: tuple[str, int, int] | None = None
         self._det_size: int = DEFAULT_DET_SIZE  # resolved in load()
+        self._model_root: str = (
+            os.getenv("OPENNVR_INSIGHTFACE_MODEL_ROOT", "").strip()
+            or DEFAULT_MODEL_ROOT)
+        url = os.environ.get("OPENNVR_INSIGHTFACE_MODEL_URL")
+        self._model_url: str = MODEL_ZOO_URL if url is None else url.strip()
+        # Pack-download retry state (see _schedule_retry).
+        self._retry_delay_s: float = RETRY_FIRST_DELAY_S
+        self._retry_at: float | None = None
+        self._retry_timer: threading.Timer | None = None
         self._lock = threading.Lock()
         self._started_at: datetime = datetime.now(timezone.utc)
         # Allow injection for tests; production constructs its own.
@@ -148,12 +258,28 @@ class InsightFaceService(AdapterService):
         with self._lock:
             if self._load_state == HealthStatus.OK:
                 return
+            self._retry_timer = None
+            self._retry_at = None
             # Domain metrics (registration is idempotent in the SDK).
             self.metrics.register_counter(
                 "adapter_faces_total",
                 "Faces processed, by pipeline stage.",
                 label_key="stage",
                 allowed_values=("detected", "recognized", "unrecognized"))
+            # The pack first, on its own: a download that fails is the
+            # network, not the adapter, so it is retried rather than
+            # left as a dead adapter until someone restarts it.
+            try:
+                ensure_model_pack(self._model_root, self._model_pack,
+                                  self._model_url)
+            except FileNotFoundError as exc:  # fetching off, pack absent
+                self._load_state = HealthStatus.ERROR
+                self._load_error = str(exc)
+                logger.error("%s", exc)
+                return
+            except Exception as exc:
+                self._schedule_retry(exc)
+                return
             try:
                 # Lazy import per the project's "no heavy imports at
                 # discovery time" convention.
@@ -194,7 +320,8 @@ class InsightFaceService(AdapterService):
                 self._face_app, self._requested_providers, self._fallback_error = (
                     build_with_fallback(
                         lambda providers: FaceAnalysis(
-                            name=self._model_pack, providers=providers,
+                            name=self._model_pack, root=self._model_root,
+                            providers=providers,
                             allowed_modules=["detection", "recognition"]),
                         self._requested_providers, adapter="insightface"))
                 # ctx_id=-1 keeps it on CPU. GPU users override via
@@ -210,6 +337,7 @@ class InsightFaceService(AdapterService):
                 self._fingerprint_cache = self._compute_fingerprint()
                 self._load_state = HealthStatus.OK
                 self._load_error = None
+                self._retry_delay_s = RETRY_FIRST_DELAY_S
                 logger.info(
                     "InsightFaceService ready: pack=%s ctx_id=%d det_size=%d fingerprint=%s",
                     self._model_pack, ctx_id, det, self._fingerprint_cache,
@@ -222,8 +350,34 @@ class InsightFaceService(AdapterService):
                     self._model_pack,
                 )
 
+    def _schedule_retry(self, exc: Exception) -> None:
+        """Stay LOADING and try load() again later. Called with the lock
+        held; the timer thread takes it again when it fires."""
+        delay = self._retry_delay_s
+        self._retry_delay_s = min(delay * 2, RETRY_MAX_DELAY_S)
+        self._load_state = HealthStatus.LOADING
+        self._retry_at = time.monotonic() + delay
+        self._load_error = (
+            f"InsightFace model pack {self._model_pack!r} could not be "
+            f"downloaded ({type(exc).__name__}: {exc}); retrying in "
+            f"{delay:.0f}s")
+        logger.warning("%s", self._load_error)
+        self._retry_timer = self._start_retry_timer(delay)
+
+    def _start_retry_timer(self, delay: float) -> threading.Timer:
+        # A seam for tests, which fire the retry by hand.
+        timer = threading.Timer(delay, self.load)
+        timer.daemon = True
+        timer.start()
+        return timer
+
     def is_ready(self) -> bool:
         return self._load_state == HealthStatus.OK
+
+    def health_status(self) -> HealthStatus:
+        """The real state: ``error`` for a load that failed for good,
+        ``loading`` while the pack download is still being retried."""
+        return self._load_state
 
     def fingerprint(self) -> str | None:
         try:
@@ -268,7 +422,7 @@ class InsightFaceService(AdapterService):
             )
         elif self._load_state == HealthStatus.LOADING:
             verdict = HardwareVerdict.WARN
-            reasoning = "Model still loading."
+            reasoning = self._load_error or "Model still loading."
         else:
             verdict = HardwareVerdict.BLOCKED
             reasoning = f"Model failed to load: {self._load_error}"
@@ -305,13 +459,19 @@ class InsightFaceService(AdapterService):
         """
         if not self.is_ready():
             transient = self._load_state == HealthStatus.LOADING
+            retry_after_ms = None
+            if transient:
+                retry_after_ms = 2000
+                if self._retry_at is not None:
+                    retry_after_ms = max(
+                        1000, int((self._retry_at - time.monotonic()) * 1000))
             raise ServiceError(
                 ErrorCategory.MODEL_ERROR,
                 code="model_not_loaded",
                 message=self._load_error or "InsightFace model not yet loaded",
                 transient=transient,
                 http_status=503,
-                retry_after_ms=2000 if transient else None,
+                retry_after_ms=retry_after_ms,
             )
 
         image_bytes = payload.get("__file__")

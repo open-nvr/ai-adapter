@@ -200,19 +200,49 @@ The `/capabilities` fingerprint changes after the swap — KAI-C surfaces
 that as an `adapter.fingerprint_mismatch` audit event, which is the
 intended behaviour.
 
+### Model pack download
+
+The image ships without the model pack. On first start the adapter
+downloads `<pack>.zip` from InsightFace's `model-zoo` release (about 275 MB
+for `buffalo_l`) and installs it under
+`OPENNVR_INSIGHTFACE_MODEL_ROOT/models/<pack>/` (default
+`~/.insightface`, so mount `/root/.insightface` to keep it). Every later
+start finds it there and never touches the network.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPENNVR_INSIGHTFACE_MODEL_ROOT` | `~/.insightface` | Pack cache; the pack lives in `models/<pack>/` under it |
+| `OPENNVR_INSIGHTFACE_MODEL_URL` | the `model-zoo` release URL | Where to fetch `{pack}.zip` (a mirror, or a `file://` path); empty turns fetching off |
+
+The download is the adapter's own, not InsightFace's: it has timeouts,
+goes to a `.part` file, is checked as a zip and is renamed into place, so
+a cut transfer never leaves something a later start takes for a pack.
+
+**A failed download is retried in the background**, after 5 s and then
+doubling up to every 5 minutes, for as long as it takes. Meanwhile
+`/health` says `loading` and `/infer` answers `503 model_not_loaded`
+with `transient: true`, the reason and a `retry_after_ms`. When the
+download succeeds the adapter becomes ready without a restart. A load
+that cannot succeed by retrying (fetching off with no pack, a model
+onnxruntime cannot build, a bad `OPENNVR_INSIGHTFACE_DET_SIZE`) reports
+`error` on `/health` instead of `loading`.
+
 ### Sovereignty
 
 `permissions.network_egress=[]` — InsightFace runs entirely on-device after
-the one-time model-pack download on first `prepare()`. Pre-warm the cache
-in your build pipeline if you're running in air-gapped mode:
+the one-time model-pack download. For an air-gapped site, or one whose
+uplink cannot reach GitHub, put the pack in place yourself; a pack
+directory holding `.onnx` files is always used as it is:
 
 ```bash
-docker run --rm -v $(pwd)/insightface-cache:/root/.insightface \
-  opennvr/insightface-adapter:local \
-  python -c "from insightface.app import FaceAnalysis; FaceAnalysis(name='buffalo_l').prepare(ctx_id=-1)"
+mkdir -p insightface-cache/models/buffalo_l
+unzip buffalo_l.zip -d insightface-cache/models/buffalo_l
+docker run ... -v $(pwd)/insightface-cache:/root/.insightface \
+  -e OPENNVR_INSIGHTFACE_MODEL_URL= opennvr/insightface-adapter:local
 ```
 
-Then mount the cache at runtime.
+The pack's weights are InsightFace's, under InsightFace's own licence
+terms, which is why the image does not carry them.
 
 ## Try it
 

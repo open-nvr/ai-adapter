@@ -132,6 +132,15 @@ def insightface_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     canned JPEG byte string."""
     db_path = tmp_path / "faces.json"
     monkeypatch.setenv("OPENNVR_INSIGHTFACE_FACE_DB", str(db_path))
+    # An installed pack in a sandboxed cache, and fetching off, so load()
+    # never reaches for the network (the fake FaceAnalysis ignores it).
+    model_root = tmp_path / "insightface"
+    pack_dir = model_root / "models" / "buffalo_l"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "det_10g.onnx").write_bytes(b"fake")
+    monkeypatch.setenv("OPENNVR_INSIGHTFACE_MODEL_ROOT", str(model_root))
+    monkeypatch.setenv("OPENNVR_INSIGHTFACE_MODEL_URL", "")
+    monkeypatch.delenv("OPENNVR_INSIGHTFACE_MODEL", raising=False)
 
     fake_cls = install_fake_insightface(
         [_FakeFace(embedding=_FAKE_EMBEDDING_ALICE)]
@@ -150,6 +159,7 @@ def insightface_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "embedding_alice": list(_FAKE_EMBEDDING_ALICE),
         "embedding_bob": list(_FAKE_EMBEDDING_BOB),
         "FakeFace": _FakeFace,
+        "model_root": model_root,
     }
 
 

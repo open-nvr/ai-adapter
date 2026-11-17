@@ -9,6 +9,31 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`insightface`: a model-pack download that fails at boot no longer
+  leaves the adapter dead until a restart.** The pack (`buffalo_l`, about
+  275 MB) is downloaded on first start. When that download failed (seen
+  on a site where GitHub's CDN reset the TLS handshake), `load()` gave up
+  for good: every `/infer` answered `503 model_not_loaded` with
+  `transient: false`, while `/health` said `loading` and the Docker
+  healthcheck stayed green, so the adapter was registered and looked
+  fine. Now:
+  - the adapter installs the pack itself before InsightFace looks for
+    it: timeouts (InsightFace's own downloader has none, so a stalled
+    transfer hung `load()`), a `.part` file, a zip check and an atomic
+    rename (a cut transfer used to leave an empty pack directory that
+    every later boot took for an installed pack);
+  - a failed download is retried in the background, from 5 s doubling to
+    every 5 minutes, and the adapter becomes ready without a restart;
+    `/infer` meanwhile answers `transient: true` with the reason and a
+    `retry_after_ms`;
+  - `/health` reports `error`, not `loading`, for a load that cannot
+    succeed by retrying;
+  - new settings `OPENNVR_INSIGHTFACE_MODEL_ROOT` (pack cache) and
+    `OPENNVR_INSIGHTFACE_MODEL_URL` (a mirror or `file://` path; empty
+    turns fetching off, for sites that place the pack themselves).
+
 ## [0.1.12] — 2026-11-16
 
 Released with OpenNVR 0.1.12 so the two repositories carry the same number. No adapter changed: every image at `0.1.12` (and `0.1.12-intel` / `0.1.12-qualcomm` for the ONNX adapters) is built from the same adapter code as `0.1.11`. Adapter SDK 1.4.1, published on 2026-11-13, is the SDK in this tree.
